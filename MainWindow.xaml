@@ -1,0 +1,230 @@
+<Window x:Class="CodeMerger.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        Title="Advanced Code Merger" Height="780" Width="1000"
+        WindowStartupLocation="CenterScreen"
+        Background="#F5F5F5">
+    <Window.Resources>
+        <Style TargetType="Button" x:Key="ModernButton">
+            <Setter Property="Background" Value="#E0E0E0"/>
+            <Setter Property="Foreground" Value="#333"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="BorderBrush" Value="#BDBDBD"/>
+            <Setter Property="Padding" Value="12,6"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}" 
+                                BorderBrush="{TemplateBinding BorderBrush}" 
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="4">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#D6D6D6"/>
+                </Trigger>
+                <Trigger Property="IsPressed" Value="True">
+                    <Setter Property="Background" Value="#C0C0C0"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style TargetType="Button" x:Key="PrimaryButton" BasedOn="{StaticResource ModernButton}">
+            <Setter Property="Background" Value="#007ACC"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="BorderBrush" Value="#005A9E"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="Padding" Value="30,12"/>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#005A9E"/>
+                </Trigger>
+                <Trigger Property="IsPressed" Value="True">
+                    <Setter Property="Background" Value="#004578"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style TargetType="Button" x:Key="McpButton" BasedOn="{StaticResource ModernButton}">
+            <Setter Property="Background" Value="#28A745"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="BorderBrush" Value="#1E7E34"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="Padding" Value="20,12"/>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#1E7E34"/>
+                </Trigger>
+                <Trigger Property="IsPressed" Value="True">
+                    <Setter Property="Background" Value="#155724"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style TargetType="Button" x:Key="McpStopButton" BasedOn="{StaticResource ModernButton}">
+            <Setter Property="Background" Value="#DC3545"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="BorderBrush" Value="#C82333"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="Padding" Value="20,12"/>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#C82333"/>
+                </Trigger>
+                <Trigger Property="IsPressed" Value="True">
+                    <Setter Property="Background" Value="#A71D2A"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+    </Window.Resources>
+
+    <Grid x:Name="mainGrid" Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="2*"/>
+            <ColumnDefinition Width="3*"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- PROJECT BAR -->
+        <Border Grid.Row="0" Grid.ColumnSpan="2" BorderBrush="#DDD" BorderThickness="0,0,0,1" Margin="-20,-20,-20,15" Padding="20,10" Background="#FAFAFA">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="200"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- Logo -->
+                <Path Grid.Column="0" Data="M 12,3 C 7.03,3 3,7.03 3,12 C 3,16.97 7.03,21 12,21 C 12.96,21 13.87,20.84 14.7,20.56 L 13.9,18.91 C 13.3,19.09 12.67,19.2 12,19.2 C 7.9,19.2 4.8,16.1 4.8,12 C 4.8,7.9 7.9,4.8 12,4.8 C 16.1,4.8 19.2,7.9 19.2,12 C 19.2,12.67 19.09,13.3 18.91,13.9 L 20.56,14.7 C 20.84,13.87 21,12.96 21,12 C 21,7.03 16.97,3 12,3 Z M 8.4,9.6 L 6,12 L 8.4,14.4 L 9.6,13.2 L 8.4,12 L 9.6,10.8 L 8.4,9.6 Z M 15.6,9.6 L 14.4,10.8 L 15.6,12 L 14.4,13.2 L 15.6,14.4 L 18,12 L 15.6,9.6 Z" 
+                      Fill="#007ACC" Stretch="Uniform" Width="32" Height="32" VerticalAlignment="Center" Margin="0,0,10,0"/>
+
+                <TextBlock Grid.Column="1" Text="Project:" VerticalAlignment="Center" FontWeight="SemiBold" Margin="0,0,10,0"/>
+                <ComboBox x:Name="projectComboBox" Grid.Column="2" DisplayMemberPath="Name" VerticalAlignment="Center" SelectionChanged="ProjectComboBox_SelectionChanged"/>
+                <Button Grid.Column="3" Content="New" Margin="10,0,5,0" Padding="15,5" Click="NewProject_Click" Style="{StaticResource ModernButton}"/>
+                <Button Grid.Column="4" Content="Rename" Margin="0,0,5,0" Padding="15,5" Click="RenameProject_Click" Style="{StaticResource ModernButton}"/>
+                <Button Grid.Column="5" Content="Delete" Padding="15,5" Click="DeleteProject_Click" Style="{StaticResource ModernButton}"/>
+                <TextBlock x:Name="projectStatusText" Grid.Column="6" VerticalAlignment="Center" HorizontalAlignment="Right" FontStyle="Italic" Foreground="Gray"/>
+            </Grid>
+        </Border>
+
+        <!-- Recommendation Banner -->
+        <Border x:Name="recommendationBanner" Grid.Row="1" Grid.ColumnSpan="2" Background="#FFF3CD" BorderBrush="#FFEEBA" BorderThickness="1" CornerRadius="4" Padding="15,10" Margin="0,0,0,15" Visibility="Collapsed">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="💡" FontSize="18" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                <TextBlock x:Name="recommendationText" Grid.Column="1" TextWrapping="Wrap" VerticalAlignment="Center"/>
+            </Grid>
+        </Border>
+
+        <!-- Input Panel -->
+        <Border Grid.Row="2" Grid.Column="0" Margin="0,0,10,0" BorderBrush="#DDD" BorderThickness="1" CornerRadius="5" Background="White" Padding="15">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+                <TextBlock Text="Input Directories" FontSize="14" FontWeight="SemiBold" Foreground="#333"/>
+                <ListBox x:Name="inputDirListBox" Grid.Row="1" Margin="0,5,0,10" BorderBrush="#CCC" SelectionMode="Extended"/>
+                <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button Content="Remove" Click="RemoveDirectory_Click" Margin="0,0,5,0" Style="{StaticResource ModernButton}"/>
+                    <Button Content="Add Folder" Click="AddDirectory_Click" Style="{StaticResource ModernButton}" FontWeight="Bold"/>
+                </StackPanel>
+                <StackPanel Grid.Row="3" Margin="0,20,0,0">
+                    <TextBlock Text="Included Extensions (e.g., .cs, .xaml)" FontSize="14" FontWeight="SemiBold" Foreground="#333"/>
+                    <TextBox x:Name="extensionsTextBox" Text=".cs, .xaml" Margin="0,5,0,10" TextChanged="Filters_Changed" Padding="5" BorderBrush="#CCC"/>
+                    <TextBlock Text="Ignored Directories (e.g., bin, obj)" FontSize="14" FontWeight="SemiBold" Foreground="#333"/>
+                    <TextBox x:Name="ignoredDirsTextBox" Text="bin, obj, .vs, Properties" Margin="0,5,0,0" TextChanged="Filters_Changed" Padding="5" BorderBrush="#CCC"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- Files Panel -->
+        <Border Grid.Row="2" Grid.Column="1" Margin="10,0,0,0" BorderBrush="#DDD" BorderThickness="1" CornerRadius="5" Background="White" Padding="15">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+                <TextBlock Text="Found Files" FontSize="14" FontWeight="SemiBold" Foreground="#333"/>
+                <ListBox x:Name="fileListBox" Grid.Row="1" Margin="0,5,0,0" BorderBrush="#CCC" HorizontalContentAlignment="Stretch"/>
+            </Grid>
+        </Border>
+
+        <!-- Output Panel -->
+        <DockPanel Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="2" Margin="0,20,0,0" LastChildFill="True">
+            <TextBlock Text="Output Folder:" VerticalAlignment="Center" FontWeight="SemiBold" Foreground="#333" DockPanel.Dock="Left"/>
+            <Button Content="Open Folder" Margin="5,0,0,0" Click="OpenFolder_Click" Style="{StaticResource ModernButton}" DockPanel.Dock="Right"/>
+            <TextBox x:Name="outputFileTextBox" VerticalContentAlignment="Center" Margin="10,0,0,0" Padding="5" BorderBrush="#CCC" IsReadOnly="True" Background="#F9F9F9"/>
+        </DockPanel>
+
+        <!-- Action Buttons -->
+        <StackPanel Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="2" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,20,0,0">
+            <Button x:Name="mergeButton" Content="Generate Chunks" Margin="0,0,15,0" Click="Merge_Click" Style="{StaticResource PrimaryButton}"/>
+            <Button x:Name="mcpButton" Content="Start MCP Server" Click="McpServer_Click" Style="{StaticResource McpButton}"/>
+        </StackPanel>
+
+        <!-- MCP Status Panel -->
+        <Border x:Name="mcpStatusPanel" Grid.Row="5" Grid.ColumnSpan="2" Margin="0,15,0,0" Background="#E8F5E9" BorderBrush="#A5D6A7" BorderThickness="1" CornerRadius="4" Padding="15" Visibility="Collapsed">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel>
+                    <TextBlock Text="MCP Server Running" FontWeight="Bold" Foreground="#2E7D32"/>
+                    <TextBlock x:Name="mcpConfigText" TextWrapping="Wrap" Foreground="#555" Margin="0,5,0,0"/>
+                </StackPanel>
+                <Button x:Name="copyConfigButton" Grid.Column="1" Content="Copy Config" VerticalAlignment="Center" Click="CopyConfig_Click" Style="{StaticResource ModernButton}"/>
+            </Grid>
+        </Border>
+
+        <!-- Status Bar -->
+        <StatusBar Grid.Row="6" Grid.ColumnSpan="2" Margin="0,15,0,0" Background="Transparent">
+            <StatusBar.ItemsPanel>
+                <ItemsPanelTemplate>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                    </Grid>
+                </ItemsPanelTemplate>
+            </StatusBar.ItemsPanel>
+            <StatusBarItem>
+                <TextBlock Text="{Binding StatusText}" Foreground="{Binding StatusForeground}" TextWrapping="Wrap" VerticalAlignment="Center"/>
+            </StatusBarItem>
+            <StatusBarItem Grid.Column="1" HorizontalAlignment="Right" Margin="0,0,10,0">
+                <TextBlock x:Name="fileStatusLabel" FontStyle="Italic" Foreground="Gray" VerticalAlignment="Center"/>
+            </StatusBarItem>
+            <StatusBarItem Grid.Column="2">
+                <ProgressBar x:Name="progressBar" Visibility="Collapsed" Width="200" Height="18" VerticalAlignment="Center"/>
+            </StatusBarItem>
+        </StatusBar>
+    </Grid>
+</Window>
