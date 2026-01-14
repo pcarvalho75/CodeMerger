@@ -1,0 +1,150 @@
+using System;
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Text.Json;
+using CodeMerger.Models;
+
+namespace CodeMerger.Services.Mcp
+{
+    /// <summary>
+    /// Handles file write MCP tools.
+    /// </summary>
+    public class McpWriteToolHandler
+    {
+        private readonly WorkspaceAnalysis _workspaceAnalysis;
+        private readonly RefactoringService _refactoringService;
+        private readonly Action<string> _sendActivity;
+        private readonly Action<string> _log;
+
+        public McpWriteToolHandler(
+            WorkspaceAnalysis workspaceAnalysis,
+            RefactoringService refactoringService,
+            Action<string> sendActivity,
+            Action<string> log)
+        {
+            _workspaceAnalysis = workspaceAnalysis;
+            _refactoringService = refactoringService;
+            _sendActivity = sendActivity;
+            _log = log;
+        }
+
+        public string StrReplace(JsonElement arguments)
+        {
+            if (!arguments.TryGetProperty("path", out var pathEl))
+                return "Error: 'path' parameter is required.";
+
+            if (!arguments.TryGetProperty("oldStr", out var oldStrEl))
+                return "Error: 'oldStr' parameter is required.";
+
+            var path = pathEl.GetString() ?? "";
+            var oldStr = oldStrEl.GetString() ?? "";
+            var newStr = arguments.TryGetProperty("newStr", out var newStrEl) ? newStrEl.GetString() ?? "" : "";
+
+            var createBackup = true;
+            if (arguments.TryGetProperty("createBackup", out var backupEl))
+                createBackup = backupEl.GetBoolean();
+
+            _sendActivity($"StrReplace: {path}");
+
+            var file = _workspaceAnalysis.AllFiles.FirstOrDefault(f =>
+                f.RelativePath.Equals(path, StringComparison.OrdinalIgnoreCase) ||
+                f.FileName.Equals(path, StringComparison.OrdinalIgnoreCase));
+
+            if (file == null)
+            {
+                return $"Error: File not found: {path}";
+            }
+
+            try
+            {
+                var content = File.ReadAllText(file.FilePath);
+
+                var count = 0;
+                var index = 0;
+                while ((index = content.IndexOf(oldStr, index, StringComparison.Ordinal)) != -1)
+                {
+                    count++;
+                    index += oldStr.Length;
+                }
+
+                if (count == 0)
+                {
+                    return $"Error: String not found in file.\n\n**Looking for:**\n```\n{oldStr}\n```";
+                }
+
+                if (count > 1)
+                {
+                    return $"Error: String appears {count} times in file. It must be unique (appear exactly once).\n\n**Looking for:**\n```\n{oldStr}\n```";
+                }
+
+                if (createBackup && File.Exists(file.FilePath))
+                {
+                    File.Copy(file.FilePath, file.FilePath + ".bak", true);
+                }
+
+                var newContent = content.Replace(oldStr, newStr);
+                File.WriteAllText(file.FilePath, newContent);
+
+                var action = string.IsNullOrEmpty(newStr) ? "deleted" : "replaced";
+                _log($"StrReplace: {path} - {action}");
+
+                var sb = new StringBuilder();
+                sb.AppendLine($"# String Replace Result");
+                sb.AppendLine();
+                sb.AppendLine($"**File:** `{file.RelativePath}`");
+                sb.AppendLine($"**Status:** Success - string {action}");
+                if (createBackup)
+                    sb.AppendLine($"**Backup:** `{file.FilePath}.bak`");
+
+                return sb.ToString();
+            }
+            catch (Exception ex)
+            {
+                return $"Error: {ex.Message}";
+            }
+        }
+
+        public string WriteFile(JsonElement arguments)
+        {
+            if (!arguments.TryGetProperty("path", out var pathEl))
+                return "Error: 'path' parameter is required.";
+
+            if (!arguments.TryGetProperty("content", out var contentEl))
+                return "Error: 'content' parameter is required.";
+
+            var path = pathEl.GetString() ?? "";
+            var content = contentEl.GetString() ?? "";
+
+            _sendActivity($"Writing: {path}");
+
+            var createBackup = true;
+            if (arguments.TryGetProperty("createBackup", out var backupEl))
+                createBackup = backupEl.GetBoolean();
+
+            var result = _refactoringService.WriteFile(path, content, createBackup);
+            _log($"WriteFile: {path} - {(result.Success ? "OK" : "FAILED")}");
+
+            return result.ToMarkdown();
+        }
+
+        public string PreviewWriteFile(JsonElement arguments)
+        {
+            if (!arguments.TryGetProperty("path", out var pathEl))
+                return "Error: 'path' parameter is required.";
+
+            if (!arguments.TryGetProperty("content", out var contentEl))
+                return "Error: 'content' parameter is required.";
+
+            var path = pathEl.GetString() ?? "";
+            var content = contentEl.GetString() ?? "";
+
+            _sendActivity($"Preview: {path}");
+
+            var result = _refactoringService.PreviewWriteFile(path, content);
+            _log($"PreviewWrite: {path}");
+
+            return result.ToMarkdown();
+        }
+    }
+}

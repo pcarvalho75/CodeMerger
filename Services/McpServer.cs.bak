@@ -16,13 +16,13 @@ namespace CodeMerger.Services
     {
         private readonly CodeAnalyzer _codeAnalyzer;
         private readonly IndexGenerator _indexGenerator;
-        private readonly ProjectService _projectService;
+        private readonly WorkspaceService _workspaceService;
         private CancellationTokenSource? _cancellationTokenSource;
         private Task? _serverTask;
-        private ProjectAnalysis? _projectAnalysis;
+        private WorkspaceAnalysis? _workspaceAnalysis;
         private RefactoringService? _refactoringService;
         private List<string> _inputDirectories = new();
-        private string _projectName = string.Empty;
+        private string _workspaceName = string.Empty;
 
         public bool IsRunning => _serverTask != null && !_serverTask.IsCompleted;
         public event Action<string>? OnLog;
@@ -40,12 +40,12 @@ namespace CodeMerger.Services
         {
             _codeAnalyzer = new CodeAnalyzer();
             _indexGenerator = new IndexGenerator();
-            _projectService = new ProjectService();
+            _workspaceService = new WorkspaceService();
         }
 
-        public void IndexProject(string projectName, List<string> inputDirectories, List<string> files)
+        public void IndexWorkspace(string workspaceName, List<string> inputDirectories, List<string> files)
         {
-            _projectName = projectName;
+            _workspaceName = workspaceName;
             _inputDirectories = inputDirectories;
 
             var fileAnalyses = new List<FileAnalysis>();
@@ -60,12 +60,12 @@ namespace CodeMerger.Services
 
             var chunkManager = new ChunkManager(150000);
             var chunks = chunkManager.CreateChunks(fileAnalyses);
-            _projectAnalysis = _indexGenerator.BuildProjectAnalysis(projectName, fileAnalyses, chunks);
+            _workspaceAnalysis = _indexGenerator.BuildWorkspaceAnalysis(workspaceName, fileAnalyses, chunks);
 
             // Initialize refactoring service
-            _refactoringService = new RefactoringService(_projectAnalysis, inputDirectories);
+            _refactoringService = new RefactoringService(_workspaceAnalysis, inputDirectories);
 
-            Log($"Indexed {fileAnalyses.Count} files, {_projectAnalysis.TypeHierarchy.Count} types");
+            Log($"Indexed {fileAnalyses.Count} files, {_workspaceAnalysis.TypeHierarchy.Count} types");
         }
 
         public async Task StartAsync(Stream inputStream, Stream outputStream)
@@ -545,32 +545,32 @@ namespace CodeMerger.Services
             Log($"Tool call: {toolName}");
             SendActivity($"Tool: {toolName}");
 
-            // Shutdown doesn't require a project
+            // Shutdown doesn't require a workspace
             if (toolName == "codemerger_shutdown")
             {
                 return CreateToolResponse(id, Shutdown());
             }
 
-            // Project management tools don't require a project to be indexed
+            // Workspace management tools don't require a workspace to be indexed
             if (toolName == "codemerger_list_projects")
             {
-                return CreateToolResponse(id, ListProjects());
+                return CreateToolResponse(id, ListWorkspaces());
             }
 
             if (toolName == "codemerger_switch_project")
             {
-                return CreateToolResponse(id, SwitchProject(arguments));
+                return CreateToolResponse(id, SwitchWorkspace(arguments));
             }
 
-            if (_projectAnalysis == null)
+            if (_workspaceAnalysis == null)
             {
-                return CreateToolResponse(id, "Error: No project indexed. Please select a project in CodeMerger first.");
+                return CreateToolResponse(id, "Error: No workspace indexed. Please select a workspace in CodeMerger first.");
             }
 
             var result = toolName switch
             {
                 // Read tools
-                "codemerger_get_project_overview" => GetProjectOverview(),
+                "codemerger_get_project_overview" => GetWorkspaceOverview(),
                 "codemerger_list_files" => ListFiles(arguments),
                 "codemerger_get_file" => GetFile(arguments),
                 "codemerger_search_code" => SearchCode(arguments),
@@ -590,23 +590,23 @@ namespace CodeMerger.Services
             return CreateToolResponse(id, result);
         }
 
-        private string GetProjectOverview()
+        private string GetWorkspaceOverview()
         {
-            if (_projectAnalysis == null) return "No project indexed.";
+            if (_workspaceAnalysis == null) return "No workspace indexed.";
 
-            SendActivity("Reading project overview");
+            SendActivity("Reading workspace overview");
 
             var sb = new StringBuilder();
-            sb.AppendLine($"# Project: {_projectAnalysis.ProjectName}");
+            sb.AppendLine($"# Workspace: {_workspaceAnalysis.WorkspaceName}");
             sb.AppendLine();
-            sb.AppendLine($"**Framework:** {_projectAnalysis.DetectedFramework}");
-            sb.AppendLine($"**Total Files:** {_projectAnalysis.TotalFiles}");
-            sb.AppendLine($"**Total Tokens:** {_projectAnalysis.TotalTokens:N0}");
-            sb.AppendLine($"**Total Types:** {_projectAnalysis.TypeHierarchy.Count}");
+            sb.AppendLine($"**Framework:** {_workspaceAnalysis.DetectedFramework}");
+            sb.AppendLine($"**Total Files:** {_workspaceAnalysis.TotalFiles}");
+            sb.AppendLine($"**Total Tokens:** {_workspaceAnalysis.TotalTokens:N0}");
+            sb.AppendLine($"**Total Types:** {_workspaceAnalysis.TypeHierarchy.Count}");
             sb.AppendLine();
 
-            // Namespace breakdown - NEW FEATURE
-            var namespaceGroups = _projectAnalysis.AllFiles
+            // Namespace breakdown
+            var namespaceGroups = _workspaceAnalysis.AllFiles
                 .Where(f => !string.IsNullOrEmpty(f.Namespace))
                 .GroupBy(f => f.Namespace)
                 .OrderByDescending(g => g.Count())
@@ -629,7 +629,7 @@ namespace CodeMerger.Services
 
                 if (rootNamespaces.Count > 1)
                 {
-                    sb.AppendLine($"⚠️ **Note:** This project contains {rootNamespaces.Count} different root namespaces: {string.Join(", ", rootNamespaces)}");
+                    sb.AppendLine($"⚠️ **Note:** This workspace contains {rootNamespaces.Count} different root namespaces: {string.Join(", ", rootNamespaces)}");
                     sb.AppendLine("*Consider searching by namespace if looking for specific modules.*");
                     sb.AppendLine();
                 }
@@ -637,7 +637,7 @@ namespace CodeMerger.Services
 
             // Classification breakdown
             sb.AppendLine("## File Breakdown");
-            var byClassification = _projectAnalysis.AllFiles
+            var byClassification = _workspaceAnalysis.AllFiles
                 .GroupBy(f => f.Classification)
                 .OrderByDescending(g => g.Count());
 
@@ -649,7 +649,7 @@ namespace CodeMerger.Services
             // Entry points
             sb.AppendLine();
             sb.AppendLine("## Key Entry Points");
-            var entryPoints = _projectAnalysis.AllFiles
+            var entryPoints = _workspaceAnalysis.AllFiles
                 .Where(f => f.FileName.Contains("Program") || f.FileName.Contains("App.xaml") || f.FileName.Contains("Startup") || f.FileName.EndsWith(".csproj"))
                 .Take(10);
 
@@ -664,11 +664,11 @@ namespace CodeMerger.Services
 
         private string ListFiles(JsonElement arguments)
         {
-            if (_projectAnalysis == null) return "No project indexed.";
+            if (_workspaceAnalysis == null) return "No workspace indexed.";
 
             SendActivity("Listing files");
 
-            var files = _projectAnalysis.AllFiles.AsEnumerable();
+            var files = _workspaceAnalysis.AllFiles.AsEnumerable();
 
             // Filter by classification
             if (arguments.TryGetProperty("classification", out var classEl))
@@ -680,7 +680,7 @@ namespace CodeMerger.Services
                 }
             }
 
-            // Filter by namespace - NEW FEATURE
+            // Filter by namespace
             if (arguments.TryGetProperty("namespace", out var nsEl))
             {
                 var nsFilter = nsEl.GetString()?.ToLowerInvariant() ?? "";
@@ -723,7 +723,7 @@ namespace CodeMerger.Services
 
         private string GetFile(JsonElement arguments)
         {
-            if (_projectAnalysis == null) return "No project indexed.";
+            if (_workspaceAnalysis == null) return "No workspace indexed.";
 
             if (!arguments.TryGetProperty("path", out var pathEl))
             {
@@ -733,14 +733,14 @@ namespace CodeMerger.Services
             var path = pathEl.GetString();
             SendActivity($"Reading: {path}");
 
-            var file = _projectAnalysis.AllFiles.FirstOrDefault(f =>
+            var file = _workspaceAnalysis.AllFiles.FirstOrDefault(f =>
                 f.RelativePath.Equals(path, StringComparison.OrdinalIgnoreCase) ||
                 f.FileName.Equals(path, StringComparison.OrdinalIgnoreCase));
 
             if (file == null)
             {
                 return $"File not found: {path}\n\nAvailable files:\n" +
-                       string.Join("\n", _projectAnalysis.AllFiles.Take(10).Select(f => $"- {f.RelativePath}"));
+                       string.Join("\n", _workspaceAnalysis.AllFiles.Take(10).Select(f => $"- {f.RelativePath}"));
             }
 
             try
@@ -767,7 +767,7 @@ namespace CodeMerger.Services
 
         private string SearchCode(JsonElement arguments)
         {
-            if (_projectAnalysis == null) return "No project indexed.";
+            if (_workspaceAnalysis == null) return "No workspace indexed.";
 
             if (!arguments.TryGetProperty("query", out var queryEl))
             {
@@ -787,10 +787,10 @@ namespace CodeMerger.Services
             sb.AppendLine($"# Search Results for: {query}");
             sb.AppendLine();
 
-            // Search namespaces - NEW FEATURE
+            // Search namespaces
             if (searchIn == "all" || searchIn == "namespaces")
             {
-                var matchingNamespaces = _projectAnalysis.AllFiles
+                var matchingNamespaces = _workspaceAnalysis.AllFiles
                     .Where(f => !string.IsNullOrEmpty(f.Namespace) && 
                                f.Namespace.ToLowerInvariant().Contains(query))
                     .GroupBy(f => f.Namespace)
@@ -811,7 +811,7 @@ namespace CodeMerger.Services
             // Search types
             if (searchIn == "all" || searchIn == "types")
             {
-                var matchingTypes = _projectAnalysis.AllFiles
+                var matchingTypes = _workspaceAnalysis.AllFiles
                     .SelectMany(f => f.Types.Select(t => new { File = f, Type = t }))
                     .Where(x => x.Type.Name.ToLowerInvariant().Contains(query))
                     .Take(20);
@@ -831,7 +831,7 @@ namespace CodeMerger.Services
             // Search methods
             if (searchIn == "all" || searchIn == "methods")
             {
-                var matchingMethods = _projectAnalysis.AllFiles
+                var matchingMethods = _workspaceAnalysis.AllFiles
                     .SelectMany(f => f.Types.SelectMany(t => t.Members.Select(m => new { File = f, Type = t, Member = m })))
                     .Where(x => x.Member.Name.ToLowerInvariant().Contains(query))
                     .Take(20);
@@ -852,7 +852,7 @@ namespace CodeMerger.Services
             // Search files
             if (searchIn == "all" || searchIn == "files")
             {
-                var matchingFiles = _projectAnalysis.AllFiles
+                var matchingFiles = _workspaceAnalysis.AllFiles
                     .Where(f => f.FileName.ToLowerInvariant().Contains(query) ||
                                f.RelativePath.ToLowerInvariant().Contains(query))
                     .Take(20);
@@ -878,7 +878,7 @@ namespace CodeMerger.Services
 
         private string GetType(JsonElement arguments)
         {
-            if (_projectAnalysis == null) return "No project indexed.";
+            if (_workspaceAnalysis == null) return "No workspace indexed.";
 
             if (!arguments.TryGetProperty("typeName", out var typeNameEl))
             {
@@ -888,14 +888,14 @@ namespace CodeMerger.Services
             var typeName = typeNameEl.GetString() ?? "";
             SendActivity($"Getting type: {typeName}");
 
-            var match = _projectAnalysis.AllFiles
+            var match = _workspaceAnalysis.AllFiles
                 .SelectMany(f => f.Types.Select(t => new { File = f, Type = t }))
                 .FirstOrDefault(x => x.Type.Name.Equals(typeName, StringComparison.OrdinalIgnoreCase));
 
             if (match == null)
             {
                 return $"Type not found: {typeName}\n\nAvailable types:\n" +
-                       string.Join("\n", _projectAnalysis.TypeHierarchy.Keys.Take(20).Select(t => $"- {t}"));
+                       string.Join("\n", _workspaceAnalysis.TypeHierarchy.Keys.Take(20).Select(t => $"- {t}"));
             }
 
             var sb = new StringBuilder();
@@ -932,7 +932,7 @@ namespace CodeMerger.Services
 
         private string GetDependencies(JsonElement arguments)
         {
-            if (_projectAnalysis == null) return "No project indexed.";
+            if (_workspaceAnalysis == null) return "No workspace indexed.";
 
             if (!arguments.TryGetProperty("typeName", out var typeNameEl))
             {
@@ -947,7 +947,7 @@ namespace CodeMerger.Services
             sb.AppendLine();
 
             // What this type depends on
-            if (_projectAnalysis.DependencyMap.TryGetValue(typeName, out var deps) && deps.Count > 0)
+            if (_workspaceAnalysis.DependencyMap.TryGetValue(typeName, out var deps) && deps.Count > 0)
             {
                 sb.AppendLine("## Uses (depends on)");
                 foreach (var dep in deps)
@@ -958,7 +958,7 @@ namespace CodeMerger.Services
             }
 
             // What depends on this type (reverse dependencies)
-            var reverseDeps = _projectAnalysis.DependencyMap
+            var reverseDeps = _workspaceAnalysis.DependencyMap
                 .Where(kvp => kvp.Value.Contains(typeName))
                 .Select(kvp => kvp.Key)
                 .ToList();
@@ -982,7 +982,7 @@ namespace CodeMerger.Services
 
         private string GetTypeHierarchy()
         {
-            if (_projectAnalysis == null) return "No project indexed.";
+            if (_workspaceAnalysis == null) return "No workspace indexed.";
 
             SendActivity("Getting type hierarchy");
 
@@ -990,7 +990,7 @@ namespace CodeMerger.Services
             sb.AppendLine("# Type Hierarchy");
             sb.AppendLine();
 
-            foreach (var kvp in _projectAnalysis.TypeHierarchy.OrderBy(k => k.Key))
+            foreach (var kvp in _workspaceAnalysis.TypeHierarchy.OrderBy(k => k.Key))
             {
                 var inheritance = kvp.Value.Count > 0 ? $" : {string.Join(", ", kvp.Value)}" : "";
                 sb.AppendLine($"- **{kvp.Key}**{inheritance}");
@@ -1020,7 +1020,7 @@ namespace CodeMerger.Services
             SendActivity($"StrReplace: {path}");
 
             // Find the file
-            var file = _projectAnalysis?.AllFiles.FirstOrDefault(f =>
+            var file = _workspaceAnalysis?.AllFiles.FirstOrDefault(f =>
                 f.RelativePath.Equals(path, StringComparison.OrdinalIgnoreCase) ||
                 f.FileName.Equals(path, StringComparison.OrdinalIgnoreCase));
 
@@ -1220,74 +1220,74 @@ namespace CodeMerger.Services
             return "# Server Shutdown\n\nCodeMerger MCP server is shutting down. You can now recompile the project in Visual Studio.\n\nTo reconnect, simply start a new conversation or ask me to use a CodeMerger tool.";
         }
 
-        private string ListProjects()
+        private string ListWorkspaces()
         {
-            SendActivity("Listing projects");
+            SendActivity("Listing workspaces");
 
-            var projects = _projectService.LoadAllProjects();
-            var activeProject = _projectService.GetActiveProject();
+            var workspaces = _workspaceService.LoadAllWorkspaces();
+            var activeWorkspace = _workspaceService.GetActiveWorkspace();
 
-            if (projects.Count == 0)
+            if (workspaces.Count == 0)
             {
-                return "# Available Projects\n\nNo projects found. Please create a project in the CodeMerger GUI first.";
+                return "# Available Workspaces\n\nNo workspaces found. Please create a workspace in the CodeMerger GUI first.";
             }
 
             var sb = new StringBuilder();
-            sb.AppendLine("# Available Projects");
+            sb.AppendLine("# Available Workspaces");
             sb.AppendLine();
-            sb.AppendLine($"**Currently loaded:** {_projectName}");
+            sb.AppendLine($"**Currently loaded:** {_workspaceName}");
             sb.AppendLine();
-            sb.AppendLine("| Project | Directories | Status |");
-            sb.AppendLine("|---------|-------------|--------|");
+            sb.AppendLine("| Workspace | Directories | Status |");
+            sb.AppendLine("|-----------|-------------|--------|");
 
-            foreach (var project in projects.OrderBy(p => p.Name))
+            foreach (var workspace in workspaces.OrderBy(w => w.Name))
             {
-                var dirCount = project.InputDirectories?.Count ?? 0;
-                var status = project.Name == _projectName ? "✓ Loaded" : 
-                             project.Name == activeProject ? "Active" : "";
-                sb.AppendLine($"| {project.Name} | {dirCount} | {status} |");
+                var dirCount = workspace.InputDirectories?.Count ?? 0;
+                var status = workspace.Name == _workspaceName ? "✓ Loaded" : 
+                             workspace.Name == activeWorkspace ? "Active" : "";
+                sb.AppendLine($"| {workspace.Name} | {dirCount} | {status} |");
             }
 
             sb.AppendLine();
-            sb.AppendLine("*Use `codemerger_switch_project` to switch to a different project.*");
+            sb.AppendLine("*Use `codemerger_switch_project` to switch to a different workspace.*");
 
             return sb.ToString();
         }
 
-        private string SwitchProject(JsonElement arguments)
+        private string SwitchWorkspace(JsonElement arguments)
         {
-            if (!arguments.TryGetProperty("projectName", out var projectNameEl))
+            if (!arguments.TryGetProperty("projectName", out var workspaceNameEl))
             {
                 return "Error: 'projectName' parameter is required.";
             }
 
-            var projectName = projectNameEl.GetString() ?? "";
+            var workspaceName = workspaceNameEl.GetString() ?? "";
 
-            if (string.IsNullOrWhiteSpace(projectName))
+            if (string.IsNullOrWhiteSpace(workspaceName))
             {
-                return "Error: Project name cannot be empty.";
+                return "Error: Workspace name cannot be empty.";
             }
 
-            // Check if project exists
-            var project = _projectService.LoadProject(projectName);
-            if (project == null)
+            // Check if workspace exists
+            var workspace = _workspaceService.LoadWorkspace(workspaceName);
+            if (workspace == null)
             {
-                var available = _projectService.LoadAllProjects();
-                return $"Error: Project '{projectName}' not found.\n\nAvailable projects:\n" +
-                       string.Join("\n", available.Select(p => $"- {p.Name}"));
+                var available = _workspaceService.LoadAllWorkspaces();
+                return $"Error: Workspace '{workspaceName}' not found.\n\nAvailable workspaces:\n" +
+                       string.Join("\n", available.Select(w => $"- {w.Name}"));
             }
 
             // Check if already loaded
-            if (projectName == _projectName)
+            if (workspaceName == _workspaceName)
             {
-                return $"Project '{projectName}' is already loaded.";
+                return $"Workspace '{workspaceName}' is already loaded.";
             }
 
-            Log($"Switching to project: {projectName}");
-            SendActivity($"Switching to: {projectName}");
+            Log($"Switching to workspace: {workspaceName}");
+            SendActivity($"Switching to: {workspaceName}");
 
-            // Set as active project
-            _projectService.SetActiveProject(projectName);
+            // Set as active workspace
+            _workspaceService.SetActiveWorkspace(workspaceName);
 
             // Schedule restart after returning response
             Task.Run(async () =>
@@ -1299,7 +1299,7 @@ namespace CodeMerger.Services
                 Environment.Exit(0);
             });
 
-            return $"# Switching Project\n\nSwitching to project **{projectName}**.\n\nThe server will restart automatically. Please use any CodeMerger tool to reconnect with the new project loaded.";
+            return $"# Switching Workspace\n\nSwitching to workspace **{workspaceName}**.\n\nThe server will restart automatically. Please use any CodeMerger tool to reconnect with the new workspace loaded.";
         }
 
         private string CreateToolResponse(int id, string content)
@@ -1348,7 +1348,7 @@ namespace CodeMerger.Services
                     pipe.Connect(100); // Short timeout
 
                     using var writer = new StreamWriter(pipe);
-                    writer.WriteLine($"{_projectName}|{activity}");
+                    writer.WriteLine($"{_workspaceName}|{activity}");
                     writer.Flush();
                 }
                 catch
@@ -1369,7 +1369,7 @@ namespace CodeMerger.Services
                 pipe.Connect(200);
 
                 using var writer = new StreamWriter(pipe);
-                writer.WriteLine($"{_projectName}|DISCONNECT");
+                writer.WriteLine($"{_workspaceName}|DISCONNECT");
                 writer.Flush();
             }
             catch

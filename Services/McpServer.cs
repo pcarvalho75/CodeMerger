@@ -9,9 +9,14 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using CodeMerger.Models;
+using CodeMerger.Services.Mcp;
 
 namespace CodeMerger.Services
 {
+    /// <summary>
+    /// MCP Server for CodeMerger - provides code analysis tools via Model Context Protocol.
+    /// Coordinates tool handlers for read, write, semantic, refactoring, and workspace operations.
+    /// </summary>
     public class McpServer
     {
         private readonly CodeAnalyzer _codeAnalyzer;
@@ -19,15 +24,25 @@ namespace CodeMerger.Services
         private readonly WorkspaceService _workspaceService;
         private CancellationTokenSource? _cancellationTokenSource;
         private Task? _serverTask;
+        
+        // Workspace state
         private WorkspaceAnalysis? _workspaceAnalysis;
         private RefactoringService? _refactoringService;
+        private List<CallSite> _callSites = new();
         private List<string> _inputDirectories = new();
+        private List<string> _files = new();
         private string _workspaceName = string.Empty;
+
+        // Tool handlers
+        private McpReadToolHandler? _readHandler;
+        private McpWriteToolHandler? _writeHandler;
+        private McpSemanticToolHandler? _semanticHandler;
+        private McpRefactoringToolHandler? _refactoringHandler;
+        private McpWorkspaceToolHandler? _workspaceHandler;
 
         public bool IsRunning => _serverTask != null && !_serverTask.IsCompleted;
         public event Action<string>? OnLog;
 
-        // Activity pipe for notifying MainWindow of tool calls
         public const string ActivityPipeName = "codemerger_activity";
 
         private static readonly JsonSerializerOptions JsonOptions = new()
@@ -47,25 +62,64 @@ namespace CodeMerger.Services
         {
             _workspaceName = workspaceName;
             _inputDirectories = inputDirectories;
+            _files = files;
+
+            PerformIndexing();
+        }
+
+        private void PerformIndexing()
+        {
+            // Clear previous call sites
+            _codeAnalyzer.CallSites.Clear();
+            _callSites.Clear();
 
             var fileAnalyses = new List<FileAnalysis>();
-            foreach (var file in files)
+            foreach (var file in _files)
             {
-                var baseDir = inputDirectories.FirstOrDefault(dir => file.StartsWith(dir, StringComparison.OrdinalIgnoreCase));
+                var baseDir = _inputDirectories.FirstOrDefault(dir => file.StartsWith(dir, StringComparison.OrdinalIgnoreCase));
                 if (baseDir == null) continue;
 
                 var analysis = _codeAnalyzer.AnalyzeFile(file, baseDir);
                 fileAnalyses.Add(analysis);
             }
 
+            // Store call sites for semantic analysis
+            _callSites = _codeAnalyzer.CallSites.ToList();
+
             var chunkManager = new ChunkManager(150000);
             var chunks = chunkManager.CreateChunks(fileAnalyses);
-            _workspaceAnalysis = _indexGenerator.BuildWorkspaceAnalysis(workspaceName, fileAnalyses, chunks);
+            _workspaceAnalysis = _indexGenerator.BuildWorkspaceAnalysis(_workspaceName, fileAnalyses, chunks);
 
-            // Initialize refactoring service
-            _refactoringService = new RefactoringService(_workspaceAnalysis, inputDirectories);
+            // Initialize services and handlers
+            _refactoringService = new RefactoringService(_workspaceAnalysis, _inputDirectories);
+            InitializeHandlers();
 
-            Log($"Indexed {fileAnalyses.Count} files, {_workspaceAnalysis.TypeHierarchy.Count} types");
+            Log($"Indexed {fileAnalyses.Count} files, {_workspaceAnalysis.TypeHierarchy.Count} types, {_callSites.Count} call sites");
+        }
+
+        private void InitializeHandlers()
+        {
+            if (_workspaceAnalysis == null || _refactoringService == null) return;
+
+            _readHandler = new McpReadToolHandler(_workspaceAnalysis, SendActivity);
+            _writeHandler = new McpWriteToolHandler(_workspaceAnalysis, _refactoringService, SendActivity, Log);
+            _semanticHandler = new McpSemanticToolHandler(_workspaceAnalysis, _callSites, SendActivity);
+            _refactoringHandler = new McpRefactoringToolHandler(_workspaceAnalysis, _refactoringService, _callSites, SendActivity, Log);
+            _workspaceHandler = new McpWorkspaceToolHandler(
+                _workspaceService,
+                _workspaceName,
+                _inputDirectories,
+                () => PerformIndexing(), // Refresh callback
+                () => RequestShutdown(), // Shutdown callback
+                SendActivity,
+                Log);
+        }
+
+        private void RequestShutdown()
+        {
+            SendDisconnect();
+            _cancellationTokenSource?.Cancel();
+            Task.Delay(200).ContinueWith(_ => Environment.Exit(0));
         }
 
         public async Task StartAsync(Stream inputStream, Stream outputStream)
@@ -75,7 +129,6 @@ namespace CodeMerger.Services
 
             Log("MCP Server starting...");
 
-            // Start parent process monitor (Option 2: fallback safety)
             var parentMonitorTask = StartParentProcessMonitor(token);
 
             _serverTask = Task.Run(async () =>
@@ -88,8 +141,7 @@ namespace CodeMerger.Services
                     try
                     {
                         var line = await reader.ReadLineAsync();
-                        
-                        // Option 1: stdin closed (EOF) - client disconnected
+
                         if (line == null)
                         {
                             Log("Stdin closed (EOF detected) - client disconnected");
@@ -118,17 +170,10 @@ namespace CodeMerger.Services
                 Log("MCP Server stopped.");
             }, token);
 
-            // Wait for either the server task to complete or cancellation
             await _serverTask;
-            
-            // Cancel the parent monitor since we're shutting down anyway
             _cancellationTokenSource.Cancel();
         }
 
-        /// <summary>
-        /// Monitors the parent process and triggers shutdown if parent dies.
-        /// This is a fallback in case stdin EOF detection doesn't work.
-        /// </summary>
         private Task StartParentProcessMonitor(CancellationToken token)
         {
             return Task.Run(async () =>
@@ -140,7 +185,6 @@ namespace CodeMerger.Services
 
                     try
                     {
-                        // Get parent process ID
                         var parentId = GetParentProcessId(currentProcess.Id);
                         if (parentId > 0)
                         {
@@ -156,7 +200,6 @@ namespace CodeMerger.Services
 
                     if (parentProcess == null) return;
 
-                    // Check every 10 seconds if parent is still alive
                     while (!token.IsCancellationRequested)
                     {
                         await Task.Delay(10000, token);
@@ -166,29 +209,17 @@ namespace CodeMerger.Services
                             if (parentProcess.HasExited)
                             {
                                 Log("Parent process has exited - shutting down");
-                                SendDisconnect();
-                                _cancellationTokenSource?.Cancel();
-                                
-                                // Give a moment for graceful shutdown, then force exit
-                                await Task.Delay(500);
-                                Environment.Exit(0);
+                                RequestShutdown();
                             }
                         }
                         catch
                         {
-                            // Process object became invalid - parent is gone
                             Log("Parent process no longer accessible - shutting down");
-                            SendDisconnect();
-                            _cancellationTokenSource?.Cancel();
-                            await Task.Delay(500);
-                            Environment.Exit(0);
+                            RequestShutdown();
                         }
                     }
                 }
-                catch (OperationCanceledException)
-                {
-                    // Normal cancellation
-                }
+                catch (OperationCanceledException) { }
                 catch (Exception ex)
                 {
                     Log($"Parent monitor error: {ex.Message}");
@@ -196,25 +227,19 @@ namespace CodeMerger.Services
             }, token);
         }
 
-        /// <summary>
-        /// Gets the parent process ID using WMI or performance counters.
-        /// </summary>
         private static int GetParentProcessId(int processId)
         {
             try
             {
                 using var query = new System.Management.ManagementObjectSearcher(
                     $"SELECT ParentProcessId FROM Win32_Process WHERE ProcessId = {processId}");
-                
+
                 foreach (var item in query.Get())
                 {
                     return Convert.ToInt32(item["ParentProcessId"]);
                 }
             }
-            catch
-            {
-                // WMI not available or query failed
-            }
+            catch { }
 
             return -1;
         }
@@ -263,15 +288,8 @@ namespace CodeMerger.Services
                 result = new
                 {
                     protocolVersion = "2024-11-05",
-                    capabilities = new
-                    {
-                        tools = new { }
-                    },
-                    serverInfo = new
-                    {
-                        name = "codemerger-mcp",
-                        version = "1.0.0"
-                    }
+                    capabilities = new { tools = new { } },
+                    serverInfo = new { name = "codemerger-mcp", version = "2.0.0" }
                 }
             };
             return JsonSerializer.Serialize(response, JsonOptions);
@@ -279,254 +297,7 @@ namespace CodeMerger.Services
 
         private string HandleListTools(int id)
         {
-            var tools = new object[]
-            {
-                // === READ TOOLS ===
-                new
-                {
-                    name = "codemerger_get_project_overview",
-                    description = "Get high-level project information including framework, structure, namespaces, total files, and entry points. Use this first to understand the project before diving into specific files.",
-                    inputSchema = new Dictionary<string, object>
-                    {
-                        { "type", "object" },
-                        { "properties", new Dictionary<string, object>() },
-                        { "required", Array.Empty<string>() }
-                    }
-                },
-                new
-                {
-                    name = "codemerger_list_files",
-                    description = "List all files in the project with their namespaces, classifications (View, Model, Service, etc.) and estimated tokens. Use 'classification' or 'namespace' filter to narrow down results.",
-                    inputSchema = new Dictionary<string, object>
-                    {
-                        { "type", "object" },
-                        { "properties", new Dictionary<string, object>
-                            {
-                                { "classification", new Dictionary<string, string> { { "type", "string" }, { "description", "Filter by classification: View, Model, Service, Controller, Test, Config, Unknown" } } },
-                                { "namespace", new Dictionary<string, string> { { "type", "string" }, { "description", "Filter by namespace (partial match supported)" } } },
-                                { "limit", new Dictionary<string, string> { { "type", "integer" }, { "description", "Maximum files to return (default 50)" } } }
-                            }
-                        },
-                        { "required", Array.Empty<string>() }
-                    }
-                },
-                new
-                {
-                    name = "codemerger_get_file",
-                    description = "Get the full content of a specific file by its relative path. For making changes, prefer using codemerger_str_replace for surgical edits rather than rewriting entire files.",
-                    inputSchema = new Dictionary<string, object>
-                    {
-                        { "type", "object" },
-                        { "properties", new Dictionary<string, object>
-                            {
-                                { "path", new Dictionary<string, string> { { "type", "string" }, { "description", "Relative path to the file" } } }
-                            }
-                        },
-                        { "required", new[] { "path" } }
-                    }
-                },
-                new
-                {
-                    name = "codemerger_search_code",
-                    description = "Search for types, methods, namespaces, or keywords in the codebase. Use this to find where something is defined or used before making changes.",
-                    inputSchema = new Dictionary<string, object>
-                    {
-                        { "type", "object" },
-                        { "properties", new Dictionary<string, object>
-                            {
-                                { "query", new Dictionary<string, string> { { "type", "string" }, { "description", "Search query (type name, method name, namespace, or keyword)" } } },
-                                { "searchIn", new Dictionary<string, string> { { "type", "string" }, { "description", "Where to search: types, methods, files, namespaces, all (default: all)" } } }
-                            }
-                        },
-                        { "required", new[] { "query" } }
-                    }
-                },
-                new
-                {
-                    name = "codemerger_get_type",
-                    description = "Get detailed information about a specific type including its members, base types, and interfaces. Useful for understanding a class before modifying it.",
-                    inputSchema = new Dictionary<string, object>
-                    {
-                        { "type", "object" },
-                        { "properties", new Dictionary<string, object>
-                            {
-                                { "typeName", new Dictionary<string, string> { { "type", "string" }, { "description", "Name of the type" } } }
-                            }
-                        },
-                        { "required", new[] { "typeName" } }
-                    }
-                },
-                new
-                {
-                    name = "codemerger_get_dependencies",
-                    description = "Get dependencies of a type (what it uses) and reverse dependencies (what uses it). Essential before renaming or refactoring to understand impact.",
-                    inputSchema = new Dictionary<string, object>
-                    {
-                        { "type", "object" },
-                        { "properties", new Dictionary<string, object>
-                            {
-                                { "typeName", new Dictionary<string, string> { { "type", "string" }, { "description", "Name of the type" } } }
-                            }
-                        },
-                        { "required", new[] { "typeName" } }
-                    }
-                },
-                new
-                {
-                    name = "codemerger_get_type_hierarchy",
-                    description = "Get the inheritance hierarchy for all types in the project.",
-                    inputSchema = new Dictionary<string, object>
-                    {
-                        { "type", "object" },
-                        { "properties", new Dictionary<string, object>() },
-                        { "required", Array.Empty<string>() }
-                    }
-                },
-
-                // === WRITE TOOLS ===
-                new
-                {
-                    name = "codemerger_str_replace",
-                    description = "Replace a unique string in a file with another string. The oldStr must appear exactly once in the file. Use this for surgical edits instead of rewriting entire files. Set newStr to empty string to delete the match.",
-                    inputSchema = new Dictionary<string, object>
-                    {
-                        { "type", "object" },
-                        { "properties", new Dictionary<string, object>
-                            {
-                                { "path", new Dictionary<string, string> { { "type", "string" }, { "description", "Relative path to the file" } } },
-                                { "oldStr", new Dictionary<string, string> { { "type", "string" }, { "description", "String to find and replace (must be unique in file)" } } },
-                                { "newStr", new Dictionary<string, string> { { "type", "string" }, { "description", "Replacement string (empty to delete)" } } },
-                                { "createBackup", new Dictionary<string, object> { { "type", "boolean" }, { "description", "Create .bak backup before modifying (default: true)" }, { "default", true } } }
-                            }
-                        },
-                        { "required", new[] { "path", "oldStr" } }
-                    }
-                },
-                new
-                {
-                    name = "codemerger_write_file",
-                    description = "Write content to a file (create new or overwrite existing). Creates a .bak backup before overwriting. For small changes, prefer codemerger_str_replace instead.",
-                    inputSchema = new Dictionary<string, object>
-                    {
-                        { "type", "object" },
-                        { "properties", new Dictionary<string, object>
-                            {
-                                { "path", new Dictionary<string, string> { { "type", "string" }, { "description", "Relative path to the file (e.g., 'Services/MyService.cs')" } } },
-                                { "content", new Dictionary<string, string> { { "type", "string" }, { "description", "Complete file content to write" } } },
-                                { "createBackup", new Dictionary<string, object> { { "type", "boolean" }, { "description", "Create .bak backup before overwriting (default: true)" }, { "default", true } } }
-                            }
-                        },
-                        { "required", new[] { "path", "content" } }
-                    }
-                },
-                new
-                {
-                    name = "codemerger_preview_write",
-                    description = "Preview what a file write would look like without actually writing. Shows a diff of changes. Use this before codemerger_write_file to verify your changes are correct.",
-                    inputSchema = new Dictionary<string, object>
-                    {
-                        { "type", "object" },
-                        { "properties", new Dictionary<string, object>
-                            {
-                                { "path", new Dictionary<string, string> { { "type", "string" }, { "description", "Relative path to the file" } } },
-                                { "content", new Dictionary<string, string> { { "type", "string" }, { "description", "Complete file content to preview" } } }
-                            }
-                        },
-                        { "required", new[] { "path", "content" } }
-                    }
-                },
-                new
-                {
-                    name = "codemerger_rename_symbol",
-                    description = "Rename a symbol (class, method, variable) across all files in the project. Use preview=true first to see all affected locations before applying.",
-                    inputSchema = new Dictionary<string, object>
-                    {
-                        { "type", "object" },
-                        { "properties", new Dictionary<string, object>
-                            {
-                                { "oldName", new Dictionary<string, string> { { "type", "string" }, { "description", "Current name of the symbol" } } },
-                                { "newName", new Dictionary<string, string> { { "type", "string" }, { "description", "New name for the symbol" } } },
-                                { "preview", new Dictionary<string, object> { { "type", "boolean" }, { "description", "If true, only show what would change without applying (default: true)" }, { "default", true } } }
-                            }
-                        },
-                        { "required", new[] { "oldName", "newName" } }
-                    }
-                },
-                new
-                {
-                    name = "codemerger_generate_interface",
-                    description = "Generate an interface from a class's public members. Returns the generated code which you can then write to a file using codemerger_write_file.",
-                    inputSchema = new Dictionary<string, object>
-                    {
-                        { "type", "object" },
-                        { "properties", new Dictionary<string, object>
-                            {
-                                { "className", new Dictionary<string, string> { { "type", "string" }, { "description", "Name of the class to extract interface from" } } },
-                                { "interfaceName", new Dictionary<string, string> { { "type", "string" }, { "description", "Name for the generated interface (default: I{ClassName})" } } }
-                            }
-                        },
-                        { "required", new[] { "className" } }
-                    }
-                },
-                new
-                {
-                    name = "codemerger_extract_method",
-                    description = "Extract a range of lines into a new method. Returns the modified file content which you can then write using codemerger_write_file.",
-                    inputSchema = new Dictionary<string, object>
-                    {
-                        { "type", "object" },
-                        { "properties", new Dictionary<string, object>
-                            {
-                                { "filePath", new Dictionary<string, string> { { "type", "string" }, { "description", "Relative path to the file" } } },
-                                { "startLine", new Dictionary<string, string> { { "type", "integer" }, { "description", "First line to extract (1-indexed)" } } },
-                                { "endLine", new Dictionary<string, string> { { "type", "integer" }, { "description", "Last line to extract (1-indexed)" } } },
-                                { "methodName", new Dictionary<string, string> { { "type", "string" }, { "description", "Name for the new method" } } }
-                            }
-                        },
-                        { "required", new[] { "filePath", "startLine", "endLine", "methodName" } }
-                    }
-                },
-
-                // === SERVER CONTROL ===
-                new
-                {
-                    name = "codemerger_shutdown",
-                    description = "Shutdown the CodeMerger MCP server. Use this when the user needs to recompile the project or wants to stop the server. The server will exit and release file locks.",
-                    inputSchema = new Dictionary<string, object>
-                    {
-                        { "type", "object" },
-                        { "properties", new Dictionary<string, object>() },
-                        { "required", Array.Empty<string>() }
-                    }
-                },
-                new
-                {
-                    name = "codemerger_list_projects",
-                    description = "List all available CodeMerger projects. Shows project names and indicates which one is currently active/loaded.",
-                    inputSchema = new Dictionary<string, object>
-                    {
-                        { "type", "object" },
-                        { "properties", new Dictionary<string, object>() },
-                        { "required", Array.Empty<string>() }
-                    }
-                },
-                new
-                {
-                    name = "codemerger_switch_project",
-                    description = "Switch to a different CodeMerger project. This will set the new project as active and restart the server to load it. Use codemerger_list_projects first to see available projects.",
-                    inputSchema = new Dictionary<string, object>
-                    {
-                        { "type", "object" },
-                        { "properties", new Dictionary<string, object>
-                            {
-                                { "projectName", new Dictionary<string, string> { { "type", "string" }, { "description", "Name of the project to switch to" } } }
-                            }
-                        },
-                        { "required", new[] { "projectName" } }
-                    }
-                }
-            };
-
+            var tools = McpToolRegistry.GetAllTools();
             var response = new
             {
                 jsonrpc = "2.0",
@@ -539,767 +310,97 @@ namespace CodeMerger.Services
         private string HandleToolCall(int id, JsonElement root)
         {
             var paramsEl = root.GetProperty("params");
-            var toolName = paramsEl.GetProperty("name").GetString();
+            var toolName = paramsEl.GetProperty("name").GetString() ?? "";
             var arguments = paramsEl.TryGetProperty("arguments", out var argsEl) ? argsEl : default;
 
             Log($"Tool call: {toolName}");
             SendActivity($"Tool: {toolName}");
 
-            // Shutdown doesn't require a workspace
+            // Server control tools don't require workspace
             if (toolName == "codemerger_shutdown")
-            {
-                return CreateToolResponse(id, Shutdown());
-            }
+                return CreateToolResponse(id, _workspaceHandler?.Shutdown() ?? HandleShutdownFallback());
 
-            // Workspace management tools don't require a workspace to be indexed
             if (toolName == "codemerger_list_projects")
-            {
-                return CreateToolResponse(id, ListWorkspaces());
-            }
+                return CreateToolResponse(id, _workspaceHandler?.ListWorkspaces() ?? HandleListWorkspacesFallback());
 
             if (toolName == "codemerger_switch_project")
-            {
-                return CreateToolResponse(id, SwitchWorkspace(arguments));
-            }
+                return CreateToolResponse(id, _workspaceHandler?.SwitchWorkspace(arguments) ?? "Error: Handler not initialized");
 
+            if (toolName == "codemerger_refresh")
+                return CreateToolResponse(id, _workspaceHandler?.Refresh() ?? "Error: Handler not initialized");
+
+            // All other tools require workspace
             if (_workspaceAnalysis == null)
             {
                 return CreateToolResponse(id, "Error: No workspace indexed. Please select a workspace in CodeMerger first.");
             }
 
-            var result = toolName switch
-            {
-                // Read tools
-                "codemerger_get_project_overview" => GetWorkspaceOverview(),
-                "codemerger_list_files" => ListFiles(arguments),
-                "codemerger_get_file" => GetFile(arguments),
-                "codemerger_search_code" => SearchCode(arguments),
-                "codemerger_get_type" => GetType(arguments),
-                "codemerger_get_dependencies" => GetDependencies(arguments),
-                "codemerger_get_type_hierarchy" => GetTypeHierarchy(),
-                // Write tools
-                "codemerger_str_replace" => StrReplace(arguments),
-                "codemerger_write_file" => WriteFile(arguments),
-                "codemerger_preview_write" => PreviewWriteFile(arguments),
-                "codemerger_rename_symbol" => RenameSymbol(arguments),
-                "codemerger_generate_interface" => GenerateInterface(arguments),
-                "codemerger_extract_method" => ExtractMethod(arguments),
-                _ => $"Unknown tool: {toolName}"
-            };
-
+            var result = DispatchToolCall(toolName, arguments);
             return CreateToolResponse(id, result);
         }
 
-        private string GetWorkspaceOverview()
+        private string DispatchToolCall(string toolName, JsonElement arguments)
         {
-            if (_workspaceAnalysis == null) return "No workspace indexed.";
-
-            SendActivity("Reading workspace overview");
-
-            var sb = new StringBuilder();
-            sb.AppendLine($"# Workspace: {_workspaceAnalysis.WorkspaceName}");
-            sb.AppendLine();
-            sb.AppendLine($"**Framework:** {_workspaceAnalysis.DetectedFramework}");
-            sb.AppendLine($"**Total Files:** {_workspaceAnalysis.TotalFiles}");
-            sb.AppendLine($"**Total Tokens:** {_workspaceAnalysis.TotalTokens:N0}");
-            sb.AppendLine($"**Total Types:** {_workspaceAnalysis.TypeHierarchy.Count}");
-            sb.AppendLine();
-
-            // Namespace breakdown
-            var namespaceGroups = _workspaceAnalysis.AllFiles
-                .Where(f => !string.IsNullOrEmpty(f.Namespace))
-                .GroupBy(f => f.Namespace)
-                .OrderByDescending(g => g.Count())
-                .ToList();
-
-            if (namespaceGroups.Count > 0)
+            return toolName switch
             {
-                sb.AppendLine("## Namespaces Found");
-                foreach (var group in namespaceGroups)
-                {
-                    sb.AppendLine($"- **{group.Key}** ({group.Count()} files)");
-                }
-                sb.AppendLine();
+                // Read tools
+                "codemerger_get_project_overview" => _readHandler!.GetWorkspaceOverview(),
+                "codemerger_list_files" => _readHandler!.ListFiles(arguments),
+                "codemerger_get_file" => _readHandler!.GetFile(arguments),
+                "codemerger_search_code" => _readHandler!.SearchCode(arguments),
+                "codemerger_get_type" => _readHandler!.GetType(arguments),
+                "codemerger_get_dependencies" => _readHandler!.GetDependencies(arguments),
+                "codemerger_get_type_hierarchy" => _readHandler!.GetTypeHierarchy(),
+                "codemerger_grep" => _readHandler!.Grep(arguments),
+                "codemerger_get_context" => _readHandler!.GetContext(arguments),
 
-                // Multi-namespace warning
-                var rootNamespaces = namespaceGroups
-                    .Select(g => g.Key.Split('.')[0])
-                    .Distinct()
-                    .ToList();
+                // Semantic tools
+                "codemerger_find_references" => _semanticHandler!.FindReferences(arguments),
+                "codemerger_get_callers" => _semanticHandler!.GetCallers(arguments),
+                "codemerger_get_callees" => _semanticHandler!.GetCallees(arguments),
 
-                if (rootNamespaces.Count > 1)
-                {
-                    sb.AppendLine($"⚠️ **Note:** This workspace contains {rootNamespaces.Count} different root namespaces: {string.Join(", ", rootNamespaces)}");
-                    sb.AppendLine("*Consider searching by namespace if looking for specific modules.*");
-                    sb.AppendLine();
-                }
-            }
+                // Write tools
+                "codemerger_str_replace" => _writeHandler!.StrReplace(arguments),
+                "codemerger_write_file" => _writeHandler!.WriteFile(arguments),
+                "codemerger_preview_write" => _writeHandler!.PreviewWriteFile(arguments),
 
-            // Classification breakdown
-            sb.AppendLine("## File Breakdown");
-            var byClassification = _workspaceAnalysis.AllFiles
-                .GroupBy(f => f.Classification)
-                .OrderByDescending(g => g.Count());
+                // Refactoring tools
+                "codemerger_rename_symbol" => _refactoringHandler!.RenameSymbol(arguments),
+                "codemerger_generate_interface" => _refactoringHandler!.GenerateInterface(arguments),
+                "codemerger_extract_method" => _refactoringHandler!.ExtractMethod(arguments),
+                "codemerger_add_parameter" => _refactoringHandler!.AddParameter(arguments),
+                "codemerger_implement_interface" => _refactoringHandler!.ImplementInterface(arguments),
+                "codemerger_generate_constructor" => _refactoringHandler!.GenerateConstructor(arguments),
 
-            foreach (var group in byClassification)
-            {
-                sb.AppendLine($"- {group.Key}: {group.Count()} files");
-            }
-
-            // Entry points
-            sb.AppendLine();
-            sb.AppendLine("## Key Entry Points");
-            var entryPoints = _workspaceAnalysis.AllFiles
-                .Where(f => f.FileName.Contains("Program") || f.FileName.Contains("App.xaml") || f.FileName.Contains("Startup") || f.FileName.EndsWith(".csproj"))
-                .Take(10);
-
-            foreach (var file in entryPoints)
-            {
-                var ns = !string.IsNullOrEmpty(file.Namespace) ? $" [{file.Namespace}]" : "";
-                sb.AppendLine($"- {file.RelativePath}{ns}");
-            }
-
-            return sb.ToString();
+                _ => $"Unknown tool: {toolName}"
+            };
         }
 
-        private string ListFiles(JsonElement arguments)
+        // Fallbacks for when handlers aren't initialized
+        private string HandleShutdownFallback()
         {
-            if (_workspaceAnalysis == null) return "No workspace indexed.";
-
-            SendActivity("Listing files");
-
-            var files = _workspaceAnalysis.AllFiles.AsEnumerable();
-
-            // Filter by classification
-            if (arguments.TryGetProperty("classification", out var classEl))
-            {
-                var classFilter = classEl.GetString();
-                if (Enum.TryParse<FileClassification>(classFilter, true, out var classification))
-                {
-                    files = files.Where(f => f.Classification == classification);
-                }
-            }
-
-            // Filter by namespace
-            if (arguments.TryGetProperty("namespace", out var nsEl))
-            {
-                var nsFilter = nsEl.GetString()?.ToLowerInvariant() ?? "";
-                if (!string.IsNullOrEmpty(nsFilter))
-                {
-                    files = files.Where(f => 
-                        !string.IsNullOrEmpty(f.Namespace) && 
-                        f.Namespace.ToLowerInvariant().Contains(nsFilter));
-                }
-            }
-
-            // Limit
-            var limit = 50;
-            if (arguments.TryGetProperty("limit", out var limitEl))
-            {
-                limit = limitEl.GetInt32();
-            }
-
-            var fileList = files.ToList();
-            
-            var sb = new StringBuilder();
-            sb.AppendLine("| File | Namespace | Classification | Tokens |");
-            sb.AppendLine("|------|-----------|----------------|--------|");
-
-            foreach (var file in fileList.Take(limit))
-            {
-                var ns = !string.IsNullOrEmpty(file.Namespace) ? file.Namespace : "-";
-                sb.AppendLine($"| {file.RelativePath} | {ns} | {file.Classification} | {file.EstimatedTokens:N0} |");
-            }
-
-            var total = fileList.Count;
-            if (total > limit)
-            {
-                sb.AppendLine();
-                sb.AppendLine($"*Showing {limit} of {total} files. Use 'classification' or 'namespace' filter or increase 'limit' to see more.*");
-            }
-
-            return sb.ToString();
-        }
-
-        private string GetFile(JsonElement arguments)
-        {
-            if (_workspaceAnalysis == null) return "No workspace indexed.";
-
-            if (!arguments.TryGetProperty("path", out var pathEl))
-            {
-                return "Error: 'path' parameter is required.";
-            }
-
-            var path = pathEl.GetString();
-            SendActivity($"Reading: {path}");
-
-            var file = _workspaceAnalysis.AllFiles.FirstOrDefault(f =>
-                f.RelativePath.Equals(path, StringComparison.OrdinalIgnoreCase) ||
-                f.FileName.Equals(path, StringComparison.OrdinalIgnoreCase));
-
-            if (file == null)
-            {
-                return $"File not found: {path}\n\nAvailable files:\n" +
-                       string.Join("\n", _workspaceAnalysis.AllFiles.Take(10).Select(f => $"- {f.RelativePath}"));
-            }
-
-            try
-            {
-                var content = File.ReadAllText(file.FilePath);
-                var sb = new StringBuilder();
-                sb.AppendLine($"# {file.RelativePath}");
-                sb.AppendLine();
-                sb.AppendLine($"**Classification:** {file.Classification}");
-                sb.AppendLine($"**Tokens:** {file.EstimatedTokens:N0}");
-                if (!string.IsNullOrEmpty(file.Namespace))
-                    sb.AppendLine($"**Namespace:** {file.Namespace}");
-                sb.AppendLine();
-                sb.AppendLine($"```{file.Language}");
-                sb.AppendLine(content);
-                sb.AppendLine("```");
-                return sb.ToString();
-            }
-            catch (Exception ex)
-            {
-                return $"Error reading file: {ex.Message}";
-            }
-        }
-
-        private string SearchCode(JsonElement arguments)
-        {
-            if (_workspaceAnalysis == null) return "No workspace indexed.";
-
-            if (!arguments.TryGetProperty("query", out var queryEl))
-            {
-                return "Error: 'query' parameter is required.";
-            }
-
-            var query = queryEl.GetString()?.ToLowerInvariant() ?? "";
-            SendActivity($"Searching: {query}");
-
-            var searchIn = "all";
-            if (arguments.TryGetProperty("searchIn", out var searchInEl))
-            {
-                searchIn = searchInEl.GetString()?.ToLowerInvariant() ?? "all";
-            }
-
-            var sb = new StringBuilder();
-            sb.AppendLine($"# Search Results for: {query}");
-            sb.AppendLine();
-
-            // Search namespaces
-            if (searchIn == "all" || searchIn == "namespaces")
-            {
-                var matchingNamespaces = _workspaceAnalysis.AllFiles
-                    .Where(f => !string.IsNullOrEmpty(f.Namespace) && 
-                               f.Namespace.ToLowerInvariant().Contains(query))
-                    .GroupBy(f => f.Namespace)
-                    .OrderByDescending(g => g.Count())
-                    .Take(10);
-
-                if (matchingNamespaces.Any())
-                {
-                    sb.AppendLine("## Namespaces");
-                    foreach (var group in matchingNamespaces)
-                    {
-                        sb.AppendLine($"- **{group.Key}** ({group.Count()} files)");
-                    }
-                    sb.AppendLine();
-                }
-            }
-
-            // Search types
-            if (searchIn == "all" || searchIn == "types")
-            {
-                var matchingTypes = _workspaceAnalysis.AllFiles
-                    .SelectMany(f => f.Types.Select(t => new { File = f, Type = t }))
-                    .Where(x => x.Type.Name.ToLowerInvariant().Contains(query))
-                    .Take(20);
-
-                if (matchingTypes.Any())
-                {
-                    sb.AppendLine("## Types");
-                    foreach (var match in matchingTypes)
-                    {
-                        var ns = !string.IsNullOrEmpty(match.File.Namespace) ? $" [{match.File.Namespace}]" : "";
-                        sb.AppendLine($"- **{match.Type.Name}** ({match.Type.Kind}) in `{match.File.RelativePath}`{ns}");
-                    }
-                    sb.AppendLine();
-                }
-            }
-
-            // Search methods
-            if (searchIn == "all" || searchIn == "methods")
-            {
-                var matchingMethods = _workspaceAnalysis.AllFiles
-                    .SelectMany(f => f.Types.SelectMany(t => t.Members.Select(m => new { File = f, Type = t, Member = m })))
-                    .Where(x => x.Member.Name.ToLowerInvariant().Contains(query))
-                    .Take(20);
-
-                if (matchingMethods.Any())
-                {
-                    sb.AppendLine("## Methods/Members");
-                    foreach (var match in matchingMethods)
-                    {
-                        var sig = !string.IsNullOrEmpty(match.Member.Signature) ? match.Member.Signature : match.Member.Name;
-                        var ns = !string.IsNullOrEmpty(match.File.Namespace) ? $" [{match.File.Namespace}]" : "";
-                        sb.AppendLine($"- **{match.Type.Name}.{sig}** in `{match.File.RelativePath}`{ns}");
-                    }
-                    sb.AppendLine();
-                }
-            }
-
-            // Search files
-            if (searchIn == "all" || searchIn == "files")
-            {
-                var matchingFiles = _workspaceAnalysis.AllFiles
-                    .Where(f => f.FileName.ToLowerInvariant().Contains(query) ||
-                               f.RelativePath.ToLowerInvariant().Contains(query))
-                    .Take(20);
-
-                if (matchingFiles.Any())
-                {
-                    sb.AppendLine("## Files");
-                    foreach (var file in matchingFiles)
-                    {
-                        var ns = !string.IsNullOrEmpty(file.Namespace) ? $" [{file.Namespace}]" : "";
-                        sb.AppendLine($"- `{file.RelativePath}` ({file.Classification}){ns}");
-                    }
-                }
-            }
-
-            if (sb.Length < 50)
-            {
-                sb.AppendLine("*No results found.*");
-            }
-
-            return sb.ToString();
-        }
-
-        private string GetType(JsonElement arguments)
-        {
-            if (_workspaceAnalysis == null) return "No workspace indexed.";
-
-            if (!arguments.TryGetProperty("typeName", out var typeNameEl))
-            {
-                return "Error: 'typeName' parameter is required.";
-            }
-
-            var typeName = typeNameEl.GetString() ?? "";
-            SendActivity($"Getting type: {typeName}");
-
-            var match = _workspaceAnalysis.AllFiles
-                .SelectMany(f => f.Types.Select(t => new { File = f, Type = t }))
-                .FirstOrDefault(x => x.Type.Name.Equals(typeName, StringComparison.OrdinalIgnoreCase));
-
-            if (match == null)
-            {
-                return $"Type not found: {typeName}\n\nAvailable types:\n" +
-                       string.Join("\n", _workspaceAnalysis.TypeHierarchy.Keys.Take(20).Select(t => $"- {t}"));
-            }
-
-            var sb = new StringBuilder();
-            sb.AppendLine($"# {match.Type.Name}");
-            sb.AppendLine();
-            sb.AppendLine($"**Kind:** {match.Type.Kind}");
-            sb.AppendLine($"**File:** {match.File.RelativePath}");
-            if (!string.IsNullOrEmpty(match.File.Namespace))
-                sb.AppendLine($"**Namespace:** {match.File.Namespace}");
-
-            if (!string.IsNullOrEmpty(match.Type.BaseType))
-                sb.AppendLine($"**Base Type:** {match.Type.BaseType}");
-
-            if (match.Type.Interfaces.Count > 0)
-                sb.AppendLine($"**Interfaces:** {string.Join(", ", match.Type.Interfaces)}");
-
-            sb.AppendLine();
-            sb.AppendLine("## Members");
-
-            var membersByKind = match.Type.Members.GroupBy(m => m.Kind);
-            foreach (var group in membersByKind)
-            {
-                sb.AppendLine($"### {group.Key}s");
-                foreach (var member in group)
-                {
-                    var sig = !string.IsNullOrEmpty(member.Signature) ? member.Signature : member.Name;
-                    var ret = !string.IsNullOrEmpty(member.ReturnType) ? $" : {member.ReturnType}" : "";
-                    sb.AppendLine($"- {member.AccessModifier} {sig}{ret}");
-                }
-            }
-
-            return sb.ToString();
-        }
-
-        private string GetDependencies(JsonElement arguments)
-        {
-            if (_workspaceAnalysis == null) return "No workspace indexed.";
-
-            if (!arguments.TryGetProperty("typeName", out var typeNameEl))
-            {
-                return "Error: 'typeName' parameter is required.";
-            }
-
-            var typeName = typeNameEl.GetString() ?? "";
-            SendActivity($"Getting dependencies: {typeName}");
-
-            var sb = new StringBuilder();
-            sb.AppendLine($"# Dependencies for: {typeName}");
-            sb.AppendLine();
-
-            // What this type depends on
-            if (_workspaceAnalysis.DependencyMap.TryGetValue(typeName, out var deps) && deps.Count > 0)
-            {
-                sb.AppendLine("## Uses (depends on)");
-                foreach (var dep in deps)
-                {
-                    sb.AppendLine($"- {dep}");
-                }
-                sb.AppendLine();
-            }
-
-            // What depends on this type (reverse dependencies)
-            var reverseDeps = _workspaceAnalysis.DependencyMap
-                .Where(kvp => kvp.Value.Contains(typeName))
-                .Select(kvp => kvp.Key)
-                .ToList();
-
-            if (reverseDeps.Count > 0)
-            {
-                sb.AppendLine("## Used by (dependents)");
-                foreach (var dep in reverseDeps)
-                {
-                    sb.AppendLine($"- {dep}");
-                }
-            }
-
-            if (sb.Length < 50)
-            {
-                sb.AppendLine("*No dependencies found.*");
-            }
-
-            return sb.ToString();
-        }
-
-        private string GetTypeHierarchy()
-        {
-            if (_workspaceAnalysis == null) return "No workspace indexed.";
-
-            SendActivity("Getting type hierarchy");
-
-            var sb = new StringBuilder();
-            sb.AppendLine("# Type Hierarchy");
-            sb.AppendLine();
-
-            foreach (var kvp in _workspaceAnalysis.TypeHierarchy.OrderBy(k => k.Key))
-            {
-                var inheritance = kvp.Value.Count > 0 ? $" : {string.Join(", ", kvp.Value)}" : "";
-                sb.AppendLine($"- **{kvp.Key}**{inheritance}");
-            }
-
-            return sb.ToString();
-        }
-
-        // === WRITE TOOL IMPLEMENTATIONS ===
-
-        private string StrReplace(JsonElement arguments)
-        {
-            if (!arguments.TryGetProperty("path", out var pathEl))
-                return "Error: 'path' parameter is required.";
-
-            if (!arguments.TryGetProperty("oldStr", out var oldStrEl))
-                return "Error: 'oldStr' parameter is required.";
-
-            var path = pathEl.GetString() ?? "";
-            var oldStr = oldStrEl.GetString() ?? "";
-            var newStr = arguments.TryGetProperty("newStr", out var newStrEl) ? newStrEl.GetString() ?? "" : "";
-
-            var createBackup = true;
-            if (arguments.TryGetProperty("createBackup", out var backupEl))
-                createBackup = backupEl.GetBoolean();
-
-            SendActivity($"StrReplace: {path}");
-
-            // Find the file
-            var file = _workspaceAnalysis?.AllFiles.FirstOrDefault(f =>
-                f.RelativePath.Equals(path, StringComparison.OrdinalIgnoreCase) ||
-                f.FileName.Equals(path, StringComparison.OrdinalIgnoreCase));
-
-            if (file == null)
-            {
-                return $"Error: File not found: {path}";
-            }
-
-            try
-            {
-                var content = File.ReadAllText(file.FilePath);
-
-                // Count occurrences
-                var count = 0;
-                var index = 0;
-                while ((index = content.IndexOf(oldStr, index, StringComparison.Ordinal)) != -1)
-                {
-                    count++;
-                    index += oldStr.Length;
-                }
-
-                if (count == 0)
-                {
-                    return $"Error: String not found in file.\n\n**Looking for:**\n```\n{oldStr}\n```";
-                }
-
-                if (count > 1)
-                {
-                    return $"Error: String appears {count} times in file. It must be unique (appear exactly once).\n\n**Looking for:**\n```\n{oldStr}\n```";
-                }
-
-                // Create backup if requested
-                if (createBackup && File.Exists(file.FilePath))
-                {
-                    File.Copy(file.FilePath, file.FilePath + ".bak", true);
-                }
-
-                // Perform replacement
-                var newContent = content.Replace(oldStr, newStr);
-                File.WriteAllText(file.FilePath, newContent);
-
-                var action = string.IsNullOrEmpty(newStr) ? "deleted" : "replaced";
-                Log($"StrReplace: {path} - {action}");
-
-                var sb = new StringBuilder();
-                sb.AppendLine($"# String Replace Result");
-                sb.AppendLine();
-                sb.AppendLine($"**File:** `{file.RelativePath}`");
-                sb.AppendLine($"**Status:** Success - string {action}");
-                if (createBackup)
-                    sb.AppendLine($"**Backup:** `{file.FilePath}.bak`");
-
-                return sb.ToString();
-            }
-            catch (Exception ex)
-            {
-                return $"Error: {ex.Message}";
-            }
-        }
-
-        private string WriteFile(JsonElement arguments)
-        {
-            if (_refactoringService == null) return "Error: Refactoring service not initialized.";
-
-            if (!arguments.TryGetProperty("path", out var pathEl))
-                return "Error: 'path' parameter is required.";
-
-            if (!arguments.TryGetProperty("content", out var contentEl))
-                return "Error: 'content' parameter is required.";
-
-            var path = pathEl.GetString() ?? "";
-            var content = contentEl.GetString() ?? "";
-
-            SendActivity($"Writing: {path}");
-
-            var createBackup = true;
-            if (arguments.TryGetProperty("createBackup", out var backupEl))
-                createBackup = backupEl.GetBoolean();
-
-            var result = _refactoringService.WriteFile(path, content, createBackup);
-            Log($"WriteFile: {path} - {(result.Success ? "OK" : "FAILED")}");
-
-            return result.ToMarkdown();
-        }
-
-        private string PreviewWriteFile(JsonElement arguments)
-        {
-            if (_refactoringService == null) return "Error: Refactoring service not initialized.";
-
-            if (!arguments.TryGetProperty("path", out var pathEl))
-                return "Error: 'path' parameter is required.";
-
-            if (!arguments.TryGetProperty("content", out var contentEl))
-                return "Error: 'content' parameter is required.";
-
-            var path = pathEl.GetString() ?? "";
-            var content = contentEl.GetString() ?? "";
-
-            SendActivity($"Preview: {path}");
-
-            var result = _refactoringService.PreviewWriteFile(path, content);
-            Log($"PreviewWrite: {path}");
-
-            return result.ToMarkdown();
-        }
-
-        private string RenameSymbol(JsonElement arguments)
-        {
-            if (_refactoringService == null) return "Error: Refactoring service not initialized.";
-
-            if (!arguments.TryGetProperty("oldName", out var oldNameEl))
-                return "Error: 'oldName' parameter is required.";
-
-            if (!arguments.TryGetProperty("newName", out var newNameEl))
-                return "Error: 'newName' parameter is required.";
-
-            var oldName = oldNameEl.GetString() ?? "";
-            var newName = newNameEl.GetString() ?? "";
-
-            var preview = true;
-            if (arguments.TryGetProperty("preview", out var previewEl))
-                preview = previewEl.GetBoolean();
-
-            SendActivity($"Rename: {oldName} → {newName}");
-
-            var result = _refactoringService.RenameSymbol(oldName, newName, preview);
-            Log($"RenameSymbol: {oldName} -> {newName} (preview={preview})");
-
-            return result.ToMarkdown();
-        }
-
-        private string GenerateInterface(JsonElement arguments)
-        {
-            if (_refactoringService == null) return "Error: Refactoring service not initialized.";
-
-            if (!arguments.TryGetProperty("className", out var classNameEl))
-                return "Error: 'className' parameter is required.";
-
-            var className = classNameEl.GetString() ?? "";
-
-            SendActivity($"Generate interface: {className}");
-
-            string? interfaceName = null;
-            if (arguments.TryGetProperty("interfaceName", out var interfaceNameEl))
-                interfaceName = interfaceNameEl.GetString();
-
-            var result = _refactoringService.GenerateInterface(className, interfaceName);
-            Log($"GenerateInterface: {className} -> {result.InterfaceName}");
-
-            return result.ToMarkdown();
-        }
-
-        private string ExtractMethod(JsonElement arguments)
-        {
-            if (_refactoringService == null) return "Error: Refactoring service not initialized.";
-
-            if (!arguments.TryGetProperty("filePath", out var filePathEl))
-                return "Error: 'filePath' parameter is required.";
-
-            if (!arguments.TryGetProperty("startLine", out var startLineEl))
-                return "Error: 'startLine' parameter is required.";
-
-            if (!arguments.TryGetProperty("endLine", out var endLineEl))
-                return "Error: 'endLine' parameter is required.";
-
-            if (!arguments.TryGetProperty("methodName", out var methodNameEl))
-                return "Error: 'methodName' parameter is required.";
-
-            var filePath = filePathEl.GetString() ?? "";
-            var startLine = startLineEl.GetInt32();
-            var endLine = endLineEl.GetInt32();
-            var methodName = methodNameEl.GetString() ?? "";
-
-            SendActivity($"Extract method: {methodName}");
-
-            var result = _refactoringService.ExtractMethod(filePath, startLine, endLine, methodName);
-            Log($"ExtractMethod: {filePath} lines {startLine}-{endLine} -> {methodName}()");
-
-            return result.ToMarkdown();
-        }
-
-        private string Shutdown()
-        {
-            Log("Shutdown requested by user");
-            SendActivity("Shutting down...");
-
-            // Schedule shutdown after returning response
             Task.Run(async () =>
             {
-                await Task.Delay(500); // Give time for response to be sent
+                await Task.Delay(500);
                 SendDisconnect();
                 _cancellationTokenSource?.Cancel();
                 await Task.Delay(200);
                 Environment.Exit(0);
             });
-
-            return "# Server Shutdown\n\nCodeMerger MCP server is shutting down. You can now recompile the project in Visual Studio.\n\nTo reconnect, simply start a new conversation or ask me to use a CodeMerger tool.";
+            return "# Server Shutdown\n\nCodeMerger MCP server is shutting down.";
         }
 
-        private string ListWorkspaces()
+        private string HandleListWorkspacesFallback()
         {
-            SendActivity("Listing workspaces");
-
             var workspaces = _workspaceService.LoadAllWorkspaces();
-            var activeWorkspace = _workspaceService.GetActiveWorkspace();
-
             if (workspaces.Count == 0)
-            {
-                return "# Available Workspaces\n\nNo workspaces found. Please create a workspace in the CodeMerger GUI first.";
-            }
+                return "# Available Workspaces\n\nNo workspaces found.";
 
             var sb = new StringBuilder();
-            sb.AppendLine("# Available Workspaces");
-            sb.AppendLine();
-            sb.AppendLine($"**Currently loaded:** {_workspaceName}");
-            sb.AppendLine();
-            sb.AppendLine("| Workspace | Directories | Status |");
-            sb.AppendLine("|-----------|-------------|--------|");
-
-            foreach (var workspace in workspaces.OrderBy(w => w.Name))
-            {
-                var dirCount = workspace.InputDirectories?.Count ?? 0;
-                var status = workspace.Name == _workspaceName ? "✓ Loaded" : 
-                             workspace.Name == activeWorkspace ? "Active" : "";
-                sb.AppendLine($"| {workspace.Name} | {dirCount} | {status} |");
-            }
-
-            sb.AppendLine();
-            sb.AppendLine("*Use `codemerger_switch_project` to switch to a different workspace.*");
-
+            sb.AppendLine("# Available Workspaces\n");
+            foreach (var w in workspaces)
+                sb.AppendLine($"- {w.Name}");
             return sb.ToString();
-        }
-
-        private string SwitchWorkspace(JsonElement arguments)
-        {
-            if (!arguments.TryGetProperty("projectName", out var workspaceNameEl))
-            {
-                return "Error: 'projectName' parameter is required.";
-            }
-
-            var workspaceName = workspaceNameEl.GetString() ?? "";
-
-            if (string.IsNullOrWhiteSpace(workspaceName))
-            {
-                return "Error: Workspace name cannot be empty.";
-            }
-
-            // Check if workspace exists
-            var workspace = _workspaceService.LoadWorkspace(workspaceName);
-            if (workspace == null)
-            {
-                var available = _workspaceService.LoadAllWorkspaces();
-                return $"Error: Workspace '{workspaceName}' not found.\n\nAvailable workspaces:\n" +
-                       string.Join("\n", available.Select(w => $"- {w.Name}"));
-            }
-
-            // Check if already loaded
-            if (workspaceName == _workspaceName)
-            {
-                return $"Workspace '{workspaceName}' is already loaded.";
-            }
-
-            Log($"Switching to workspace: {workspaceName}");
-            SendActivity($"Switching to: {workspaceName}");
-
-            // Set as active workspace
-            _workspaceService.SetActiveWorkspace(workspaceName);
-
-            // Schedule restart after returning response
-            Task.Run(async () =>
-            {
-                await Task.Delay(500); // Give time for response to be sent
-                SendDisconnect();
-                _cancellationTokenSource?.Cancel();
-                await Task.Delay(200);
-                Environment.Exit(0);
-            });
-
-            return $"# Switching Workspace\n\nSwitching to workspace **{workspaceName}**.\n\nThe server will restart automatically. Please use any CodeMerger tool to reconnect with the new workspace loaded.";
         }
 
         private string CreateToolResponse(int id, string content)
@@ -1310,10 +411,7 @@ namespace CodeMerger.Services
                 id,
                 result = new
                 {
-                    content = new[]
-                    {
-                        new { type = "text", text = content }
-                    }
+                    content = new[] { new { type = "text", text = content } }
                 }
             };
             return JsonSerializer.Serialize(response, JsonOptions);
@@ -1335,9 +433,6 @@ namespace CodeMerger.Services
             OnLog?.Invoke($"[MCP] {message}");
         }
 
-        /// <summary>
-        /// Send activity message to MainWindow via named pipe (fire and forget).
-        /// </summary>
         private void SendActivity(string activity)
         {
             Task.Run(() =>
@@ -1345,37 +440,26 @@ namespace CodeMerger.Services
                 try
                 {
                     using var pipe = new NamedPipeClientStream(".", ActivityPipeName, PipeDirection.Out);
-                    pipe.Connect(100); // Short timeout
-
+                    pipe.Connect(100);
                     using var writer = new StreamWriter(pipe);
                     writer.WriteLine($"{_workspaceName}|{activity}");
                     writer.Flush();
                 }
-                catch
-                {
-                    // MainWindow not running or not listening - that's OK
-                }
+                catch { }
             });
         }
 
-        /// <summary>
-        /// Send disconnect notification to MainWindow (synchronous, best-effort).
-        /// </summary>
         private void SendDisconnect()
         {
             try
             {
                 using var pipe = new NamedPipeClientStream(".", ActivityPipeName, PipeDirection.Out);
                 pipe.Connect(200);
-
                 using var writer = new StreamWriter(pipe);
                 writer.WriteLine($"{_workspaceName}|DISCONNECT");
                 writer.Flush();
             }
-            catch
-            {
-                // MainWindow not running - that's OK
-            }
+            catch { }
         }
     }
 }
