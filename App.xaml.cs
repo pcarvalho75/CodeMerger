@@ -10,6 +10,7 @@ namespace CodeMerger
     public partial class App : Application
     {
         private const string HandshakePipeName = "codemerger_handshake";
+
         protected override void OnStartup(StartupEventArgs e)
         {
             base.OnStartup(e);
@@ -18,11 +19,11 @@ namespace CodeMerger
             try
             {
                 var claudeService = new ClaudeDesktopService();
-                int healed = claudeService.SelfHeal();
-                if (healed > 0)
+                bool healed = claudeService.SelfHeal();
+                if (healed)
                 {
-                    // Store count so MainWindow can show message
-                    Application.Current.Properties["ConfigHealedCount"] = healed;
+                    // Store flag so MainWindow can show message
+                    Application.Current.Properties["ConfigHealed"] = true;
                 }
             }
             catch
@@ -30,31 +31,39 @@ namespace CodeMerger
                 // Don't crash on heal failure - not critical
             }
 
-            // Check for MCP mode
-            if (e.Args.Length >= 2 && e.Args[0] == "--mcp")
+            // Check for MCP mode (no project name needed - reads from active_project.txt)
+            if (e.Args.Length >= 1 && e.Args[0] == "--mcp")
             {
-                RunMcpMode(e.Args[1]);
+                RunMcpMode();
                 return;
             }
 
             // Normal GUI mode - let XAML handle it via StartupUri
         }
 
-        private void RunMcpMode(string projectName)
+        private void RunMcpMode()
         {
             try
             {
                 var projectService = new ProjectService();
-                var codeAnalyzer = new CodeAnalyzer();
                 var mcpServer = new McpServer();
 
+                // Get active project from settings
+                var projectName = projectService.GetActiveProject();
+
+                if (string.IsNullOrEmpty(projectName))
+                {
+                    Console.Error.WriteLine("[MCP] No active project set. Please select a project in CodeMerger GUI first.");
+                    Environment.Exit(1);
+                    return;
+                }
+
                 // Load project
-                var projects = projectService.LoadAllProjects();
-                var project = projects.FirstOrDefault(p => p.Name.Equals(projectName, StringComparison.OrdinalIgnoreCase));
+                var project = projectService.LoadProject(projectName);
 
                 if (project == null)
                 {
-                    Console.Error.WriteLine($"Project not found: {projectName}");
+                    Console.Error.WriteLine($"[MCP] Project not found: {projectName}");
                     Environment.Exit(1);
                     return;
                 }
@@ -89,7 +98,7 @@ namespace CodeMerger
                 // Index project
                 mcpServer.IndexProject(project.Name, project.InputDirectories, allFiles);
 
-                // Notify MainWindow if it's running
+                // Notify MainWindow if it's running (handshake)
                 SendHandshakeToMainWindow(projectName);
 
                 // Run MCP server on stdio

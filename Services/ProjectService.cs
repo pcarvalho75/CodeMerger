@@ -1,49 +1,62 @@
+using CodeMerger.Models;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
-using CodeMerger.Models;
 
 namespace CodeMerger.Services
 {
     public class ProjectService
     {
-        private const string ConfigFileName = "project_config.json";
-        private static readonly JsonSerializerOptions JsonOptions = new()
-        {
-            WriteIndented = true
-        };
+        private static readonly string AppDataFolder = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "CodeMerger");
 
-        public string GetProjectsFolder()
+        public const string ConfigFileName = "project.json";
+        private const string ActiveProjectFileName = "active_project.txt";
+
+        public ProjectService()
         {
-            string desktop = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
-            return Path.Combine(desktop, "CodeMerger");
+            if (!Directory.Exists(AppDataFolder))
+            {
+                Directory.CreateDirectory(AppDataFolder);
+            }
         }
 
         public string GetProjectFolder(string projectName)
         {
-            return Path.Combine(GetProjectsFolder(), projectName);
+            return Path.Combine(AppDataFolder, projectName);
+        }
+
+        private string GetProjectConfigPath(string projectName)
+        {
+            return Path.Combine(GetProjectFolder(projectName), ConfigFileName);
+        }
+
+        private string GetActiveProjectFilePath()
+        {
+            return Path.Combine(AppDataFolder, ActiveProjectFileName);
+        }
+
+        public bool ProjectExists(string projectName)
+        {
+            return File.Exists(GetProjectConfigPath(projectName));
         }
 
         public List<Project> LoadAllProjects()
         {
             var projects = new List<Project>();
-            string root = GetProjectsFolder();
 
-            if (!Directory.Exists(root))
-            {
-                Directory.CreateDirectory(root);
-                return projects;
-            }
+            if (!Directory.Exists(AppDataFolder)) return projects;
 
-            foreach (var dir in Directory.GetDirectories(root))
+            foreach (var dir in Directory.GetDirectories(AppDataFolder))
             {
-                string configPath = Path.Combine(dir, ConfigFileName);
+                var configPath = Path.Combine(dir, ConfigFileName);
                 if (File.Exists(configPath))
                 {
                     try
                     {
-                        string json = File.ReadAllText(configPath);
+                        var json = File.ReadAllText(configPath);
                         var project = JsonSerializer.Deserialize<Project>(json);
                         if (project != null)
                         {
@@ -52,7 +65,7 @@ namespace CodeMerger.Services
                     }
                     catch
                     {
-                        // Skip corrupted configs
+                        // Skip invalid project files
                     }
                 }
             }
@@ -60,61 +73,134 @@ namespace CodeMerger.Services
             return projects;
         }
 
-        public void SaveProject(Project project)
+        public Project? LoadProject(string projectName)
         {
-            if (string.IsNullOrWhiteSpace(project.Name)) return;
+            var configPath = GetProjectConfigPath(projectName);
+            if (!File.Exists(configPath)) return null;
 
-            project.LastModifiedDate = DateTime.Now;
-            string folder = GetProjectFolder(project.Name);
-            Directory.CreateDirectory(folder);
-
-            string configPath = Path.Combine(folder, ConfigFileName);
-            string json = JsonSerializer.Serialize(project, JsonOptions);
-            File.WriteAllText(configPath, json);
+            try
+            {
+                var json = File.ReadAllText(configPath);
+                return JsonSerializer.Deserialize<Project>(json);
+            }
+            catch
+            {
+                return null;
+            }
         }
 
-        public void DeleteProject(string projectName)
+        public void SaveProject(Project project)
         {
-            string folder = GetProjectFolder(projectName);
-            if (Directory.Exists(folder))
+            var folder = GetProjectFolder(project.Name);
+            if (!Directory.Exists(folder))
             {
-                Directory.Delete(folder, true);
+                Directory.CreateDirectory(folder);
             }
+
+            project.LastModifiedDate = DateTime.Now;
+
+            var configPath = GetProjectConfigPath(project.Name);
+            var json = JsonSerializer.Serialize(project, new JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(configPath, json);
         }
 
         public bool RenameProject(string oldName, string newName)
         {
-            if (string.IsNullOrWhiteSpace(newName)) return false;
-            if (oldName.Equals(newName, StringComparison.OrdinalIgnoreCase)) return true;
+            if (ProjectExists(newName)) return false;
 
-            string oldFolder = GetProjectFolder(oldName);
-            string newFolder = GetProjectFolder(newName);
+            var oldFolder = GetProjectFolder(oldName);
+            var newFolder = GetProjectFolder(newName);
 
             if (!Directory.Exists(oldFolder)) return false;
-            if (Directory.Exists(newFolder)) return false;
 
-            Directory.Move(oldFolder, newFolder);
-
-            // Update config with new name
-            string configPath = Path.Combine(newFolder, ConfigFileName);
-            if (File.Exists(configPath))
+            try
             {
-                string json = File.ReadAllText(configPath);
-                var project = JsonSerializer.Deserialize<Project>(json);
+                Directory.Move(oldFolder, newFolder);
+
+                // Update project name in config
+                var project = LoadProject(newName);
                 if (project != null)
                 {
                     project.Name = newName;
-                    project.LastModifiedDate = DateTime.Now;
-                    File.WriteAllText(configPath, JsonSerializer.Serialize(project, JsonOptions));
+                    SaveProject(project);
                 }
-            }
 
-            return true;
+                // Update active project if it was the renamed one
+                if (GetActiveProject() == oldName)
+                {
+                    SetActiveProject(newName);
+                }
+
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
-        public bool ProjectExists(string projectName)
+        public void DeleteProject(string projectName)
         {
-            return Directory.Exists(GetProjectFolder(projectName));
+            var folder = GetProjectFolder(projectName);
+            if (Directory.Exists(folder))
+            {
+                Directory.Delete(folder, recursive: true);
+            }
+
+            // Clear active project if it was deleted
+            if (GetActiveProject() == projectName)
+            {
+                ClearActiveProject();
+            }
+        }
+
+        /// <summary>
+        /// Gets the currently active project name for MCP mode.
+        /// Returns null if no active project is set.
+        /// </summary>
+        public string? GetActiveProject()
+        {
+            var filePath = GetActiveProjectFilePath();
+            if (!File.Exists(filePath)) return null;
+
+            try
+            {
+                var projectName = File.ReadAllText(filePath).Trim();
+                
+                // Validate that the project still exists
+                if (!string.IsNullOrEmpty(projectName) && ProjectExists(projectName))
+                {
+                    return projectName;
+                }
+                
+                return null;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Sets the active project for MCP mode.
+        /// Called when user switches projects in the GUI.
+        /// </summary>
+        public void SetActiveProject(string projectName)
+        {
+            var filePath = GetActiveProjectFilePath();
+            File.WriteAllText(filePath, projectName);
+        }
+
+        /// <summary>
+        /// Clears the active project setting.
+        /// </summary>
+        public void ClearActiveProject()
+        {
+            var filePath = GetActiveProjectFilePath();
+            if (File.Exists(filePath))
+            {
+                File.Delete(filePath);
+            }
         }
     }
 }
