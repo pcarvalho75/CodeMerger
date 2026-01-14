@@ -40,8 +40,10 @@ namespace CodeMerger
         private Process? _mcpProcess;
         private NamedPipeServerStream? _pipeServer;
         private readonly ClaudeDesktopService _claudeDesktopService = new ClaudeDesktopService();
+        private CancellationTokenSource? _handshakeListenerCts;
 
         private const int MCP_RECOMMENDED_THRESHOLD = 500000;
+        public const string HandshakePipeName = "codemerger_handshake";
 
         public string StatusText
         {
@@ -103,6 +105,50 @@ namespace CodeMerger
             }
 
             RefreshClaudeDesktopStatus();
+            StartHandshakeListener();
+        }
+
+        private void StartHandshakeListener()
+        {
+            _handshakeListenerCts = new CancellationTokenSource();
+            var token = _handshakeListenerCts.Token;
+
+            Task.Run(async () =>
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    try
+                    {
+                        using var pipe = new NamedPipeServerStream(HandshakePipeName, PipeDirection.In, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+                        await pipe.WaitForConnectionAsync(token);
+
+                        using var reader = new StreamReader(pipe);
+                        string? message = await reader.ReadLineAsync();
+
+                        if (!string.IsNullOrEmpty(message))
+                        {
+                            Application.Current.Dispatcher.Invoke(() =>
+                            {
+                                OnHandshakeReceived(message);
+                            });
+                        }
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        break;
+                    }
+                    catch
+                    {
+                        // Pipe error, retry after short delay
+                        await Task.Delay(500, token);
+                    }
+                }
+            }, token);
+        }
+
+        private void OnHandshakeReceived(string projectName)
+        {
+            UpdateStatus($"✓ Claude connected via MCP (project: {projectName})", Brushes.DarkGreen);
         }
 
         private void RefreshClaudeDesktopStatus()
@@ -186,6 +232,11 @@ namespace CodeMerger
 
         private void MainWindow_Closing(object? sender, CancelEventArgs e)
         {
+            // Stop handshake listener
+            _handshakeListenerCts?.Cancel();
+            _handshakeListenerCts?.Dispose();
+            _handshakeListenerCts = null;
+
             StopMcpServer();
 
             // Unsubscribe from GitService events to prevent leaks

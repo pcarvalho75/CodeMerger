@@ -89,10 +89,17 @@ namespace CodeMerger
                 PromptCreateFirstProject();
             }
 
+            // Check if paths were auto-healed (ClickOnce update detection)
             if (Application.Current.Properties.Contains("ConfigHealedCount"))
             {
                 int count = (int)Application.Current.Properties["ConfigHealedCount"];
-                UpdateStatus($"Updated {count} Claude Desktop config entry(s) to match current installation.", Brushes.DarkGreen);
+                if (count > 0)
+                {
+                    string message = _claudeDesktopService.IsClickOnceDeployment()
+                        ? $"ClickOnce update detected. Updated {count} config entry(s). Please restart Claude Desktop."
+                        : $"Updated {count} Claude Desktop config entry(s) to match current installation.";
+                    UpdateStatus(message, Brushes.DarkGreen);
+                }
             }
 
             RefreshClaudeDesktopStatus();
@@ -180,6 +187,12 @@ namespace CodeMerger
         private void MainWindow_Closing(object? sender, CancelEventArgs e)
         {
             StopMcpServer();
+
+            // Unsubscribe from GitService events to prevent leaks
+            if (_gitService != null)
+            {
+                _gitService.OnProgress -= OnGitProgress;
+            }
         }
 
         private void OnMcpLog(string message)
@@ -216,6 +229,12 @@ namespace CodeMerger
         {
             if (projectComboBox.SelectedItem is Project selected)
             {
+                // Unsubscribe from previous GitService if exists
+                if (_gitService != null)
+                {
+                    _gitService.OnProgress -= OnGitProgress;
+                }
+
                 _currentProject = selected;
 
                 // Initialize GitService for this project
@@ -823,9 +842,20 @@ namespace CodeMerger
 
                 UpdateStatus($"MCP Server ready. Waiting for connection...", Brushes.DarkGreen);
 
+                // Capture project name for use in Task
+                string currentProjectName = _currentProject.Name;
+
                 await Task.Run(async () =>
                 {
                     await _pipeServer.WaitForConnectionAsync(_mcpCancellation.Token);
+
+                    // Notify UI of successful connection (handshake)
+                    Application.Current.Dispatcher.Invoke(() =>
+                    {
+                        UpdateStatus("✓ MCP Server connected to Claude Desktop!", Brushes.DarkGreen);
+                        mcpConfigText.Text = $"✅ Connected to Claude Desktop\n\nProject: {currentProjectName}";
+                    });
+
                     await _mcpServer.StartAsync(_pipeServer, _pipeServer);
                 });
             }
@@ -843,13 +873,19 @@ namespace CodeMerger
         private void StopMcpServer()
         {
             _mcpCancellation?.Cancel();
-            _mcpCancellation?.Dispose();
-            _mcpCancellation = null;
+
+            // Dispose pipe BEFORE waiting for cancellation to prevent file locks
+            try
+            {
+                _pipeServer?.Dispose();
+            }
+            catch { }
+            _pipeServer = null;
 
             _mcpServer.Stop();
 
-            _pipeServer?.Dispose();
-            _pipeServer = null;
+            _mcpCancellation?.Dispose();
+            _mcpCancellation = null;
 
             mcpButton.Content = "Start MCP Server";
             mcpButton.Style = (Style)FindResource("McpButton");

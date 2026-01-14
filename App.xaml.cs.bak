@@ -9,7 +9,6 @@ namespace CodeMerger
 {
     public partial class App : Application
     {
-        private const string HandshakePipeName = "codemerger_handshake";
         protected override void OnStartup(StartupEventArgs e)
         {
             base.OnStartup(e);
@@ -118,7 +117,7 @@ namespace CodeMerger
         {
             try
             {
-                using var pipe = new NamedPipeClientStream(".", HandshakePipeName, PipeDirection.Out);
+                using var pipe = new NamedPipeClientStream(".", MainWindow.HandshakePipeName, PipeDirection.Out);
                 pipe.Connect(500); // 500ms timeout
 
                 using var writer = new StreamWriter(pipe);
