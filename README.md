@@ -1,101 +1,124 @@
-# CodeMerger
+# CodeMerger v2.0 Update - Smart Context Features
 
-Advanced Code Merger with MCP Server support for Claude AI integration.
+## New Tools Added
 
-## Features
+### 1. `codemerger_search_content`
+**Grep-like search inside file contents**
 
-### 1. Chunk-Based Export
-- Analyzes your codebase using Roslyn
-- Generates intelligent chunks (max 150k tokens each)
-- Creates a master index with type hierarchy, dependencies, and file classifications
-- Perfect for uploading to Claude Projects
+Search for text or regex patterns across all files in your project. Returns matching lines with surrounding context.
 
-### 2. MCP Server Mode
-- For large projects (500k+ tokens)
-- Dynamic code retrieval - Claude fetches only what it needs
-- No need to upload everything upfront
-- Tools available:
-  - `codemerger_get_project_overview` - Project summary
-  - `codemerger_list_files` - List files with classifications
-  - `codemerger_get_file` - Get file contents
-  - `codemerger_search_code` - Search types, methods, keywords
-  - `codemerger_get_type` - Type details with members
-  - `codemerger_get_dependencies` - Dependency analysis
-  - `codemerger_get_type_hierarchy` - Full type hierarchy
+**Parameters:**
+- `pattern` (required): Search pattern (text or regex)
+- `isRegex` (default: true): Treat pattern as regex
+- `caseSensitive` (default: false): Case-sensitive search
+- `contextLines` (default: 2): Lines of context before/after match
+- `maxResults` (default: 50): Maximum matches to return
+
+**Example queries:**
+- Find all TODOs: `pattern: "TODO"`
+- Find exception handling: `pattern: "catch.*Exception"`
+- Find async methods: `pattern: "async Task"`
+- Find specific strings: `pattern: "connection string"` with `isRegex: false`
+
+---
+
+### 2. `codemerger_get_context_for_task`
+**AI-native smart context gathering**
+
+Describe what you want to do in natural language, and get the most relevant files automatically ranked by relevance.
+
+**Parameters:**
+- `task` (required): Natural language description of your task
+- `maxFiles` (default: 10): Maximum files to return
+- `maxTokens` (default: 50000): Token budget for context
+
+**How it works:**
+1. Extracts keywords and concepts from your task description
+2. Scores each file based on:
+   - Type/class name matches
+   - Method name matches
+   - File classification relevance
+   - Dependency relationships
+3. Returns files ranked by relevance with:
+   - Match reasons explaining why each file was selected
+   - Suggestions for how to approach the task
+   - Related types to consider
+
+**Example tasks:**
+- "Add a new MCP tool for exporting project to JSON"
+- "Fix the file path handling in GetFile method"
+- "Add a new model class for user preferences"
+- "Implement caching for the code analyzer"
+
+---
 
 ## Installation
 
-1. Ensure .NET 8.0 SDK is installed
-2. Open the solution in Visual Studio 2022
-3. Build and run
+### Step 1: Backup existing files
+Before replacing, backup your current:
+- `Services\McpServer.cs`
 
-Or from command line:
-```bash
-dotnet restore
-dotnet build
-dotnet run
-```
+### Step 2: Copy new files
+Copy from this package:
+- `Services\McpServer.cs` → Replace existing
+- `Services\ContextAnalyzer.cs` → New file (add to project)
 
-## Usage
+### Step 3: Add to Visual Studio project
+If using Visual Studio:
+1. Right-click on `Services` folder
+2. Add → Existing Item → Select `ContextAnalyzer.cs`
 
-### For Small/Medium Projects (< 500k tokens)
-1. Create a new project
-2. Add input directories
-3. Configure extensions and ignored folders
-4. Click "Generate Chunks"
-5. Upload all generated files to a Claude Project
+### Step 4: Rebuild
+Build the project to verify no compilation errors.
 
-### For Large Projects (> 500k tokens)
-1. Create and configure your project
-2. Click "Start MCP Server"
-3. Copy the configuration to your Claude Desktop config:
-   - Windows: `%APPDATA%\Claude\claude_desktop_config.json`
-   - Mac: `~/Library/Application Support/Claude/claude_desktop_config.json`
-4. Restart Claude Desktop
-5. Claude can now query your codebase dynamically
+### Step 5: Restart MCP Server
+1. Stop the MCP server if running
+2. Re-index your project (Generate Chunks)
+3. Start MCP server
 
-## Claude Desktop Configuration
+---
 
-Add this to your `claude_desktop_config.json`:
+## Changes Summary
 
-```json
-{
-  "mcpServers": {
-    "codemerger": {
-      "command": "C:\\path\\to\\CodeMerger.exe",
-      "args": ["--mcp", "YourProjectName"]
-    }
-  }
-}
-```
+### McpServer.cs
+- Added `ContextAnalyzer` field and initialization in `IndexProject()`
+- Added two new tools to `HandleListTools()`
+- Added `SearchContent()` and `GetContextForTask()` handlers
+- Fixed path normalization bug in `GetFile()` (now works with / or \)
+- Version bumped to 2.0.0
 
-## Output Structure
+### ContextAnalyzer.cs (NEW)
+- `SearchContent()`: Regex-based file content search
+- `GetContextForTask()`: Smart context analysis with keyword extraction
+- Result models with `ToMarkdown()` for clean output
+- Dependency-aware file scoring
 
-```
-Desktop/CodeMerger/YourProject/
-├── project_config.json          # Project settings
-├── YourProject_master_index.txt # Global index
-├── YourProject_chunk_1.txt      # Code chunk
-├── YourProject_chunk_2.txt      # Code chunk
-└── ...
-```
+---
 
-## Recommendations
+## Usage Tips
 
-| Project Size | Recommended Mode |
-|-------------|------------------|
-| < 100k tokens | Generate Chunks |
-| 100k - 500k tokens | Generate Chunks |
-| > 500k tokens | MCP Server |
+### Best workflow with Claude:
+1. **Start with context**: Use `codemerger_get_context_for_task` first
+   ```
+   "I want to add a new MCP tool for searching content"
+   ```
+2. **Drill down**: Use `codemerger_get_file` to read specific files
+3. **Search patterns**: Use `codemerger_search_content` to find usages
+   ```
+   "HandleToolCall|CreateToolResponse"
+   ```
 
-The app will show a recommendation banner based on your project size.
+### Token efficiency:
+- Set `maxTokens` based on your context window
+- Use `maxFiles` to limit scope for focused tasks
+- The smart context prioritizes smaller, more relevant files
 
-## Requirements
+---
 
-- Windows 10/11
-- .NET 8.0 Runtime
-- Visual Studio 2022 (for development)
+## Future Enhancements (Roadmap)
 
-## License
-
-MIT License
+- [ ] `codemerger_write_file` - Two-way code editing
+- [ ] `codemerger_get_callers` - Call hierarchy analysis
+- [ ] `codemerger_create_patch` - Generate diffs for changes
+- [ ] File watching for live index updates
+- [ ] Semantic queries using Roslyn ("find all async methods")

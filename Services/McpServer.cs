@@ -17,6 +17,7 @@ namespace CodeMerger.Services
         private CancellationTokenSource? _cancellationTokenSource;
         private Task? _serverTask;
         private ProjectAnalysis? _projectAnalysis;
+        private ContextAnalyzer? _contextAnalyzer; // NEW: Context analyzer instance
         private List<string> _inputDirectories = new();
         private string _projectName = string.Empty;
 
@@ -53,6 +54,9 @@ namespace CodeMerger.Services
             var chunkManager = new ChunkManager(150000);
             var chunks = chunkManager.CreateChunks(fileAnalyses);
             _projectAnalysis = _indexGenerator.BuildProjectAnalysis(projectName, fileAnalyses, chunks);
+            
+            // NEW: Initialize context analyzer with project analysis
+            _contextAnalyzer = new ContextAnalyzer(_projectAnalysis);
 
             Log($"Indexed {fileAnalyses.Count} files, {_projectAnalysis.TypeHierarchy.Count} types");
         }
@@ -150,7 +154,7 @@ namespace CodeMerger.Services
                     serverInfo = new
                     {
                         name = "codemerger-mcp",
-                        version = "1.0.0"
+                        version = "2.0.0" // VERSION BUMP for new features
                     }
                 }
             };
@@ -161,105 +165,147 @@ namespace CodeMerger.Services
         {
             var tools = new object[]
             {
-        new
-        {
-            name = "codemerger_get_project_overview",
-            description = "Get high-level project information including framework, structure, total files, and entry points",
-            inputSchema = new Dictionary<string, object>
-            {
-                { "type", "object" },
-                { "properties", new Dictionary<string, object>() },
-                { "required", Array.Empty<string>() }
-            }
-        },
-        new
-        {
-            name = "codemerger_list_files",
-            description = "List all files in the project with their classifications (View, Model, Service, etc.) and estimated tokens",
-            inputSchema = new Dictionary<string, object>
-            {
-                { "type", "object" },
-                { "properties", new Dictionary<string, object>
+                new
+                {
+                    name = "codemerger_get_project_overview",
+                    description = "Get high-level project information including framework, structure, total files, and entry points",
+                    inputSchema = new Dictionary<string, object>
                     {
-                        { "classification", new Dictionary<string, string> { { "type", "string" }, { "description", "Filter by classification: View, Model, Service, Controller, Test, Config, Unknown" } } },
-                        { "limit", new Dictionary<string, string> { { "type", "integer" }, { "description", "Maximum files to return (default 50)" } } }
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>() },
+                        { "required", Array.Empty<string>() }
                     }
                 },
-                { "required", Array.Empty<string>() }
-            }
-        },
-        new
-        {
-            name = "codemerger_get_file",
-            description = "Get the full content of a specific file by its relative path",
-            inputSchema = new Dictionary<string, object>
-            {
-                { "type", "object" },
-                { "properties", new Dictionary<string, object>
+                new
+                {
+                    name = "codemerger_list_files",
+                    description = "List all files in the project with their classifications (View, Model, Service, etc.) and estimated tokens",
+                    inputSchema = new Dictionary<string, object>
                     {
-                        { "path", new Dictionary<string, string> { { "type", "string" }, { "description", "Relative path to the file" } } }
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>
+                            {
+                                { "classification", new Dictionary<string, string> { { "type", "string" }, { "description", "Filter by classification: View, Model, Service, Controller, Test, Config, Unknown" } } },
+                                { "limit", new Dictionary<string, string> { { "type", "integer" }, { "description", "Maximum files to return (default 50)" } } }
+                            }
+                        },
+                        { "required", Array.Empty<string>() }
                     }
                 },
-                { "required", new[] { "path" } }
-            }
-        },
-        new
-        {
-            name = "codemerger_search_code",
-            description = "Search for types, methods, or keywords in the codebase",
-            inputSchema = new Dictionary<string, object>
-            {
-                { "type", "object" },
-                { "properties", new Dictionary<string, object>
+                new
+                {
+                    name = "codemerger_get_file",
+                    description = "Get the full content of a specific file by its relative path",
+                    inputSchema = new Dictionary<string, object>
                     {
-                        { "query", new Dictionary<string, string> { { "type", "string" }, { "description", "Search query (type name, method name, or keyword)" } } },
-                        { "searchIn", new Dictionary<string, string> { { "type", "string" }, { "description", "Where to search: types, methods, files, all (default: all)" } } }
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>
+                            {
+                                { "path", new Dictionary<string, string> { { "type", "string" }, { "description", "Relative path to the file" } } }
+                            }
+                        },
+                        { "required", new[] { "path" } }
                     }
                 },
-                { "required", new[] { "query" } }
-            }
-        },
-        new
-        {
-            name = "codemerger_get_type",
-            description = "Get detailed information about a specific type including its members, base types, and interfaces",
-            inputSchema = new Dictionary<string, object>
-            {
-                { "type", "object" },
-                { "properties", new Dictionary<string, object>
+                new
+                {
+                    name = "codemerger_search_code",
+                    description = "Search for types, methods, or keywords in the codebase",
+                    inputSchema = new Dictionary<string, object>
                     {
-                        { "typeName", new Dictionary<string, string> { { "type", "string" }, { "description", "Name of the type" } } }
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>
+                            {
+                                { "query", new Dictionary<string, string> { { "type", "string" }, { "description", "Search query (type name, method name, or keyword)" } } },
+                                { "searchIn", new Dictionary<string, string> { { "type", "string" }, { "description", "Where to search: types, methods, files, all (default: all)" } } }
+                            }
+                        },
+                        { "required", new[] { "query" } }
                     }
                 },
-                { "required", new[] { "typeName" } }
-            }
-        },
-        new
-        {
-            name = "codemerger_get_dependencies",
-            description = "Get dependencies of a type (what it uses) and reverse dependencies (what uses it)",
-            inputSchema = new Dictionary<string, object>
-            {
-                { "type", "object" },
-                { "properties", new Dictionary<string, object>
+                new
+                {
+                    name = "codemerger_get_type",
+                    description = "Get detailed information about a specific type including its members, base types, and interfaces",
+                    inputSchema = new Dictionary<string, object>
                     {
-                        { "typeName", new Dictionary<string, string> { { "type", "string" }, { "description", "Name of the type" } } }
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>
+                            {
+                                { "typeName", new Dictionary<string, string> { { "type", "string" }, { "description", "Name of the type" } } }
+                            }
+                        },
+                        { "required", new[] { "typeName" } }
                     }
                 },
-                { "required", new[] { "typeName" } }
-            }
-        },
-        new
-        {
-            name = "codemerger_get_type_hierarchy",
-            description = "Get the inheritance hierarchy for all types in the project",
-            inputSchema = new Dictionary<string, object>
-            {
-                { "type", "object" },
-                { "properties", new Dictionary<string, object>() },
-                { "required", Array.Empty<string>() }
-            }
-        }
+                new
+                {
+                    name = "codemerger_get_dependencies",
+                    description = "Get dependencies of a type (what it uses) and reverse dependencies (what uses it)",
+                    inputSchema = new Dictionary<string, object>
+                    {
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>
+                            {
+                                { "typeName", new Dictionary<string, string> { { "type", "string" }, { "description", "Name of the type" } } }
+                            }
+                        },
+                        { "required", new[] { "typeName" } }
+                    }
+                },
+                new
+                {
+                    name = "codemerger_get_type_hierarchy",
+                    description = "Get the inheritance hierarchy for all types in the project",
+                    inputSchema = new Dictionary<string, object>
+                    {
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>() },
+                        { "required", Array.Empty<string>() }
+                    }
+                },
+                // ============================================================
+                // NEW TOOL: codemerger_search_content
+                // ============================================================
+                new
+                {
+                    name = "codemerger_search_content",
+                    description = "Search inside file contents using text or regex patterns. Returns matching lines with context. Great for finding usages, patterns, TODOs, or any text across the codebase.",
+                    inputSchema = new Dictionary<string, object>
+                    {
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>
+                            {
+                                { "pattern", new Dictionary<string, string> { { "type", "string" }, { "description", "Search pattern (text or regex). Examples: 'TODO', 'catch.*Exception', 'async Task'" } } },
+                                { "isRegex", new Dictionary<string, object> { { "type", "boolean" }, { "description", "Treat pattern as regex (default: true)" }, { "default", true } } },
+                                { "caseSensitive", new Dictionary<string, object> { { "type", "boolean" }, { "description", "Case-sensitive search (default: false)" }, { "default", false } } },
+                                { "contextLines", new Dictionary<string, object> { { "type", "integer" }, { "description", "Number of context lines before/after match (default: 2)" }, { "default", 2 } } },
+                                { "maxResults", new Dictionary<string, object> { { "type", "integer" }, { "description", "Maximum number of matches to return (default: 50)" }, { "default", 50 } } }
+                            }
+                        },
+                        { "required", new[] { "pattern" } }
+                    }
+                },
+                // ============================================================
+                // NEW TOOL: codemerger_get_context_for_task
+                // ============================================================
+                new
+                {
+                    name = "codemerger_get_context_for_task",
+                    description = "SMART CONTEXT: Describe what you want to do and get the most relevant files automatically. Analyzes your task description, extracts keywords, scores files by relevance, and returns prioritized context with suggestions. Use this FIRST when starting a new task!",
+                    inputSchema = new Dictionary<string, object>
+                    {
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>
+                            {
+                                { "task", new Dictionary<string, string> { { "type", "string" }, { "description", "Natural language description of what you want to do. Examples: 'Add a new MCP tool for searching content', 'Fix the file path handling', 'Add a new model class for user settings'" } } },
+                                { "maxFiles", new Dictionary<string, object> { { "type", "integer" }, { "description", "Maximum number of relevant files to return (default: 10)" }, { "default", 10 } } },
+                                { "maxTokens", new Dictionary<string, object> { { "type", "integer" }, { "description", "Maximum total tokens for context budget (default: 50000)" }, { "default", 50000 } } }
+                            }
+                        },
+                        { "required", new[] { "task" } }
+                    }
+                }
             };
 
             var response = new
@@ -293,6 +339,9 @@ namespace CodeMerger.Services
                 "codemerger_get_type" => GetType(arguments),
                 "codemerger_get_dependencies" => GetDependencies(arguments),
                 "codemerger_get_type_hierarchy" => GetTypeHierarchy(),
+                // NEW TOOL HANDLERS
+                "codemerger_search_content" => SearchContent(arguments),
+                "codemerger_get_context_for_task" => GetContextForTask(arguments),
                 _ => $"Unknown tool: {toolName}"
             };
 
@@ -345,7 +394,7 @@ namespace CodeMerger.Services
             var files = _projectAnalysis.AllFiles.AsEnumerable();
 
             // Filter by classification
-            if (arguments.TryGetProperty("classification", out var classEl))
+            if (arguments.ValueKind != JsonValueKind.Undefined && arguments.TryGetProperty("classification", out var classEl))
             {
                 var classFilter = classEl.GetString();
                 if (Enum.TryParse<FileClassification>(classFilter, true, out var classification))
@@ -356,7 +405,7 @@ namespace CodeMerger.Services
 
             // Limit
             var limit = 50;
-            if (arguments.TryGetProperty("limit", out var limitEl))
+            if (arguments.ValueKind != JsonValueKind.Undefined && arguments.TryGetProperty("limit", out var limitEl))
             {
                 limit = limitEl.GetInt32();
             }
@@ -384,15 +433,22 @@ namespace CodeMerger.Services
         {
             if (_projectAnalysis == null) return "No project indexed.";
 
-            if (!arguments.TryGetProperty("path", out var pathEl))
+            if (arguments.ValueKind == JsonValueKind.Undefined || !arguments.TryGetProperty("path", out var pathEl))
             {
                 return "Error: 'path' parameter is required.";
             }
 
             var path = pathEl.GetString();
+            
+            // FIXED: Normalize path separators for cross-platform compatibility
+            var normalizedPath = path?.Replace('/', Path.DirectorySeparatorChar).Replace('\\', Path.DirectorySeparatorChar);
+            
             var file = _projectAnalysis.AllFiles.FirstOrDefault(f =>
-                f.RelativePath.Equals(path, StringComparison.OrdinalIgnoreCase) ||
-                f.FileName.Equals(path, StringComparison.OrdinalIgnoreCase));
+            {
+                var normalizedFilePath = f.RelativePath.Replace('/', Path.DirectorySeparatorChar).Replace('\\', Path.DirectorySeparatorChar);
+                return normalizedFilePath.Equals(normalizedPath, StringComparison.OrdinalIgnoreCase) ||
+                       f.FileName.Equals(path, StringComparison.OrdinalIgnoreCase);
+            });
 
             if (file == null)
             {
@@ -424,7 +480,7 @@ namespace CodeMerger.Services
         {
             if (_projectAnalysis == null) return "No project indexed.";
 
-            if (!arguments.TryGetProperty("query", out var queryEl))
+            if (arguments.ValueKind == JsonValueKind.Undefined || !arguments.TryGetProperty("query", out var queryEl))
             {
                 return "Error: 'query' parameter is required.";
             }
@@ -509,7 +565,7 @@ namespace CodeMerger.Services
         {
             if (_projectAnalysis == null) return "No project indexed.";
 
-            if (!arguments.TryGetProperty("typeName", out var typeNameEl))
+            if (arguments.ValueKind == JsonValueKind.Undefined || !arguments.TryGetProperty("typeName", out var typeNameEl))
             {
                 return "Error: 'typeName' parameter is required.";
             }
@@ -559,7 +615,7 @@ namespace CodeMerger.Services
         {
             if (_projectAnalysis == null) return "No project indexed.";
 
-            if (!arguments.TryGetProperty("typeName", out var typeNameEl))
+            if (arguments.ValueKind == JsonValueKind.Undefined || !arguments.TryGetProperty("typeName", out var typeNameEl))
             {
                 return "Error: 'typeName' parameter is required.";
             }
@@ -619,6 +675,86 @@ namespace CodeMerger.Services
             }
 
             return sb.ToString();
+        }
+
+        // ============================================================
+        // NEW TOOL IMPLEMENTATION: SearchContent
+        // ============================================================
+        private string SearchContent(JsonElement arguments)
+        {
+            if (_projectAnalysis == null) return "No project indexed.";
+            if (_contextAnalyzer == null) return "Context analyzer not initialized.";
+
+            if (arguments.ValueKind == JsonValueKind.Undefined || !arguments.TryGetProperty("pattern", out var patternEl))
+            {
+                return "Error: 'pattern' parameter is required.";
+            }
+
+            var pattern = patternEl.GetString() ?? "";
+            
+            // Parse optional parameters with defaults
+            var isRegex = true;
+            if (arguments.TryGetProperty("isRegex", out var isRegexEl))
+            {
+                isRegex = isRegexEl.GetBoolean();
+            }
+
+            var caseSensitive = false;
+            if (arguments.TryGetProperty("caseSensitive", out var caseSensitiveEl))
+            {
+                caseSensitive = caseSensitiveEl.GetBoolean();
+            }
+
+            var contextLines = 2;
+            if (arguments.TryGetProperty("contextLines", out var contextLinesEl))
+            {
+                contextLines = contextLinesEl.GetInt32();
+            }
+
+            var maxResults = 50;
+            if (arguments.TryGetProperty("maxResults", out var maxResultsEl))
+            {
+                maxResults = maxResultsEl.GetInt32();
+            }
+
+            Log($"SearchContent: pattern='{pattern}', isRegex={isRegex}, caseSensitive={caseSensitive}");
+
+            var result = _contextAnalyzer.SearchContent(pattern, isRegex, caseSensitive, contextLines, maxResults);
+            return result.ToMarkdown();
+        }
+
+        // ============================================================
+        // NEW TOOL IMPLEMENTATION: GetContextForTask
+        // ============================================================
+        private string GetContextForTask(JsonElement arguments)
+        {
+            if (_projectAnalysis == null) return "No project indexed.";
+            if (_contextAnalyzer == null) return "Context analyzer not initialized.";
+
+            if (arguments.ValueKind == JsonValueKind.Undefined || !arguments.TryGetProperty("task", out var taskEl))
+            {
+                return "Error: 'task' parameter is required.";
+            }
+
+            var task = taskEl.GetString() ?? "";
+
+            // Parse optional parameters with defaults
+            var maxFiles = 10;
+            if (arguments.TryGetProperty("maxFiles", out var maxFilesEl))
+            {
+                maxFiles = maxFilesEl.GetInt32();
+            }
+
+            var maxTokens = 50000;
+            if (arguments.TryGetProperty("maxTokens", out var maxTokensEl))
+            {
+                maxTokens = maxTokensEl.GetInt32();
+            }
+
+            Log($"GetContextForTask: task='{task}', maxFiles={maxFiles}, maxTokens={maxTokens}");
+
+            var result = _contextAnalyzer.GetContextForTask(task, maxFiles, maxTokens);
+            return result.ToMarkdown();
         }
 
         private string CreateToolResponse(int id, string content)
