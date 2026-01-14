@@ -266,6 +266,9 @@
                     <StackPanel Orientation="Horizontal">
                         <Ellipse x:Name="connectionIndicator" Width="10" Height="10" Fill="#555" Margin="0,0,10,0" VerticalAlignment="Center"/>
                         <TextBlock x:Name="connectionStatusText" Text="Waiting for Claude..." Foreground="{StaticResource TextSecondary}" FontSize="12" VerticalAlignment="Center"/>
+                        <Button x:Name="stopServerButton" Content="⏹ Stop" Click="StopServer_Click" 
+                                Style="{StaticResource SmallLinkButton}" Margin="12,0,0,0" Visibility="Collapsed"
+                                ToolTip="Stop MCP server to allow recompilation"/>
                     </StackPanel>
                 </Border>
             </Grid>

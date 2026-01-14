@@ -13,12 +13,12 @@ namespace CodeMerger.Services
     /// </summary>
     public class SemanticAnalyzer
     {
-        private readonly ProjectAnalysis _projectAnalysis;
+        private readonly WorkspaceAnalysis _workspaceAnalysis;
         private readonly List<CallSite> _callSites;
 
-        public SemanticAnalyzer(ProjectAnalysis projectAnalysis, List<CallSite> callSites)
+        public SemanticAnalyzer(WorkspaceAnalysis workspaceAnalysis, List<CallSite> callSites)
         {
-            _projectAnalysis = projectAnalysis;
+            _workspaceAnalysis = workspaceAnalysis;
             _callSites = callSites;
         }
 
@@ -34,7 +34,7 @@ namespace CodeMerger.Services
             };
 
             // Find definition(s)
-            foreach (var file in _projectAnalysis.AllFiles)
+            foreach (var file in _workspaceAnalysis.AllFiles)
             {
                 foreach (var type in file.Types)
                 {
@@ -78,7 +78,7 @@ namespace CodeMerger.Services
 
             foreach (var callSite in relevantCallSites)
             {
-                var file = _projectAnalysis.AllFiles.FirstOrDefault(f => f.FilePath == callSite.FilePath);
+                var file = _workspaceAnalysis.AllFiles.FirstOrDefault(f => f.FilePath == callSite.FilePath);
                 var relativePath = file?.RelativePath ?? callSite.FilePath;
 
                 result.Usages.Add(new SymbolUsage
@@ -93,7 +93,7 @@ namespace CodeMerger.Services
             }
 
             // Search for type references in inheritance
-            foreach (var file in _projectAnalysis.AllFiles)
+            foreach (var file in _workspaceAnalysis.AllFiles)
             {
                 foreach (var type in file.Types)
                 {
@@ -215,7 +215,7 @@ namespace CodeMerger.Services
                 MethodName = methodName
             };
 
-            foreach (var file in _projectAnalysis.AllFiles)
+            foreach (var file in _workspaceAnalysis.AllFiles)
             {
                 foreach (var type in file.Types)
                 {
@@ -271,7 +271,7 @@ namespace CodeMerger.Services
                 MethodName = methodName
             };
 
-            foreach (var file in _projectAnalysis.AllFiles)
+            foreach (var file in _workspaceAnalysis.AllFiles)
             {
                 foreach (var type in file.Types)
                 {
@@ -327,7 +327,7 @@ namespace CodeMerger.Services
             var result = new SemanticQueryResult { Query = options };
             var matches = new List<SemanticMatch>();
 
-            foreach (var file in _projectAnalysis.AllFiles)
+            foreach (var file in _workspaceAnalysis.AllFiles)
             {
                 foreach (var type in file.Types)
                 {
@@ -418,7 +418,7 @@ namespace CodeMerger.Services
 
         private string GetRelativePath(string filePath)
         {
-            var file = _projectAnalysis.AllFiles.FirstOrDefault(f => f.FilePath == filePath);
+            var file = _workspaceAnalysis.AllFiles.FirstOrDefault(f => f.FilePath == filePath);
             return file?.RelativePath ?? Path.GetFileName(filePath);
         }
     }

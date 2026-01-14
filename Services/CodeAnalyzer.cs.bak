@@ -28,14 +28,27 @@ namespace CodeMerger.Services
             { ".yml", "yaml" }
         };
 
-        // NEW: Store call sites during analysis
+        // Store call sites during analysis
         public List<CallSite> CallSites { get; private set; } = new();
+
+        // Python analyzer for .py files
+        private readonly PythonAnalyzer _pythonAnalyzer = new();
 
         public FileAnalysis AnalyzeFile(string filePath, string basePath)
         {
             var fileInfo = new FileInfo(filePath);
             var relativePath = filePath.Substring(basePath.Length).TrimStart('\\', '/');
             var extension = fileInfo.Extension.ToLowerInvariant();
+
+            // Route Python files to PythonAnalyzer
+            if (extension == ".py")
+            {
+                var pythonAnalysis = _pythonAnalyzer.AnalyzeFile(filePath, basePath);
+                // Merge call sites from Python analyzer
+                CallSites.AddRange(_pythonAnalyzer.CallSites);
+                _pythonAnalyzer.CallSites.Clear();
+                return pythonAnalysis;
+            }
 
             var analysis = new FileAnalysis
             {
@@ -246,7 +259,6 @@ namespace CodeMerger.Services
                     info.Parameters = method.ParameterList.Parameters.Select(p => $"{p.Type} {p.Identifier}").ToList();
                     info.Signature = $"{info.Name}({string.Join(", ", method.ParameterList.Parameters.Select(p => p.Type?.ToString() ?? "var"))})";
                     
-                    // NEW: Extract method body
                     if (method.Body != null)
                     {
                         info.Body = method.Body.ToString();
@@ -310,7 +322,6 @@ namespace CodeMerger.Services
             return info;
         }
 
-        // NEW: Extract method invocations for call graph
         private void ExtractMethodCalls(SyntaxNode body, string filePath, string callerType, string callerMethod)
         {
             var invocations = body.DescendantNodes().OfType<InvocationExpressionSyntax>();
@@ -325,7 +336,6 @@ namespace CodeMerger.Services
                     Line = invocation.GetLocation().GetLineSpan().StartLinePosition.Line + 1
                 };
 
-                // Try to get the called method name
                 switch (invocation.Expression)
                 {
                     case MemberAccessExpressionSyntax memberAccess:
@@ -334,7 +344,7 @@ namespace CodeMerger.Services
                         break;
                     case IdentifierNameSyntax identifier:
                         callSite.CalledMethod = identifier.Identifier.Text;
-                        callSite.CalledType = callerType; // Same class
+                        callSite.CalledType = callerType;
                         break;
                 }
 
@@ -428,7 +438,6 @@ namespace CodeMerger.Services
 
         private int EstimateTokens(long sizeInBytes)
         {
-            // Rough estimate: ~4 characters per token for code
             return (int)(sizeInBytes / 4);
         }
     }

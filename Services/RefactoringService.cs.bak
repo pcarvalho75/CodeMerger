@@ -16,12 +16,12 @@ namespace CodeMerger.Services
     /// </summary>
     public class RefactoringService
     {
-        private readonly WorkspaceAnalysis _workspaceAnalysis;
+        private readonly ProjectAnalysis _projectAnalysis;
         private readonly List<string> _inputDirectories;
 
-        public RefactoringService(WorkspaceAnalysis workspaceAnalysis, List<string> inputDirectories)
+        public RefactoringService(ProjectAnalysis projectAnalysis, List<string> inputDirectories)
         {
-            _workspaceAnalysis = workspaceAnalysis;
+            _projectAnalysis = projectAnalysis;
             _inputDirectories = inputDirectories;
         }
 
@@ -35,7 +35,7 @@ namespace CodeMerger.Services
             try
             {
                 // Find the file or determine where to create it
-                var existingFile = _workspaceAnalysis.AllFiles
+                var existingFile = _projectAnalysis.AllFiles
                     .FirstOrDefault(f => f.RelativePath.Equals(relativePath, StringComparison.OrdinalIgnoreCase) ||
                                         f.RelativePath.Replace('\\', '/').Equals(relativePath.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase));
 
@@ -98,7 +98,7 @@ namespace CodeMerger.Services
                 IsPreview = true
             };
 
-            var existingFile = _workspaceAnalysis.AllFiles
+            var existingFile = _projectAnalysis.AllFiles
                 .FirstOrDefault(f => f.RelativePath.Equals(relativePath, StringComparison.OrdinalIgnoreCase) ||
                                     f.RelativePath.Replace('\\', '/').Equals(relativePath.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase));
 
@@ -132,7 +132,7 @@ namespace CodeMerger.Services
 
             var affectedFiles = new Dictionary<string, RenameFileChange>();
 
-            foreach (var file in _workspaceAnalysis.AllFiles.Where(f => f.Extension == ".cs"))
+            foreach (var file in _projectAnalysis.AllFiles.Where(f => f.Extension == ".cs"))
             {
                 try
                 {
@@ -183,7 +183,7 @@ namespace CodeMerger.Services
             var result = new GenerateInterfaceResult { ClassName = className };
 
             // Find the class
-            var classFile = _workspaceAnalysis.AllFiles
+            var classFile = _projectAnalysis.AllFiles
                 .SelectMany(f => f.Types.Select(t => new { File = f, Type = t }))
                 .FirstOrDefault(x => x.Type.Name.Equals(className, StringComparison.OrdinalIgnoreCase));
 
@@ -269,7 +269,7 @@ namespace CodeMerger.Services
                 NewMethodName = newMethodName
             };
 
-            var file = _workspaceAnalysis.AllFiles
+            var file = _projectAnalysis.AllFiles
                 .FirstOrDefault(f => f.RelativePath.Equals(filePath, StringComparison.OrdinalIgnoreCase));
 
             if (file == null)

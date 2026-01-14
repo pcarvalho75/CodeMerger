@@ -16,27 +16,22 @@ namespace CodeMerger.Models
         public List<CodeTypeInfo> Types { get; set; } = new List<CodeTypeInfo>();
         public List<string> Usings { get; set; } = new List<string>();
         public List<string> Dependencies { get; set; } = new List<string>();
-        
-        /// <summary>
-        /// Primary namespace declared in this file (first namespace found)
-        /// </summary>
-        public string Namespace { get; set; } = string.Empty;
     }
 
     public class CodeTypeInfo
     {
         public string Name { get; set; } = string.Empty;
-        public string FullName { get; set; } = string.Empty;  // Namespace.TypeName
+        public string FullName { get; set; } = string.Empty;  // NEW: Namespace.TypeName
         public CodeTypeKind Kind { get; set; } = CodeTypeKind.Class;
         public string BaseType { get; set; } = string.Empty;
         public List<string> Interfaces { get; set; } = new List<string>();
         public List<CodeMemberInfo> Members { get; set; } = new List<CodeMemberInfo>();
         
-        // Location info
+        // NEW: Location info
         public int StartLine { get; set; }
         public int EndLine { get; set; }
         
-        // Documentation
+        // NEW: Documentation
         public string XmlDoc { get; set; } = string.Empty;
     }
 
@@ -48,21 +43,21 @@ namespace CodeMerger.Models
         public string Signature { get; set; } = string.Empty;
         public string AccessModifier { get; set; } = "private";
         
-        // Extended info
+        // NEW: Extended info
         public int StartLine { get; set; }
         public int EndLine { get; set; }
-        public string Body { get; set; } = string.Empty;
-        public List<string> Parameters { get; set; } = new List<string>();
-        public List<string> CalledMethods { get; set; } = new List<string>();
+        public string Body { get; set; } = string.Empty;  // NEW: Method body for extraction
+        public List<string> Parameters { get; set; } = new List<string>();  // NEW: Parameter types
+        public List<string> CalledMethods { get; set; } = new List<string>();  // NEW: Methods this calls
         public bool IsStatic { get; set; }
         public bool IsAsync { get; set; }
         public bool IsVirtual { get; set; }
         public bool IsOverride { get; set; }
         public bool IsAbstract { get; set; }
-        public string XmlDoc { get; set; } = string.Empty;
+        public string XmlDoc { get; set; } = string.Empty;  // NEW: Documentation
     }
 
-    // Call site information for call graph
+    // NEW: Call site information for call graph
     public class CallSite
     {
         public string CallerType { get; set; } = string.Empty;
@@ -73,7 +68,7 @@ namespace CodeMerger.Models
         public int Line { get; set; }
     }
 
-    // Symbol usage information
+    // NEW: Symbol usage information
     public class SymbolUsage
     {
         public string SymbolName { get; set; } = string.Empty;

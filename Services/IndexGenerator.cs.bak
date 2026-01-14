@@ -9,11 +9,11 @@ namespace CodeMerger.Services
 {
     public class IndexGenerator
     {
-        public WorkspaceAnalysis BuildWorkspaceAnalysis(string workspaceName, List<FileAnalysis> files, List<Chunk> chunks)
+        public ProjectAnalysis BuildProjectAnalysis(string projectName, List<FileAnalysis> files, List<Chunk> chunks)
         {
-            var analysis = new WorkspaceAnalysis
+            var analysis = new ProjectAnalysis
             {
-                WorkspaceName = workspaceName,
+                ProjectName = projectName,
                 GeneratedDate = DateTime.Now.ToString("yyyy-MM-dd HH:mm"),
                 TotalFiles = files.Count,
                 TotalChunks = chunks.Count,
@@ -29,12 +29,12 @@ namespace CodeMerger.Services
             return analysis;
         }
 
-        public string GenerateMasterIndex(WorkspaceAnalysis analysis)
+        public string GenerateMasterIndex(ProjectAnalysis analysis)
         {
             var sb = new StringBuilder();
 
-            // Workspace Overview
-            sb.AppendLine($"=== WORKSPACE: {analysis.WorkspaceName} ===");
+            // Project Overview
+            sb.AppendLine($"=== PROJECT: {analysis.ProjectName} ===");
             sb.AppendLine($"Generated: {analysis.GeneratedDate}");
             sb.AppendLine($"Total Files: {analysis.TotalFiles}");
             sb.AppendLine($"Total Chunks: {analysis.TotalChunks}");

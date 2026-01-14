@@ -24,13 +24,13 @@ namespace CodeMerger
         public ObservableCollection<string> FoundFiles { get; set; }
         public ObservableCollection<ExternalRepository> ExternalRepositories { get; set; }
 
-        private readonly ProjectService _projectService = new ProjectService();
+        private readonly WorkspaceService _workspaceService = new WorkspaceService();
         private readonly CodeAnalyzer _codeAnalyzer = new CodeAnalyzer();
         private readonly IndexGenerator _indexGenerator = new IndexGenerator();
         private readonly McpServer _mcpServer = new McpServer();
         private readonly ClaudeDesktopService _claudeDesktopService = new ClaudeDesktopService();
         
-        private Project? _currentProject;
+        private Workspace? _currentWorkspace;
         private GitService? _gitService;
         private CancellationTokenSource? _handshakeListenerCts;
         private CancellationTokenSource? _activityListenerCts;
@@ -38,7 +38,7 @@ namespace CodeMerger
         private string _statusText = string.Empty;
         private Brush _statusForeground = Brushes.White;
         private bool _isScanning = false;
-        private bool _isLoadingProject = false;
+        private bool _isLoadingWorkspace = false;
         private int _estimatedTokens = 0;
 
         public string StatusText
@@ -80,11 +80,11 @@ namespace CodeMerger
 
         private void MainWindow_Loaded(object sender, RoutedEventArgs e)
         {
-            LoadProjectList();
+            LoadWorkspaceList();
 
             if (projectComboBox.Items.Count == 0)
             {
-                PromptCreateFirstProject();
+                PromptCreateFirstWorkspace();
             }
 
             if (Application.Current.Properties.Contains("ConfigHealed"))
@@ -178,15 +178,15 @@ namespace CodeMerger
             }, token);
         }
 
-        private void OnHandshakeReceived(string projectName)
+        private void OnHandshakeReceived(string workspaceName)
         {
             // Update connection indicator
             connectionIndicator.Fill = new SolidColorBrush(Color.FromRgb(0, 217, 165)); // AccentSuccess
-            connectionStatusText.Text = $"Connected: {projectName}";
+            connectionStatusText.Text = $"Connected: {workspaceName}";
             connectionStatusText.Foreground = new SolidColorBrush(Color.FromRgb(0, 217, 165));
             stopServerButton.Visibility = Visibility.Visible;
             
-            UpdateStatus($"✓ Claude connected via MCP (project: {projectName})", Brushes.LightGreen);
+            UpdateStatus($"✓ Claude connected via MCP (workspace: {workspaceName})", Brushes.LightGreen);
         }
 
         private void OnActivityReceived(string message)
@@ -194,7 +194,7 @@ namespace CodeMerger
             var parts = message.Split('|', 2);
             if (parts.Length == 2)
             {
-                var projectName = parts[0];
+                var workspaceName = parts[0];
                 var activity = parts[1];
 
                 // Handle disconnect notification
@@ -204,17 +204,17 @@ namespace CodeMerger
                     connectionStatusText.Text = "Disconnected";
                     connectionStatusText.Foreground = new SolidColorBrush(Color.FromRgb(136, 146, 160));
                     stopServerButton.Visibility = Visibility.Collapsed;
-                    UpdateStatus($"MCP server disconnected (project: {projectName})", Brushes.Gray);
+                    UpdateStatus($"MCP server disconnected (workspace: {workspaceName})", Brushes.Gray);
                     return;
                 }
 
                 // Update connection status since we're clearly connected if receiving activity
                 connectionIndicator.Fill = new SolidColorBrush(Color.FromRgb(0, 217, 165)); // AccentSuccess
-                connectionStatusText.Text = $"Connected: {projectName}";
+                connectionStatusText.Text = $"Connected: {workspaceName}";
                 connectionStatusText.Foreground = new SolidColorBrush(Color.FromRgb(0, 217, 165));
                 stopServerButton.Visibility = Visibility.Visible;
 
-                UpdateStatus($"🔄 [{projectName}] {activity}", new SolidColorBrush(Color.FromRgb(100, 200, 255)));
+                UpdateStatus($"🔄 [{workspaceName}] {activity}", new SolidColorBrush(Color.FromRgb(100, 200, 255)));
             }
             else
             {
@@ -244,7 +244,7 @@ namespace CodeMerger
 
                 if (string.Equals(configuredPath, currentPath, StringComparison.OrdinalIgnoreCase))
                 {
-                    var activeProject = _projectService.GetActiveProject();
+                    var activeWorkspace = _workspaceService.GetActiveWorkspace();
                     claudeConfigStatus.Text = $"Ready ✓";
                     claudeConfigStatus.Foreground = new SolidColorBrush(Color.FromRgb(0, 217, 165));
                 }
@@ -359,23 +359,23 @@ namespace CodeMerger
             });
         }
 
-        private void LoadProjectList()
+        private void LoadWorkspaceList()
         {
-            var projects = _projectService.LoadAllProjects();
-            projectComboBox.ItemsSource = projects;
+            var workspaces = _workspaceService.LoadAllWorkspaces();
+            projectComboBox.ItemsSource = workspaces;
 
-            if (projects.Count > 0)
+            if (workspaces.Count > 0)
             {
-                var activeProject = _projectService.GetActiveProject();
-                var projectToSelect = projects.Find(p => p.Name == activeProject) ?? projects[0];
-                projectComboBox.SelectedItem = projectToSelect;
+                var activeWorkspace = _workspaceService.GetActiveWorkspace();
+                var workspaceToSelect = workspaces.Find(w => w.Name == activeWorkspace) ?? workspaces[0];
+                projectComboBox.SelectedItem = workspaceToSelect;
             }
         }
 
-        private void PromptCreateFirstProject()
+        private void PromptCreateFirstWorkspace()
         {
-            MessageBox.Show("Welcome! Create your first project to get started.", "CodeMerger", MessageBoxButton.OK, MessageBoxImage.Information);
-            NewProject_Click(null, null);
+            MessageBox.Show("Welcome! Create your first workspace to get started.", "CodeMerger", MessageBoxButton.OK, MessageBoxImage.Information);
+            NewWorkspace_Click(null, null);
 
             if (projectComboBox.Items.Count == 0)
             {
@@ -385,21 +385,21 @@ namespace CodeMerger
 
         private void ProjectComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-            if (projectComboBox.SelectedItem is Project selected)
+            if (projectComboBox.SelectedItem is Workspace selected)
             {
                 if (_gitService != null)
                 {
                     _gitService.OnProgress -= OnGitProgress;
                 }
 
-                _currentProject = selected;
-                _projectService.SetActiveProject(_currentProject.Name);
+                _currentWorkspace = selected;
+                _workspaceService.SetActiveWorkspace(_currentWorkspace.Name);
 
-                string projectFolder = _projectService.GetProjectFolder(_currentProject.Name);
-                _gitService = new GitService(projectFolder);
+                string workspaceFolder = _workspaceService.GetWorkspaceFolder(_currentWorkspace.Name);
+                _gitService = new GitService(workspaceFolder);
                 _gitService.OnProgress += OnGitProgress;
 
-                LoadProjectData(_currentProject);
+                LoadWorkspaceData(_currentWorkspace);
 
                 EnsureClaudeConfig();
                 RefreshClaudeDesktopStatus();
@@ -427,42 +427,42 @@ namespace CodeMerger
             }
         }
 
-        private async void LoadProjectData(Project project)
+        private async void LoadWorkspaceData(Workspace workspace)
         {
-            if (project == null) return;
+            if (workspace == null) return;
 
-            _isLoadingProject = true;
+            _isLoadingWorkspace = true;
 
             try
             {
                 InputDirectories.Clear();
-                foreach (var dir in project.InputDirectories)
+                foreach (var dir in workspace.InputDirectories)
                 {
-                    bool isSelected = !project.DisabledDirectories.Contains(dir);
+                    bool isSelected = !workspace.DisabledDirectories.Contains(dir);
                     InputDirectories.Add(new SelectableItem(dir, isSelected));
                 }
 
                 ExternalRepositories.Clear();
-                foreach (var repo in project.ExternalRepositories)
+                foreach (var repo in workspace.ExternalRepositories)
                 {
                     ExternalRepositories.Add(repo);
                 }
 
-                extensionsTextBox.Text = project.Extensions;
-                ignoredDirsTextBox.Text = project.IgnoredDirectories;
+                extensionsTextBox.Text = workspace.Extensions;
+                ignoredDirsTextBox.Text = workspace.IgnoredDirectories;
 
-                string projectFolder = _projectService.GetProjectFolder(project.Name);
-                outputFileTextBox.Text = projectFolder;
+                string workspaceFolder = _workspaceService.GetWorkspaceFolder(workspace.Name);
+                outputFileTextBox.Text = workspaceFolder;
 
                 await UpdateExternalReposAsync();
             }
             catch (Exception ex)
             {
-                UpdateStatus($"Error loading project: {ex.Message}", new SolidColorBrush(Color.FromRgb(233, 69, 96)));
+                UpdateStatus($"Error loading workspace: {ex.Message}", new SolidColorBrush(Color.FromRgb(233, 69, 96)));
             }
             finally
             {
-                _isLoadingProject = false;
+                _isLoadingWorkspace = false;
                 UpdateDirectoryCount();
                 await ScanFilesAsync();
             }
@@ -491,88 +491,88 @@ namespace CodeMerger
                 : "";
         }
 
-        private void NewProject_Click(object? sender, RoutedEventArgs? e)
+        private void NewWorkspace_Click(object? sender, RoutedEventArgs? e)
         {
-            var dialog = new InputDialog("New Project", "Enter project name:");
+            var dialog = new InputDialog("New Workspace", "Enter workspace name:");
             if (dialog.ShowDialog() == true && !string.IsNullOrWhiteSpace(dialog.ResponseText))
             {
                 string name = dialog.ResponseText.Trim();
 
-                if (_projectService.ProjectExists(name))
+                if (_workspaceService.WorkspaceExists(name))
                 {
-                    MessageBox.Show("A project with that name already exists.", "Error", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    MessageBox.Show("A workspace with that name already exists.", "Error", MessageBoxButton.OK, MessageBoxImage.Warning);
                     return;
                 }
 
-                var project = new Project { Name = name };
-                _projectService.SaveProject(project);
+                var workspace = new Workspace { Name = name };
+                _workspaceService.SaveWorkspace(workspace);
 
-                LoadProjectList();
-                projectComboBox.SelectedItem = ((List<Project>)projectComboBox.ItemsSource).Find(p => p.Name == name);
+                LoadWorkspaceList();
+                projectComboBox.SelectedItem = ((List<Workspace>)projectComboBox.ItemsSource).Find(w => w.Name == name);
             }
         }
 
-        private void RenameProject_Click(object sender, RoutedEventArgs e)
+        private void RenameWorkspace_Click(object sender, RoutedEventArgs e)
         {
-            if (_currentProject == null) return;
+            if (_currentWorkspace == null) return;
 
-            var dialog = new InputDialog("Rename Project", "Enter new name:", _currentProject.Name);
+            var dialog = new InputDialog("Rename Workspace", "Enter new name:", _currentWorkspace.Name);
             if (dialog.ShowDialog() == true && !string.IsNullOrWhiteSpace(dialog.ResponseText))
             {
                 string newName = dialog.ResponseText.Trim();
 
-                if (_projectService.RenameProject(_currentProject.Name, newName))
+                if (_workspaceService.RenameWorkspace(_currentWorkspace.Name, newName))
                 {
-                    LoadProjectList();
-                    projectComboBox.SelectedItem = ((List<Project>)projectComboBox.ItemsSource).Find(p => p.Name == newName);
+                    LoadWorkspaceList();
+                    projectComboBox.SelectedItem = ((List<Workspace>)projectComboBox.ItemsSource).Find(w => w.Name == newName);
                 }
                 else
                 {
-                    MessageBox.Show("Could not rename project. Name may already exist.", "Error", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    MessageBox.Show("Could not rename workspace. Name may already exist.", "Error", MessageBoxButton.OK, MessageBoxImage.Warning);
                 }
             }
         }
 
-        private void DeleteProject_Click(object sender, RoutedEventArgs e)
+        private void DeleteWorkspace_Click(object sender, RoutedEventArgs e)
         {
-            if (_currentProject == null) return;
+            if (_currentWorkspace == null) return;
 
             var result = MessageBox.Show(
-                $"Delete project '{_currentProject.Name}' and all its output files?",
+                $"Delete workspace '{_currentWorkspace.Name}' and all its output files?",
                 "Confirm Delete",
                 MessageBoxButton.YesNo,
                 MessageBoxImage.Warning);
 
             if (result == MessageBoxResult.Yes)
             {
-                _projectService.DeleteProject(_currentProject.Name);
-                _currentProject = null;
+                _workspaceService.DeleteWorkspace(_currentWorkspace.Name);
+                _currentWorkspace = null;
 
-                LoadProjectList();
+                LoadWorkspaceList();
 
                 if (projectComboBox.Items.Count == 0)
                 {
-                    PromptCreateFirstProject();
+                    PromptCreateFirstWorkspace();
                 }
             }
         }
 
-        private void SaveCurrentProject()
+        private void SaveCurrentWorkspace()
         {
-            if (_currentProject == null || _isLoadingProject) return;
+            if (_currentWorkspace == null || _isLoadingWorkspace) return;
 
-            _currentProject.InputDirectories = InputDirectories.Select(item => item.Path).ToList();
+            _currentWorkspace.InputDirectories = InputDirectories.Select(item => item.Path).ToList();
 
-            _currentProject.DisabledDirectories = InputDirectories
+            _currentWorkspace.DisabledDirectories = InputDirectories
                 .Where(item => !item.IsSelected)
                 .Select(item => item.Path)
                 .ToList();
 
-            _currentProject.Extensions = extensionsTextBox.Text;
-            _currentProject.IgnoredDirectories = ignoredDirsTextBox.Text;
-            _currentProject.ExternalRepositories = ExternalRepositories.ToList();
+            _currentWorkspace.Extensions = extensionsTextBox.Text;
+            _currentWorkspace.IgnoredDirectories = ignoredDirsTextBox.Text;
+            _currentWorkspace.ExternalRepositories = ExternalRepositories.ToList();
 
-            _projectService.SaveProject(_currentProject);
+            _workspaceService.SaveWorkspace(_currentWorkspace);
         }
 
         private async void AddDirectory_Click(object sender, RoutedEventArgs e)
@@ -591,7 +591,7 @@ namespace CodeMerger
                 if (!string.IsNullOrEmpty(folderPath) && !InputDirectories.Any(item => item.Path == folderPath))
                 {
                     InputDirectories.Add(new SelectableItem(folderPath, true));
-                    SaveCurrentProject();
+                    SaveCurrentWorkspace();
                     UpdateDirectoryCount();
                     await ScanFilesAsync();
                 }
@@ -607,7 +607,7 @@ namespace CodeMerger
                 {
                     InputDirectories.Remove(item);
                 }
-                SaveCurrentProject();
+                SaveCurrentWorkspace();
                 UpdateDirectoryCount();
                 await ScanFilesAsync();
             }
@@ -619,7 +619,7 @@ namespace CodeMerger
             {
                 item.IsSelected = true;
             }
-            SaveCurrentProject();
+            SaveCurrentWorkspace();
             UpdateDirectoryCount();
             await ScanFilesAsync();
         }
@@ -630,7 +630,7 @@ namespace CodeMerger
             {
                 item.IsSelected = false;
             }
-            SaveCurrentProject();
+            SaveCurrentWorkspace();
             UpdateDirectoryCount();
             await ScanFilesAsync();
         }
@@ -658,9 +658,9 @@ namespace CodeMerger
 
         private async void AddGitRepo_Click(object sender, RoutedEventArgs e)
         {
-            if (_gitService == null || _currentProject == null)
+            if (_gitService == null || _currentWorkspace == null)
             {
-                UpdateStatus("No project selected.", new SolidColorBrush(Color.FromRgb(233, 69, 96)));
+                UpdateStatus("No workspace selected.", new SolidColorBrush(Color.FromRgb(233, 69, 96)));
                 return;
             }
 
@@ -685,7 +685,7 @@ namespace CodeMerger
             {
                 var repo = await _gitService.CloneOrPullAsync(url);
                 ExternalRepositories.Add(repo);
-                SaveCurrentProject();
+                SaveCurrentWorkspace();
 
                 gitStatusText.Text = $"Cloned {repo.Name} ({repo.Branch})";
                 gitUrlTextBox.Text = "https://github.com/user/repo";
@@ -718,7 +718,7 @@ namespace CodeMerger
             {
                 await _gitService.CloneOrPullAsync(repo.Url);
                 repo.LastUpdated = DateTime.Now;
-                SaveCurrentProject();
+                SaveCurrentWorkspace();
 
                 gitStatusText.Text = $"Updated {repo.Name}";
                 await ScanFilesAsync();
@@ -753,7 +753,7 @@ namespace CodeMerger
                 {
                     _gitService.DeleteRepository(repo);
                     ExternalRepositories.Remove(repo);
-                    SaveCurrentProject();
+                    SaveCurrentWorkspace();
 
                     gitStatusText.Text = $"Removed {repo.Name}";
                     await ScanFilesAsync();
@@ -767,8 +767,8 @@ namespace CodeMerger
 
         private async void GitRepoCheckBox_Changed(object sender, RoutedEventArgs e)
         {
-            if (_isLoadingProject) return;
-            SaveCurrentProject();
+            if (_isLoadingWorkspace) return;
+            SaveCurrentWorkspace();
             await ScanFilesAsync();
         }
 
@@ -776,9 +776,9 @@ namespace CodeMerger
 
         private void OpenFolder_Click(object sender, RoutedEventArgs e)
         {
-            if (_currentProject == null) return;
+            if (_currentWorkspace == null) return;
 
-            string folder = _projectService.GetProjectFolder(_currentProject.Name);
+            string folder = _workspaceService.GetWorkspaceFolder(_currentWorkspace.Name);
 
             if (Directory.Exists(folder))
             {
@@ -799,7 +799,7 @@ namespace CodeMerger
             else
             {
                 recommendationBanner.Visibility = Visibility.Visible;
-                recommendationText.Text = $"Project size: ~{_estimatedTokens:N0} tokens. Claude will access files dynamically via MCP.";
+                recommendationText.Text = $"Workspace size: ~{_estimatedTokens:N0} tokens. Claude will access files dynamically via MCP.";
             }
         }
 
@@ -812,13 +812,13 @@ namespace CodeMerger
                 return;
             }
 
-            if (_currentProject == null)
+            if (_currentWorkspace == null)
             {
-                UpdateStatus("No project selected.", new SolidColorBrush(Color.FromRgb(233, 69, 96)));
+                UpdateStatus("No workspace selected.", new SolidColorBrush(Color.FromRgb(233, 69, 96)));
                 return;
             }
 
-            string projectFolder = _projectService.GetProjectFolder(_currentProject.Name);
+            string workspaceFolder = _workspaceService.GetWorkspaceFolder(_currentWorkspace.Name);
             var filesToMerge = FoundFiles.ToList();
 
             SetUIState(false);
@@ -860,7 +860,7 @@ namespace CodeMerger
                 var chunkManager = new ChunkManager(150000);
                 var chunks = chunkManager.CreateChunks(fileAnalyses);
 
-                var projectAnalysis = _indexGenerator.BuildProjectAnalysis(_currentProject.Name, fileAnalyses, chunks);
+                var workspaceAnalysis = _indexGenerator.BuildWorkspaceAnalysis(_currentWorkspace.Name, fileAnalyses, chunks);
 
                 Application.Current.Dispatcher.Invoke(() =>
                 {
@@ -870,16 +870,16 @@ namespace CodeMerger
 
                 await Task.Run(() =>
                 {
-                    Directory.CreateDirectory(projectFolder);
+                    Directory.CreateDirectory(workspaceFolder);
 
-                    string masterIndexPath = Path.Combine(projectFolder, $"{_currentProject.Name}_master_index.txt");
-                    string masterIndex = _indexGenerator.GenerateMasterIndex(projectAnalysis);
+                    string masterIndexPath = Path.Combine(workspaceFolder, $"{_currentWorkspace.Name}_master_index.txt");
+                    string masterIndex = _indexGenerator.GenerateMasterIndex(workspaceAnalysis);
                     File.WriteAllText(masterIndexPath, masterIndex, new UTF8Encoding(false));
 
                     for (int i = 0; i < chunks.Count; i++)
                     {
                         var chunk = chunks[i];
-                        string chunkPath = Path.Combine(projectFolder, $"{_currentProject.Name}_chunk_{chunk.ChunkNumber}.txt");
+                        string chunkPath = Path.Combine(workspaceFolder, $"{_currentWorkspace.Name}_chunk_{chunk.ChunkNumber}.txt");
                         string chunkContent = _indexGenerator.GenerateChunkContent(chunk, chunks.Count, fileAnalyses);
                         File.WriteAllText(chunkPath, chunkContent, new UTF8Encoding(false));
 
@@ -1013,14 +1013,14 @@ namespace CodeMerger
         private async void Filters_Changed(object sender, TextChangedEventArgs e)
         {
             if (!IsLoaded) return;
-            SaveCurrentProject();
+            SaveCurrentWorkspace();
             await ScanFilesAsync();
         }
 
         private async void DirectoryCheckBox_Changed(object sender, RoutedEventArgs e)
         {
-            if (!IsLoaded || _isLoadingProject) return;
-            SaveCurrentProject();
+            if (!IsLoaded || _isLoadingWorkspace) return;
+            SaveCurrentWorkspace();
             UpdateDirectoryCount();
             await ScanFilesAsync();
         }

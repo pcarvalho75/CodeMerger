@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Xml.Linq;
 using CodeMerger.Models;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -25,7 +26,8 @@ namespace CodeMerger.Services
             { ".py", "python" },
             { ".md", "markdown" },
             { ".yaml", "yaml" },
-            { ".yml", "yaml" }
+            { ".yml", "yaml" },
+            { ".csproj", "xml" }
         };
 
         // Store call sites during analysis
@@ -65,6 +67,10 @@ namespace CodeMerger.Services
             {
                 AnalyzeCSharpFile(analysis);
             }
+            else if (extension == ".csproj")
+            {
+                AnalyzeCsprojFile(analysis);
+            }
 
             analysis.Classification = ClassifyFile(analysis);
 
@@ -82,6 +88,9 @@ namespace CodeMerger.Services
                 // Extract namespace
                 var namespaceDecl = root.DescendantNodes().OfType<BaseNamespaceDeclarationSyntax>().FirstOrDefault();
                 var namespaceName = namespaceDecl?.Name.ToString() ?? "";
+                
+                // Store the namespace at file level
+                analysis.Namespace = namespaceName;
 
                 // Extract usings
                 analysis.Usings = root.Usings
@@ -108,6 +117,89 @@ namespace CodeMerger.Services
             catch
             {
                 // If parsing fails, leave types empty
+            }
+        }
+
+        private void AnalyzeCsprojFile(FileAnalysis analysis)
+        {
+            try
+            {
+                var doc = XDocument.Load(analysis.FilePath);
+                var root = doc.Root;
+                if (root == null) return;
+
+                // Extract project references as dependencies
+                var projectRefs = root.Descendants()
+                    .Where(e => e.Name.LocalName == "ProjectReference")
+                    .Select(e => e.Attribute("Include")?.Value)
+                    .Where(v => !string.IsNullOrEmpty(v))
+                    .Select(v => Path.GetFileNameWithoutExtension(v!))
+                    .ToList();
+
+                // Extract package references
+                var packageRefs = root.Descendants()
+                    .Where(e => e.Name.LocalName == "PackageReference")
+                    .Select(e => e.Attribute("Include")?.Value)
+                    .Where(v => !string.IsNullOrEmpty(v))
+                    .ToList();
+
+                analysis.Dependencies = projectRefs.Concat(packageRefs!).ToList();
+
+                // Extract root namespace if specified
+                var rootNamespace = root.Descendants()
+                    .FirstOrDefault(e => e.Name.LocalName == "RootNamespace")?.Value;
+                
+                // Fall back to assembly name or project file name
+                if (string.IsNullOrEmpty(rootNamespace))
+                {
+                    rootNamespace = root.Descendants()
+                        .FirstOrDefault(e => e.Name.LocalName == "AssemblyName")?.Value;
+                }
+                if (string.IsNullOrEmpty(rootNamespace))
+                {
+                    rootNamespace = Path.GetFileNameWithoutExtension(analysis.FilePath);
+                }
+                
+                analysis.Namespace = rootNamespace ?? "";
+
+                // Create a pseudo-type to represent the project
+                var projectType = new CodeTypeInfo
+                {
+                    Name = Path.GetFileNameWithoutExtension(analysis.FilePath),
+                    FullName = rootNamespace ?? Path.GetFileNameWithoutExtension(analysis.FilePath),
+                    Kind = CodeTypeKind.Class // Use Class as placeholder
+                };
+
+                // Add target framework as a member
+                var targetFramework = root.Descendants()
+                    .FirstOrDefault(e => e.Name.LocalName == "TargetFramework" || e.Name.LocalName == "TargetFrameworks")?.Value;
+                
+                if (!string.IsNullOrEmpty(targetFramework))
+                {
+                    projectType.Members.Add(new CodeMemberInfo
+                    {
+                        Name = "TargetFramework",
+                        Kind = CodeMemberKind.Property,
+                        ReturnType = targetFramework
+                    });
+                }
+
+                // Add output type
+                var outputType = root.Descendants()
+                    .FirstOrDefault(e => e.Name.LocalName == "OutputType")?.Value ?? "Library";
+                
+                projectType.Members.Add(new CodeMemberInfo
+                {
+                    Name = "OutputType",
+                    Kind = CodeMemberKind.Property,
+                    ReturnType = outputType
+                });
+
+                analysis.Types.Add(projectType);
+            }
+            catch
+            {
+                // If parsing fails, leave empty
             }
         }
 
@@ -384,6 +476,11 @@ namespace CodeMerger.Services
             var fileName = analysis.FileName.ToLowerInvariant();
             var relativePath = analysis.RelativePath.ToLowerInvariant();
 
+            // Config files (including .csproj)
+            if (fileName.EndsWith(".csproj") || fileName.EndsWith(".json") || 
+                fileName.EndsWith(".config") || fileName.EndsWith(".xml"))
+                return FileClassification.Config;
+
             // Path-based classification
             if (relativePath.Contains("test") || relativePath.Contains("spec"))
                 return FileClassification.Test;
@@ -423,10 +520,6 @@ namespace CodeMerger.Services
                 if (type.Interfaces.Any(i => i.Contains("INotifyPropertyChanged")))
                     return FileClassification.ViewModel;
             }
-
-            // Config files
-            if (fileName.EndsWith(".json") || fileName.EndsWith(".config") || fileName.EndsWith(".xml"))
-                return FileClassification.Config;
 
             return FileClassification.Unknown;
         }

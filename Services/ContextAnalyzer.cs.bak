@@ -14,11 +14,11 @@ namespace CodeMerger.Services
     /// </summary>
     public class ContextAnalyzer
     {
-        private readonly WorkspaceAnalysis _workspaceAnalysis;
+        private readonly ProjectAnalysis _projectAnalysis;
 
-        public ContextAnalyzer(WorkspaceAnalysis workspaceAnalysis)
+        public ContextAnalyzer(ProjectAnalysis projectAnalysis)
         {
-            _workspaceAnalysis = workspaceAnalysis;
+            _projectAnalysis = projectAnalysis;
         }
 
         /// <summary>
@@ -39,7 +39,7 @@ namespace CodeMerger.Services
             // Score all files based on relevance
             var scoredFiles = new List<ScoredFile>();
 
-            foreach (var file in _workspaceAnalysis.AllFiles)
+            foreach (var file in _projectAnalysis.AllFiles)
             {
                 var score = CalculateRelevanceScore(file, keywords, taskDescription);
                 if (score > 0)
@@ -114,7 +114,7 @@ namespace CodeMerger.Services
                 return result;
             }
 
-            foreach (var file in _workspaceAnalysis.AllFiles)
+            foreach (var file in _projectAnalysis.AllFiles)
             {
                 if (matches.Count >= maxResults)
                     break;
@@ -163,7 +163,7 @@ namespace CodeMerger.Services
 
             result.Matches = matches;
             result.TotalMatches = matches.Count;
-            result.FilesSearched = _workspaceAnalysis.AllFiles.Count;
+            result.FilesSearched = _projectAnalysis.AllFiles.Count;
 
             return result;
         }
@@ -293,7 +293,7 @@ namespace CodeMerger.Services
             // Dependency-based scoring - if a high-scoring file depends on this one
             foreach (var type in file.Types)
             {
-                if (_workspaceAnalysis.DependencyMap.Values.Any(deps => deps.Contains(type.Name)))
+                if (_projectAnalysis.DependencyMap.Values.Any(deps => deps.Contains(type.Name)))
                 {
                     score += 2; // Files that others depend on are valuable context
                 }
@@ -334,7 +334,7 @@ namespace CodeMerger.Services
             }
 
             // Check if this file is a dependency of other relevant files
-            var usedBy = _workspaceAnalysis.DependencyMap
+            var usedBy = _projectAnalysis.DependencyMap
                 .Where(kvp => kvp.Value.Any(dep => file.Types.Any(t => t.Name == dep)))
                 .Select(kvp => kvp.Key)
                 .Take(3)
@@ -408,7 +408,7 @@ namespace CodeMerger.Services
                     relatedTypes.UnionWith(type.Interfaces);
 
                     // Add types from dependency map
-                    if (_workspaceAnalysis.DependencyMap.TryGetValue(type.Name, out var deps))
+                    if (_projectAnalysis.DependencyMap.TryGetValue(type.Name, out var deps))
                     {
                         relatedTypes.UnionWith(deps.Take(5));
                     }
@@ -416,7 +416,7 @@ namespace CodeMerger.Services
             }
 
             // Filter to only types that exist in the project
-            var projectTypes = _workspaceAnalysis.AllFiles
+            var projectTypes = _projectAnalysis.AllFiles
                 .SelectMany(f => f.Types)
                 .Select(t => t.Name)
                 .ToHashSet();

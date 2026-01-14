@@ -12,9 +12,9 @@ namespace CodeMerger.Models
         public List<string> CrossReferences { get; set; } = new List<string>();
     }
 
-    public class WorkspaceAnalysis
+    public class ProjectAnalysis
     {
-        public string WorkspaceName { get; set; } = string.Empty;
+        public string ProjectName { get; set; } = string.Empty;
         public string GeneratedDate { get; set; } = string.Empty;
         public int TotalFiles { get; set; }
         public int TotalChunks { get; set; }
