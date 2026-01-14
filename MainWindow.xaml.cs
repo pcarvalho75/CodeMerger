@@ -184,6 +184,7 @@ namespace CodeMerger
             connectionIndicator.Fill = new SolidColorBrush(Color.FromRgb(0, 217, 165)); // AccentSuccess
             connectionStatusText.Text = $"Connected: {projectName}";
             connectionStatusText.Foreground = new SolidColorBrush(Color.FromRgb(0, 217, 165));
+            stopServerButton.Visibility = Visibility.Visible;
             
             UpdateStatus($"✓ Claude connected via MCP (project: {projectName})", Brushes.LightGreen);
         }
@@ -202,9 +203,16 @@ namespace CodeMerger
                     connectionIndicator.Fill = new SolidColorBrush(Color.FromRgb(136, 146, 160)); // Gray
                     connectionStatusText.Text = "Disconnected";
                     connectionStatusText.Foreground = new SolidColorBrush(Color.FromRgb(136, 146, 160));
+                    stopServerButton.Visibility = Visibility.Collapsed;
                     UpdateStatus($"MCP server disconnected (project: {projectName})", Brushes.Gray);
                     return;
                 }
+
+                // Update connection status since we're clearly connected if receiving activity
+                connectionIndicator.Fill = new SolidColorBrush(Color.FromRgb(0, 217, 165)); // AccentSuccess
+                connectionStatusText.Text = $"Connected: {projectName}";
+                connectionStatusText.Foreground = new SolidColorBrush(Color.FromRgb(0, 217, 165));
+                stopServerButton.Visibility = Visibility.Visible;
 
                 UpdateStatus($"🔄 [{projectName}] {activity}", new SolidColorBrush(Color.FromRgb(100, 200, 255)));
             }
@@ -252,6 +260,53 @@ namespace CodeMerger
                 claudeConfigStatus.Text = "Not configured";
                 claudeConfigStatus.Foreground = new SolidColorBrush(Color.FromRgb(136, 146, 160));
                 claudeAddConfigButton.Visibility = Visibility.Visible;
+            }
+        }
+
+        private void StopServer_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                var currentProcessId = Process.GetCurrentProcess().Id;
+                var currentProcessName = Process.GetCurrentProcess().ProcessName;
+
+                // Find all CodeMerger processes except this one (the GUI)
+                var mcpProcesses = Process.GetProcessesByName(currentProcessName)
+                    .Where(p => p.Id != currentProcessId)
+                    .ToList();
+
+                if (mcpProcesses.Count == 0)
+                {
+                    UpdateStatus("No MCP server process found.", Brushes.Gray);
+                    connectionIndicator.Fill = new SolidColorBrush(Color.FromRgb(136, 146, 160));
+                    connectionStatusText.Text = "Not connected";
+                    connectionStatusText.Foreground = new SolidColorBrush(Color.FromRgb(136, 146, 160));
+                    stopServerButton.Visibility = Visibility.Collapsed;
+                    return;
+                }
+
+                foreach (var process in mcpProcesses)
+                {
+                    try
+                    {
+                        process.Kill();
+                        process.WaitForExit(1000);
+                    }
+                    catch
+                    {
+                        // Process may have already exited
+                    }
+                }
+
+                connectionIndicator.Fill = new SolidColorBrush(Color.FromRgb(136, 146, 160));
+                connectionStatusText.Text = "Server stopped";
+                connectionStatusText.Foreground = new SolidColorBrush(Color.FromRgb(136, 146, 160));
+                stopServerButton.Visibility = Visibility.Collapsed;
+                UpdateStatus($"Stopped {mcpProcesses.Count} MCP server process(es). You can now recompile.", Brushes.LightGreen);
+            }
+            catch (Exception ex)
+            {
+                UpdateStatus($"Failed to stop server: {ex.Message}", new SolidColorBrush(Color.FromRgb(233, 69, 96)));
             }
         }
 

@@ -16,6 +16,7 @@ namespace CodeMerger.Services
     {
         private readonly CodeAnalyzer _codeAnalyzer;
         private readonly IndexGenerator _indexGenerator;
+        private readonly ProjectService _projectService;
         private CancellationTokenSource? _cancellationTokenSource;
         private Task? _serverTask;
         private ProjectAnalysis? _projectAnalysis;
@@ -39,6 +40,7 @@ namespace CodeMerger.Services
         {
             _codeAnalyzer = new CodeAnalyzer();
             _indexGenerator = new IndexGenerator();
+            _projectService = new ProjectService();
         }
 
         public void IndexProject(string projectName, List<string> inputDirectories, List<string> files)
@@ -482,6 +484,45 @@ namespace CodeMerger.Services
                         },
                         { "required", new[] { "filePath", "startLine", "endLine", "methodName" } }
                     }
+                },
+
+                // === SERVER CONTROL ===
+                new
+                {
+                    name = "codemerger_shutdown",
+                    description = "Shutdown the CodeMerger MCP server. Use this when the user needs to recompile the project or wants to stop the server. The server will exit and release file locks.",
+                    inputSchema = new Dictionary<string, object>
+                    {
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>() },
+                        { "required", Array.Empty<string>() }
+                    }
+                },
+                new
+                {
+                    name = "codemerger_list_projects",
+                    description = "List all available CodeMerger projects. Shows project names and indicates which one is currently active/loaded.",
+                    inputSchema = new Dictionary<string, object>
+                    {
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>() },
+                        { "required", Array.Empty<string>() }
+                    }
+                },
+                new
+                {
+                    name = "codemerger_switch_project",
+                    description = "Switch to a different CodeMerger project. This will set the new project as active and restart the server to load it. Use codemerger_list_projects first to see available projects.",
+                    inputSchema = new Dictionary<string, object>
+                    {
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>
+                            {
+                                { "projectName", new Dictionary<string, string> { { "type", "string" }, { "description", "Name of the project to switch to" } } }
+                            }
+                        },
+                        { "required", new[] { "projectName" } }
+                    }
                 }
             };
 
@@ -502,6 +543,23 @@ namespace CodeMerger.Services
 
             Log($"Tool call: {toolName}");
             SendActivity($"Tool: {toolName}");
+
+            // Shutdown doesn't require a project
+            if (toolName == "codemerger_shutdown")
+            {
+                return CreateToolResponse(id, Shutdown());
+            }
+
+            // Project management tools don't require a project to be indexed
+            if (toolName == "codemerger_list_projects")
+            {
+                return CreateToolResponse(id, ListProjects());
+            }
+
+            if (toolName == "codemerger_switch_project")
+            {
+                return CreateToolResponse(id, SwitchProject(arguments));
+            }
 
             if (_projectAnalysis == null)
             {
@@ -1067,6 +1125,106 @@ namespace CodeMerger.Services
             Log($"ExtractMethod: {filePath} lines {startLine}-{endLine} -> {methodName}()");
 
             return result.ToMarkdown();
+        }
+
+        private string Shutdown()
+        {
+            Log("Shutdown requested by user");
+            SendActivity("Shutting down...");
+
+            // Schedule shutdown after returning response
+            Task.Run(async () =>
+            {
+                await Task.Delay(500); // Give time for response to be sent
+                SendDisconnect();
+                _cancellationTokenSource?.Cancel();
+                await Task.Delay(200);
+                Environment.Exit(0);
+            });
+
+            return "# Server Shutdown\n\nCodeMerger MCP server is shutting down. You can now recompile the project in Visual Studio.\n\nTo reconnect, simply start a new conversation or ask me to use a CodeMerger tool.";
+        }
+
+        private string ListProjects()
+        {
+            SendActivity("Listing projects");
+
+            var projects = _projectService.LoadAllProjects();
+            var activeProject = _projectService.GetActiveProject();
+
+            if (projects.Count == 0)
+            {
+                return "# Available Projects\n\nNo projects found. Please create a project in the CodeMerger GUI first.";
+            }
+
+            var sb = new StringBuilder();
+            sb.AppendLine("# Available Projects");
+            sb.AppendLine();
+            sb.AppendLine($"**Currently loaded:** {_projectName}");
+            sb.AppendLine();
+            sb.AppendLine("| Project | Directories | Status |");
+            sb.AppendLine("|---------|-------------|--------|");
+
+            foreach (var project in projects.OrderBy(p => p.Name))
+            {
+                var dirCount = project.InputDirectories?.Count ?? 0;
+                var status = project.Name == _projectName ? "✓ Loaded" : 
+                             project.Name == activeProject ? "Active" : "";
+                sb.AppendLine($"| {project.Name} | {dirCount} | {status} |");
+            }
+
+            sb.AppendLine();
+            sb.AppendLine("*Use `codemerger_switch_project` to switch to a different project.*");
+
+            return sb.ToString();
+        }
+
+        private string SwitchProject(JsonElement arguments)
+        {
+            if (!arguments.TryGetProperty("projectName", out var projectNameEl))
+            {
+                return "Error: 'projectName' parameter is required.";
+            }
+
+            var projectName = projectNameEl.GetString() ?? "";
+
+            if (string.IsNullOrWhiteSpace(projectName))
+            {
+                return "Error: Project name cannot be empty.";
+            }
+
+            // Check if project exists
+            var project = _projectService.LoadProject(projectName);
+            if (project == null)
+            {
+                var available = _projectService.LoadAllProjects();
+                return $"Error: Project '{projectName}' not found.\n\nAvailable projects:\n" +
+                       string.Join("\n", available.Select(p => $"- {p.Name}"));
+            }
+
+            // Check if already loaded
+            if (projectName == _projectName)
+            {
+                return $"Project '{projectName}' is already loaded.";
+            }
+
+            Log($"Switching to project: {projectName}");
+            SendActivity($"Switching to: {projectName}");
+
+            // Set as active project
+            _projectService.SetActiveProject(projectName);
+
+            // Schedule restart after returning response
+            Task.Run(async () =>
+            {
+                await Task.Delay(500); // Give time for response to be sent
+                SendDisconnect();
+                _cancellationTokenSource?.Cancel();
+                await Task.Delay(200);
+                Environment.Exit(0);
+            });
+
+            return $"# Switching Project\n\nSwitching to project **{projectName}**.\n\nThe server will restart automatically. Please use any CodeMerger tool to reconnect with the new project loaded.";
         }
 
         private string CreateToolResponse(int id, string content)

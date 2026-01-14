@@ -184,6 +184,7 @@ namespace CodeMerger
             connectionIndicator.Fill = new SolidColorBrush(Color.FromRgb(0, 217, 165)); // AccentSuccess
             connectionStatusText.Text = $"Connected: {projectName}";
             connectionStatusText.Foreground = new SolidColorBrush(Color.FromRgb(0, 217, 165));
+            stopServerButton.Visibility = Visibility.Visible;
             
             UpdateStatus($"✓ Claude connected via MCP (project: {projectName})", Brushes.LightGreen);
         }
@@ -195,6 +196,24 @@ namespace CodeMerger
             {
                 var projectName = parts[0];
                 var activity = parts[1];
+
+                // Handle disconnect notification
+                if (activity == "DISCONNECT")
+                {
+                    connectionIndicator.Fill = new SolidColorBrush(Color.FromRgb(136, 146, 160)); // Gray
+                    connectionStatusText.Text = "Disconnected";
+                    connectionStatusText.Foreground = new SolidColorBrush(Color.FromRgb(136, 146, 160));
+                    stopServerButton.Visibility = Visibility.Collapsed;
+                    UpdateStatus($"MCP server disconnected (project: {projectName})", Brushes.Gray);
+                    return;
+                }
+
+                // Update connection status since we're clearly connected if receiving activity
+                connectionIndicator.Fill = new SolidColorBrush(Color.FromRgb(0, 217, 165)); // AccentSuccess
+                connectionStatusText.Text = $"Connected: {projectName}";
+                connectionStatusText.Foreground = new SolidColorBrush(Color.FromRgb(0, 217, 165));
+                stopServerButton.Visibility = Visibility.Visible;
+
                 UpdateStatus($"🔄 [{projectName}] {activity}", new SolidColorBrush(Color.FromRgb(100, 200, 255)));
             }
             else
