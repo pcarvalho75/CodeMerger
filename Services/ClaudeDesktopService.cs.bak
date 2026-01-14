@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -201,16 +201,6 @@ namespace CodeMerger.Services
             return Environment.ProcessPath ??
                    System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName ??
                    "CodeMerger.exe";
-        }
-
-        /// <summary>
-        /// Detects if the application is running from a ClickOnce deployment folder.
-        /// ClickOnce installs to paths like: C:\Users\...\AppData\Local\Apps\2.0\...
-        /// </summary>
-        public bool IsClickOnceDeployment()
-        {
-            var path = GetCurrentExePath();
-            return path.Contains(@"\Apps\2.0\");
         }
 
         public void OpenDownloadPage()

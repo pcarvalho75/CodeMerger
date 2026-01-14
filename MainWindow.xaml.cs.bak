@@ -22,6 +22,7 @@ namespace CodeMerger
     {
         public ObservableCollection<SelectableItem> InputDirectories { get; set; }
         public ObservableCollection<string> FoundFiles { get; set; }
+        public ObservableCollection<ExternalRepository> ExternalRepositories { get; set; }
 
         private readonly ProjectService _projectService = new ProjectService();
         private readonly CodeAnalyzer _codeAnalyzer = new CodeAnalyzer();
@@ -29,6 +30,7 @@ namespace CodeMerger
         private readonly McpServer _mcpServer = new McpServer();
         private Project? _currentProject;
         private CancellationTokenSource? _mcpCancellation;
+        private GitService? _gitService;
 
         private string _statusText = string.Empty;
         private Brush _statusForeground = Brushes.Black;
@@ -39,7 +41,7 @@ namespace CodeMerger
         private NamedPipeServerStream? _pipeServer;
         private readonly ClaudeDesktopService _claudeDesktopService = new ClaudeDesktopService();
 
-        private const int MCP_RECOMMENDED_THRESHOLD = 500000; // 500k tokens
+        private const int MCP_RECOMMENDED_THRESHOLD = 500000;
 
         public string StatusText
         {
@@ -65,8 +67,11 @@ namespace CodeMerger
             DataContext = this;
             InputDirectories = new ObservableCollection<SelectableItem>();
             FoundFiles = new ObservableCollection<string>();
+            ExternalRepositories = new ObservableCollection<ExternalRepository>();
+
             inputDirListBox.ItemsSource = InputDirectories;
             fileListBox.ItemsSource = FoundFiles;
+            gitRepoListBox.ItemsSource = ExternalRepositories;
 
             _mcpServer.OnLog += OnMcpLog;
 
@@ -84,7 +89,6 @@ namespace CodeMerger
                 PromptCreateFirstProject();
             }
 
-            // Check if config was self-healed on startup
             if (Application.Current.Properties.Contains("ConfigHealedCount"))
             {
                 int count = (int)Application.Current.Properties["ConfigHealedCount"];
@@ -96,7 +100,6 @@ namespace CodeMerger
 
         private void RefreshClaudeDesktopStatus()
         {
-            // Check installation
             if (_claudeDesktopService.IsClaudeDesktopInstalled())
             {
                 claudeInstallStatus.Text = "Installed ✓";
@@ -110,7 +113,6 @@ namespace CodeMerger
                 claudeDownloadButton.Visibility = Visibility.Visible;
             }
 
-            // Check config for current project
             if (_currentProject == null)
             {
                 claudeConfigStatus.Text = "No project selected";
@@ -215,13 +217,26 @@ namespace CodeMerger
             if (projectComboBox.SelectedItem is Project selected)
             {
                 _currentProject = selected;
+
+                // Initialize GitService for this project
+                string projectFolder = _projectService.GetProjectFolder(_currentProject.Name);
+                _gitService = new GitService(projectFolder);
+                _gitService.OnProgress += OnGitProgress;
+
                 LoadProjectData(_currentProject);
                 projectStatusText.Text = $"Last modified: {_currentProject.LastModifiedDate:g}";
-                
-                // Auto-update Claude Desktop config when switching projects (#1)
+
                 AutoUpdateClaudeConfig();
                 RefreshClaudeDesktopStatus();
             }
+        }
+
+        private void OnGitProgress(string message)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                gitStatusText.Text = message;
+            });
         }
 
         private void AutoUpdateClaudeConfig()
@@ -235,7 +250,7 @@ namespace CodeMerger
             }
             catch
             {
-                // Silently fail - user can manually add config if needed
+                // Silently fail
             }
         }
 
@@ -250,9 +265,15 @@ namespace CodeMerger
                 InputDirectories.Clear();
                 foreach (var dir in project.InputDirectories)
                 {
-                    // Check if directory was previously disabled (#2 - persist checkbox state)
                     bool isSelected = !project.DisabledDirectories.Contains(dir);
                     InputDirectories.Add(new SelectableItem(dir, isSelected));
+                }
+
+                // Load external repositories
+                ExternalRepositories.Clear();
+                foreach (var repo in project.ExternalRepositories)
+                {
+                    ExternalRepositories.Add(repo);
                 }
 
                 extensionsTextBox.Text = project.Extensions;
@@ -260,6 +281,9 @@ namespace CodeMerger
 
                 string projectFolder = _projectService.GetProjectFolder(project.Name);
                 outputFileTextBox.Text = projectFolder;
+
+                // Auto-update external repos
+                await UpdateExternalReposAsync();
             }
             catch (Exception ex)
             {
@@ -271,6 +295,29 @@ namespace CodeMerger
                 UpdateDirectoryCount();
                 await ScanFilesAsync();
             }
+        }
+
+        private async Task UpdateExternalReposAsync()
+        {
+            if (_gitService == null || ExternalRepositories.Count == 0) return;
+
+            foreach (var repo in ExternalRepositories.Where(r => r.IsEnabled))
+            {
+                try
+                {
+                    gitStatusText.Text = $"Updating {repo.Name}...";
+                    await _gitService.CloneOrPullAsync(repo.Url);
+                    repo.LastUpdated = DateTime.Now;
+                }
+                catch (Exception ex)
+                {
+                    gitStatusText.Text = $"Failed to update {repo.Name}: {ex.Message}";
+                }
+            }
+
+            gitStatusText.Text = ExternalRepositories.Count > 0
+                ? $"{ExternalRepositories.Count} repository(s) loaded"
+                : "";
         }
 
         private void NewProject_Click(object? sender, RoutedEventArgs? e)
@@ -344,15 +391,17 @@ namespace CodeMerger
             if (_currentProject == null || _isLoadingProject) return;
 
             _currentProject.InputDirectories = InputDirectories.Select(item => item.Path).ToList();
-            
-            // Save disabled directories (#2 - persist checkbox state)
+
             _currentProject.DisabledDirectories = InputDirectories
                 .Where(item => !item.IsSelected)
                 .Select(item => item.Path)
                 .ToList();
-            
+
             _currentProject.Extensions = extensionsTextBox.Text;
             _currentProject.IgnoredDirectories = ignoredDirsTextBox.Text;
+
+            // Save external repositories
+            _currentProject.ExternalRepositories = ExternalRepositories.ToList();
 
             _projectService.SaveProject(_currentProject);
             projectStatusText.Text = $"Saved: {_currentProject.LastModifiedDate:g}";
@@ -396,7 +445,6 @@ namespace CodeMerger
             }
         }
 
-        // #4 - Select All directories
         private async void SelectAllDirectories_Click(object sender, RoutedEventArgs e)
         {
             foreach (var item in InputDirectories)
@@ -408,7 +456,6 @@ namespace CodeMerger
             await ScanFilesAsync();
         }
 
-        // #4 - Deselect All directories
         private async void DeselectAllDirectories_Click(object sender, RoutedEventArgs e)
         {
             foreach (var item in InputDirectories)
@@ -420,12 +467,11 @@ namespace CodeMerger
             await ScanFilesAsync();
         }
 
-        // #5 - Update directory count display
         private void UpdateDirectoryCount()
         {
             int total = InputDirectories.Count;
             int active = InputDirectories.Count(item => item.IsSelected);
-            
+
             if (total == 0)
             {
                 directoryCountText.Text = "";
@@ -439,6 +485,127 @@ namespace CodeMerger
                 directoryCountText.Text = $"({active}/{total} active)";
             }
         }
+
+        #region Git Repository Management
+
+        private async void AddGitRepo_Click(object sender, RoutedEventArgs e)
+        {
+            if (_gitService == null || _currentProject == null)
+            {
+                UpdateStatus("No project selected.", Brushes.Red);
+                return;
+            }
+
+            string url = gitUrlTextBox.Text.Trim();
+
+            if (!GitService.IsValidGitUrl(url))
+            {
+                UpdateStatus("Invalid Git URL. Use https://github.com/user/repo format.", Brushes.Red);
+                return;
+            }
+
+            // Check if already added
+            if (ExternalRepositories.Any(r => r.Url.Equals(url, StringComparison.OrdinalIgnoreCase)))
+            {
+                UpdateStatus("Repository already added.", Brushes.Orange);
+                return;
+            }
+
+            SetUIState(false);
+            gitStatusText.Text = "Cloning repository...";
+
+            try
+            {
+                var repo = await _gitService.CloneOrPullAsync(url);
+                ExternalRepositories.Add(repo);
+                SaveCurrentProject();
+
+                gitStatusText.Text = $"Cloned {repo.Name} ({repo.Branch})";
+                gitUrlTextBox.Text = "https://github.com/user/repo";
+
+                await ScanFilesAsync();
+            }
+            catch (Exception ex)
+            {
+                gitStatusText.Text = $"Clone failed: {ex.Message}";
+                UpdateStatus($"Failed to clone: {ex.Message}", Brushes.Red);
+            }
+            finally
+            {
+                SetUIState(true);
+            }
+        }
+
+        private async void RefreshGitRepo_Click(object sender, RoutedEventArgs e)
+        {
+            if (_gitService == null) return;
+
+            var button = sender as Button;
+            var repo = button?.DataContext as ExternalRepository;
+            if (repo == null) return;
+
+            SetUIState(false);
+            gitStatusText.Text = $"Updating {repo.Name}...";
+
+            try
+            {
+                await _gitService.CloneOrPullAsync(repo.Url);
+                repo.LastUpdated = DateTime.Now;
+                SaveCurrentProject();
+
+                gitStatusText.Text = $"Updated {repo.Name}";
+                await ScanFilesAsync();
+            }
+            catch (Exception ex)
+            {
+                gitStatusText.Text = $"Update failed: {ex.Message}";
+            }
+            finally
+            {
+                SetUIState(true);
+            }
+        }
+
+        private async void RemoveGitRepo_Click(object sender, RoutedEventArgs e)
+        {
+            if (_gitService == null) return;
+
+            var button = sender as Button;
+            var repo = button?.DataContext as ExternalRepository;
+            if (repo == null) return;
+
+            var result = MessageBox.Show(
+                $"Remove '{repo.Name}' and delete local files?",
+                "Remove Repository",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question);
+
+            if (result == MessageBoxResult.Yes)
+            {
+                try
+                {
+                    _gitService.DeleteRepository(repo);
+                    ExternalRepositories.Remove(repo);
+                    SaveCurrentProject();
+
+                    gitStatusText.Text = $"Removed {repo.Name}";
+                    await ScanFilesAsync();
+                }
+                catch (Exception ex)
+                {
+                    gitStatusText.Text = $"Remove failed: {ex.Message}";
+                }
+            }
+        }
+
+        private async void GitRepoCheckBox_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_isLoadingProject) return;
+            SaveCurrentProject();
+            await ScanFilesAsync();
+        }
+
+        #endregion
 
         private void OpenFolder_Click(object sender, RoutedEventArgs e)
         {
@@ -521,6 +688,13 @@ namespace CodeMerger
             {
                 var fileAnalyses = new List<FileAnalysis>();
                 var selectedDirs = InputDirectories.Where(item => item.IsSelected).Select(item => item.Path).ToList();
+
+                // Add enabled external repo paths
+                var enabledRepos = ExternalRepositories.Where(r => r.IsEnabled).ToList();
+                foreach (var repo in enabledRepos)
+                {
+                    selectedDirs.Add(repo.LocalPath);
+                }
 
                 await Task.Run(() =>
                 {
@@ -615,7 +789,6 @@ namespace CodeMerger
 
             try
             {
-                // Auto-add to Claude Desktop config if not configured
                 if (!_claudeDesktopService.IsProjectConfigured(_currentProject.Name))
                 {
                     var exePath = _claudeDesktopService.GetCurrentExePath();
@@ -625,14 +798,18 @@ namespace CodeMerger
 
                 UpdateStatus("Indexing project for MCP...", Brushes.Blue);
 
-                // Index the project - only selected directories
                 var selectedDirs = InputDirectories.Where(item => item.IsSelected).Select(item => item.Path).ToList();
+
+                // Add enabled external repo paths
+                foreach (var repo in ExternalRepositories.Where(r => r.IsEnabled))
+                {
+                    selectedDirs.Add(repo.LocalPath);
+                }
+
                 _mcpServer.IndexProject(_currentProject.Name, selectedDirs, FoundFiles.ToList());
 
-                // Create named pipe for communication
                 string pipeName = $"codemerger_mcp_{_currentProject.Name}_{Environment.ProcessId}";
 
-                // Update UI
                 mcpButton.Content = "Stop MCP Server";
                 mcpButton.Style = (Style)FindResource("McpStopButton");
                 mcpStatusPanel.Visibility = Visibility.Visible;
@@ -642,12 +819,10 @@ namespace CodeMerger
 
                 _mcpCancellation = new CancellationTokenSource();
 
-                // Start the pipe server
                 _pipeServer = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
 
                 UpdateStatus($"MCP Server ready. Waiting for connection...", Brushes.DarkGreen);
 
-                // Wait for connection and start serving
                 await Task.Run(async () =>
                 {
                     await _pipeServer.WaitForConnectionAsync(_mcpCancellation.Token);
@@ -656,7 +831,7 @@ namespace CodeMerger
             }
             catch (OperationCanceledException)
             {
-                // Normal shutdown, don't show error
+                // Normal shutdown
             }
             catch (Exception ex)
             {
@@ -689,13 +864,13 @@ namespace CodeMerger
             _isScanning = true;
 
             FoundFiles.Clear();
-            
-            // Only scan selected directories
+
             var selectedDirs = InputDirectories.Where(item => item.IsSelected).ToList();
-            
-            if (selectedDirs.Count == 0)
+            var enabledRepos = ExternalRepositories.Where(r => r.IsEnabled).ToList();
+
+            if (selectedDirs.Count == 0 && enabledRepos.Count == 0)
             {
-                UpdateStatus("Ready. Please add input directories or enable at least one.", Brushes.Black);
+                UpdateStatus("Ready. Please add input directories or enable at least one source.", Brushes.Black);
                 _isScanning = false;
                 UpdateRecommendation();
                 return;
@@ -720,6 +895,7 @@ namespace CodeMerger
 
                 await Task.Run(() =>
                 {
+                    // Scan local directories
                     foreach (var item in selectedDirs)
                     {
                         var dir = item.Path;
@@ -740,6 +916,16 @@ namespace CodeMerger
                             });
                         allFoundFiles.AddRange(allFilesInDir);
                     }
+
+                    // Scan external repositories
+                    if (_gitService != null)
+                    {
+                        foreach (var repo in enabledRepos)
+                        {
+                            var repoFiles = _gitService.GetRepositoryFiles(repo, extensionsTextBox.Text, ignoredDirsTextBox.Text);
+                            allFoundFiles.AddRange(repoFiles);
+                        }
+                    }
                 });
 
                 var distinctFiles = allFoundFiles.Distinct().OrderBy(f => f);
@@ -748,7 +934,6 @@ namespace CodeMerger
                     FoundFiles.Add(file);
                 }
 
-                // Calculate estimated tokens
                 long totalBytes = 0;
                 foreach (var file in FoundFiles)
                 {
