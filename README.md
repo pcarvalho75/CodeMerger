@@ -1,124 +1,239 @@
-# CodeMerger v2.0 Update - Smart Context Features
+Could not copy "C:\Users\paulo\source\repos\pcarvalho75\CodeMerger\obj\Debug\net8.0-windows\apphost.exe" to "bin\Debug\net8.0-windows\CodeMerger.exe". Exceeded retry count of 10. Failed. The file is locked by: "CodeMerger (21724)"
+# CodeMerger v3.0 - Comprehensive Upgrade
 
-## New Tools Added
+## Overview
 
-### 1. `codemerger_search_content`
-**Grep-like search inside file contents**
+This major upgrade transforms CodeMerger from a read-only code viewer into a full-featured AI-assisted development environment with **semantic analysis**, **call graph tracking**, and **refactoring capabilities**.
 
-Search for text or regex patterns across all files in your project. Returns matching lines with surrounding context.
+## New Tools Summary
 
-**Parameters:**
-- `pattern` (required): Search pattern (text or regex)
-- `isRegex` (default: true): Treat pattern as regex
-- `caseSensitive` (default: false): Case-sensitive search
-- `contextLines` (default: 2): Lines of context before/after match
-- `maxResults` (default: 50): Maximum matches to return
+### Smart Context (from v2)
+| Tool | Purpose |
+|------|---------|
+| `codemerger_search_content` | Regex search inside files with context |
+| `codemerger_get_context_for_task` | Describe task, get relevant files automatically |
 
-**Example queries:**
-- Find all TODOs: `pattern: "TODO"`
-- Find exception handling: `pattern: "catch.*Exception"`
-- Find async methods: `pattern: "async Task"`
-- Find specific strings: `pattern: "connection string"` with `isRegex: false`
+### Semantic Analysis (NEW)
+| Tool | Purpose |
+|------|---------|
+| `codemerger_get_method_body` | Get specific method without loading whole file |
+| `codemerger_find_usages` | Find all references to a symbol |
+| `codemerger_get_call_graph` | See who calls a method and what it calls |
+| `codemerger_find_implementations` | Find interface/base class implementations |
+| `codemerger_semantic_query` | Query by criteria (async, static, return type, etc.) |
 
----
-
-### 2. `codemerger_get_context_for_task`
-**AI-native smart context gathering**
-
-Describe what you want to do in natural language, and get the most relevant files automatically ranked by relevance.
-
-**Parameters:**
-- `task` (required): Natural language description of your task
-- `maxFiles` (default: 10): Maximum files to return
-- `maxTokens` (default: 50000): Token budget for context
-
-**How it works:**
-1. Extracts keywords and concepts from your task description
-2. Scores each file based on:
-   - Type/class name matches
-   - Method name matches
-   - File classification relevance
-   - Dependency relationships
-3. Returns files ranked by relevance with:
-   - Match reasons explaining why each file was selected
-   - Suggestions for how to approach the task
-   - Related types to consider
-
-**Example tasks:**
-- "Add a new MCP tool for exporting project to JSON"
-- "Fix the file path handling in GetFile method"
-- "Add a new model class for user preferences"
-- "Implement caching for the code analyzer"
+### Refactoring (NEW)
+| Tool | Purpose |
+|------|---------|
+| `codemerger_write_file` | Create/update files with backup & diff |
+| `codemerger_preview_write` | Preview changes before writing |
+| `codemerger_rename_symbol` | Rename across all files |
+| `codemerger_generate_interface` | Extract interface from class |
+| `codemerger_extract_method` | Extract code into new method |
 
 ---
 
 ## Installation
 
-### Step 1: Backup existing files
-Before replacing, backup your current:
-- `Services\McpServer.cs`
+### Files to Replace
+```
+Models\FileAnalysis.cs     → REPLACE (enhanced with line numbers, method bodies, modifiers)
+Services\CodeAnalyzer.cs   → REPLACE (captures method bodies, call sites)
+Services\McpServer.cs      → REPLACE (all new tools integrated)
+```
 
-### Step 2: Copy new files
-Copy from this package:
-- `Services\McpServer.cs` → Replace existing
-- `Services\ContextAnalyzer.cs` → New file (add to project)
+### Files to Add (NEW)
+```
+Services\SemanticAnalyzer.cs   → NEW (find usages, call graph, implementations)
+Services\RefactoringService.cs → NEW (write files, rename, generate interface)
+Services\ContextAnalyzer.cs    → NEW if not already added from v2
+```
 
-### Step 3: Add to Visual Studio project
-If using Visual Studio:
-1. Right-click on `Services` folder
-2. Add → Existing Item → Select `ContextAnalyzer.cs`
+### Step-by-Step
 
-### Step 4: Rebuild
-Build the project to verify no compilation errors.
+1. **Close Visual Studio** (important - files may be locked)
 
-### Step 5: Restart MCP Server
-1. Stop the MCP server if running
-2. Re-index your project (Generate Chunks)
-3. Start MCP server
+2. **Backup your current Services folder** (just in case)
+
+3. **Copy replacement files:**
+   - Copy `Models\FileAnalysis.cs` → overwrite existing
+   - Copy all files from `Services\` → overwrite existing, add new ones
+
+4. **Open Visual Studio**
+
+5. **Add new files to project:**
+   - Right-click `Services` folder → Add → Existing Item
+   - Select: `SemanticAnalyzer.cs`, `RefactoringService.cs`, `ContextAnalyzer.cs`
+
+6. **Build** (Ctrl+Shift+B)
+
+7. **Restart CodeMerger** and re-index your project
 
 ---
 
-## Changes Summary
+## What Changed
+
+### FileAnalysis.cs
+- Added `StartLine`, `EndLine` to types and members
+- Added `Body` field to store method bodies
+- Added `IsStatic`, `IsAsync`, `IsVirtual`, `IsOverride`, `IsAbstract` flags
+- Added `Parameters` list with full parameter info
+- Added `XmlDoc` for documentation extraction
+- Added `CallSite` and `SymbolUsage` classes for tracking
+
+### CodeAnalyzer.cs
+- Now extracts method bodies during parsing
+- Tracks all method call sites for call graph
+- Captures XML documentation
+- Records line numbers for all elements
+- Exposes `CallSites` list for semantic analyzer
 
 ### McpServer.cs
-- Added `ContextAnalyzer` field and initialization in `IndexProject()`
-- Added two new tools to `HandleListTools()`
-- Added `SearchContent()` and `GetContextForTask()` handlers
-- Fixed path normalization bug in `GetFile()` (now works with / or \)
-- Version bumped to 2.0.0
-
-### ContextAnalyzer.cs (NEW)
-- `SearchContent()`: Regex-based file content search
-- `GetContextForTask()`: Smart context analysis with keyword extraction
-- Result models with `ToMarkdown()` for clean output
-- Dependency-aware file scoring
+- Version 3.0.0
+- 18 total tools (was 7)
+- Initializes SemanticAnalyzer and RefactoringService
+- Reports call site count in project overview
+- Cleaner tool schema generation with helper methods
 
 ---
 
-## Usage Tips
+## Usage Examples
 
-### Best workflow with Claude:
-1. **Start with context**: Use `codemerger_get_context_for_task` first
-   ```
-   "I want to add a new MCP tool for searching content"
-   ```
-2. **Drill down**: Use `codemerger_get_file` to read specific files
-3. **Search patterns**: Use `codemerger_search_content` to find usages
-   ```
-   "HandleToolCall|CreateToolResponse"
-   ```
+### Find all async methods
+```json
+{
+  "tool": "codemerger_semantic_query",
+  "arguments": { "isAsync": true }
+}
+```
 
-### Token efficiency:
-- Set `maxTokens` based on your context window
-- Use `maxFiles` to limit scope for focused tasks
-- The smart context prioritizes smaller, more relevant files
+### Get call graph for a method
+```json
+{
+  "tool": "codemerger_get_call_graph",
+  "arguments": { 
+    "typeName": "McpServer",
+    "methodName": "HandleToolCall"
+  }
+}
+```
+
+### Find who implements an interface
+```json
+{
+  "tool": "codemerger_find_implementations",
+  "arguments": { "interfaceName": "INotifyPropertyChanged" }
+}
+```
+
+### Write a file with backup
+```json
+{
+  "tool": "codemerger_write_file",
+  "arguments": {
+    "path": "Services\\NewService.cs",
+    "content": "using System;\n\nnamespace CodeMerger.Services\n{\n    public class NewService { }\n}"
+  }
+}
+```
+
+### Preview rename before applying
+```json
+{
+  "tool": "codemerger_rename_symbol",
+  "arguments": {
+    "oldName": "OldClassName",
+    "newName": "NewClassName",
+    "preview": true
+  }
+}
+```
+
+### Generate interface from class
+```json
+{
+  "tool": "codemerger_generate_interface",
+  "arguments": { "className": "CodeAnalyzer" }
+}
+```
 
 ---
 
-## Future Enhancements (Roadmap)
+## Processing: Your Machine vs Claude
 
-- [ ] `codemerger_write_file` - Two-way code editing
-- [ ] `codemerger_get_callers` - Call hierarchy analysis
-- [ ] `codemerger_create_patch` - Generate diffs for changes
-- [ ] File watching for live index updates
-- [ ] Semantic queries using Roslyn ("find all async methods")
+| Task | Your PC | Claude |
+|------|---------|--------|
+| Roslyn parsing | ✅ | |
+| Call site extraction | ✅ | |
+| Method body extraction | ✅ | |
+| Regex content search | ✅ | |
+| Relevance scoring | ✅ | |
+| File writing | ✅ | |
+| Rename symbol | ✅ | |
+| Choosing which tool | | ✅ |
+| Understanding intent | | ✅ |
+| Suggesting code | | ✅ |
+
+**~85% of processing is on your machine** - Claude receives pre-processed results.
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────┐
+│                    McpServer                         │
+│  - Handles JSON-RPC protocol                        │
+│  - Routes tool calls to services                    │
+└─────────────────┬───────────────────────────────────┘
+                  │
+    ┌─────────────┼─────────────┬─────────────┐
+    ▼             ▼             ▼             ▼
+┌─────────┐ ┌───────────┐ ┌───────────┐ ┌───────────┐
+│CodeAna- │ │Context    │ │Semantic   │ │Refactoring│
+│lyzer    │ │Analyzer   │ │Analyzer   │ │Service    │
+│         │ │           │ │           │ │           │
+│- Parse  │ │- Smart    │ │- Find     │ │- Write    │
+│- Extract│ │  context  │ │  usages   │ │- Rename   │
+│- Track  │ │- Search   │ │- Call     │ │- Generate │
+│  calls  │ │  content  │ │  graph    │ │- Extract  │
+└─────────┘ └───────────┘ └───────────┘ └───────────┘
+```
+
+---
+
+## Troubleshooting
+
+### "Context analyzer not initialized"
+Re-index your project (Generate Chunks). Services are initialized during indexing.
+
+### Call graph shows no results
+The call graph is built from method bodies. Make sure you've re-indexed after upgrading to v3.
+
+### Rename doesn't find all occurrences
+Current rename uses regex word boundaries. It won't find references in:
+- Comments
+- Strings
+- Partial name matches
+
+### Write file creates wrong path
+Paths are relative to your first input directory. Use forward slashes for cross-platform compatibility.
+
+---
+
+## Future Roadmap
+
+- [ ] **File watcher** - Auto re-index on file changes
+- [ ] **Semantic rename** - Use Roslyn for accurate rename
+- [ ] **Inline refactoring** - Inline method/variable
+- [ ] **Move type** - Move class to different file/namespace
+- [ ] **Add using** - Automatically add missing using statements
+- [ ] **Fix suggestions** - Suggest fixes for common issues
+
+---
+
+## Version History
+
+- **v1.0** - Initial release (basic file reading)
+- **v2.0** - Added `search_content` and `get_context_for_task`
+- **v3.0** - Full semantic analysis and refactoring support

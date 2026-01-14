@@ -28,6 +28,9 @@ namespace CodeMerger.Services
             { ".yml", "yaml" }
         };
 
+        // NEW: Store call sites during analysis
+        public List<CallSite> CallSites { get; private set; } = new();
+
         public FileAnalysis AnalyzeFile(string filePath, string basePath)
         {
             var fileInfo = new FileInfo(filePath);
@@ -63,6 +66,10 @@ namespace CodeMerger.Services
                 var tree = CSharpSyntaxTree.ParseText(code);
                 var root = tree.GetCompilationUnitRoot();
 
+                // Extract namespace
+                var namespaceDecl = root.DescendantNodes().OfType<BaseNamespaceDeclarationSyntax>().FirstOrDefault();
+                var namespaceName = namespaceDecl?.Name.ToString() ?? "";
+
                 // Extract usings
                 analysis.Usings = root.Usings
                     .Select(u => u.Name?.ToString() ?? string.Empty)
@@ -75,7 +82,7 @@ namespace CodeMerger.Services
 
                 foreach (var typeNode in typeDeclarations)
                 {
-                    var typeInfo = ExtractTypeInfo(typeNode);
+                    var typeInfo = ExtractTypeInfo(typeNode, namespaceName, code, analysis.FilePath);
                     if (typeInfo != null)
                     {
                         analysis.Types.Add(typeInfo);
@@ -91,55 +98,72 @@ namespace CodeMerger.Services
             }
         }
 
-        private CodeTypeInfo? ExtractTypeInfo(SyntaxNode node)
+        private CodeTypeInfo? ExtractTypeInfo(SyntaxNode node, string namespaceName, string code, string filePath)
         {
             var typeInfo = new CodeTypeInfo();
+            var lineSpan = node.GetLocation().GetLineSpan();
+            typeInfo.StartLine = lineSpan.StartLinePosition.Line + 1;
+            typeInfo.EndLine = lineSpan.EndLinePosition.Line + 1;
 
             switch (node)
             {
                 case ClassDeclarationSyntax classDecl:
                     typeInfo.Name = classDecl.Identifier.Text;
+                    typeInfo.FullName = string.IsNullOrEmpty(namespaceName) ? typeInfo.Name : $"{namespaceName}.{typeInfo.Name}";
                     typeInfo.Kind = CodeTypeKind.Class;
+                    typeInfo.XmlDoc = GetXmlDoc(classDecl);
                     ExtractBaseTypes(classDecl.BaseList, typeInfo);
-                    ExtractMembers(classDecl.Members, typeInfo);
+                    ExtractMembers(classDecl.Members, typeInfo, code, filePath, typeInfo.Name);
                     break;
 
                 case InterfaceDeclarationSyntax interfaceDecl:
                     typeInfo.Name = interfaceDecl.Identifier.Text;
+                    typeInfo.FullName = string.IsNullOrEmpty(namespaceName) ? typeInfo.Name : $"{namespaceName}.{typeInfo.Name}";
                     typeInfo.Kind = CodeTypeKind.Interface;
+                    typeInfo.XmlDoc = GetXmlDoc(interfaceDecl);
                     ExtractBaseTypes(interfaceDecl.BaseList, typeInfo);
-                    ExtractMembers(interfaceDecl.Members, typeInfo);
+                    ExtractMembers(interfaceDecl.Members, typeInfo, code, filePath, typeInfo.Name);
                     break;
 
                 case StructDeclarationSyntax structDecl:
                     typeInfo.Name = structDecl.Identifier.Text;
+                    typeInfo.FullName = string.IsNullOrEmpty(namespaceName) ? typeInfo.Name : $"{namespaceName}.{typeInfo.Name}";
                     typeInfo.Kind = CodeTypeKind.Struct;
+                    typeInfo.XmlDoc = GetXmlDoc(structDecl);
                     ExtractBaseTypes(structDecl.BaseList, typeInfo);
-                    ExtractMembers(structDecl.Members, typeInfo);
+                    ExtractMembers(structDecl.Members, typeInfo, code, filePath, typeInfo.Name);
                     break;
 
                 case RecordDeclarationSyntax recordDecl:
                     typeInfo.Name = recordDecl.Identifier.Text;
+                    typeInfo.FullName = string.IsNullOrEmpty(namespaceName) ? typeInfo.Name : $"{namespaceName}.{typeInfo.Name}";
                     typeInfo.Kind = CodeTypeKind.Record;
+                    typeInfo.XmlDoc = GetXmlDoc(recordDecl);
                     ExtractBaseTypes(recordDecl.BaseList, typeInfo);
-                    ExtractMembers(recordDecl.Members, typeInfo);
+                    ExtractMembers(recordDecl.Members, typeInfo, code, filePath, typeInfo.Name);
                     break;
 
                 case EnumDeclarationSyntax enumDecl:
                     typeInfo.Name = enumDecl.Identifier.Text;
+                    typeInfo.FullName = string.IsNullOrEmpty(namespaceName) ? typeInfo.Name : $"{namespaceName}.{typeInfo.Name}";
                     typeInfo.Kind = CodeTypeKind.Enum;
+                    typeInfo.XmlDoc = GetXmlDoc(enumDecl);
                     foreach (var member in enumDecl.Members)
                     {
+                        var memberLine = member.GetLocation().GetLineSpan();
                         typeInfo.Members.Add(new CodeMemberInfo
                         {
                             Name = member.Identifier.Text,
-                            Kind = CodeMemberKind.Field
+                            Kind = CodeMemberKind.Field,
+                            StartLine = memberLine.StartLinePosition.Line + 1,
+                            EndLine = memberLine.EndLinePosition.Line + 1
                         });
                     }
                     break;
 
                 case DelegateDeclarationSyntax delegateDecl:
                     typeInfo.Name = delegateDecl.Identifier.Text;
+                    typeInfo.FullName = string.IsNullOrEmpty(namespaceName) ? typeInfo.Name : $"{namespaceName}.{typeInfo.Name}";
                     typeInfo.Kind = CodeTypeKind.Delegate;
                     typeInfo.Members.Add(new CodeMemberInfo
                     {
@@ -155,6 +179,16 @@ namespace CodeMerger.Services
             }
 
             return typeInfo;
+        }
+
+        private string GetXmlDoc(SyntaxNode node)
+        {
+            var trivia = node.GetLeadingTrivia()
+                .Where(t => t.IsKind(SyntaxKind.SingleLineDocumentationCommentTrivia) ||
+                           t.IsKind(SyntaxKind.MultiLineDocumentationCommentTrivia))
+                .FirstOrDefault();
+
+            return trivia.ToString().Trim();
         }
 
         private void ExtractBaseTypes(BaseListSyntax? baseList, CodeTypeInfo typeInfo)
@@ -177,11 +211,11 @@ namespace CodeMerger.Services
             }
         }
 
-        private void ExtractMembers(SyntaxList<MemberDeclarationSyntax> members, CodeTypeInfo typeInfo)
+        private void ExtractMembers(SyntaxList<MemberDeclarationSyntax> members, CodeTypeInfo typeInfo, string code, string filePath, string typeName)
         {
             foreach (var member in members)
             {
-                var memberInfo = ExtractMemberInfo(member);
+                var memberInfo = ExtractMemberInfo(member, code, filePath, typeName);
                 if (memberInfo != null)
                 {
                     typeInfo.Members.Add(memberInfo);
@@ -189,9 +223,13 @@ namespace CodeMerger.Services
             }
         }
 
-        private CodeMemberInfo? ExtractMemberInfo(MemberDeclarationSyntax member)
+        private CodeMemberInfo? ExtractMemberInfo(MemberDeclarationSyntax member, string code, string filePath, string typeName)
         {
             var info = new CodeMemberInfo();
+            var lineSpan = member.GetLocation().GetLineSpan();
+            info.StartLine = lineSpan.StartLinePosition.Line + 1;
+            info.EndLine = lineSpan.EndLinePosition.Line + 1;
+            info.XmlDoc = GetXmlDoc(member);
 
             switch (member)
             {
@@ -200,7 +238,25 @@ namespace CodeMerger.Services
                     info.Kind = CodeMemberKind.Method;
                     info.ReturnType = method.ReturnType.ToString();
                     info.AccessModifier = GetAccessModifier(method.Modifiers);
+                    info.IsStatic = method.Modifiers.Any(m => m.IsKind(SyntaxKind.StaticKeyword));
+                    info.IsAsync = method.Modifiers.Any(m => m.IsKind(SyntaxKind.AsyncKeyword));
+                    info.IsVirtual = method.Modifiers.Any(m => m.IsKind(SyntaxKind.VirtualKeyword));
+                    info.IsOverride = method.Modifiers.Any(m => m.IsKind(SyntaxKind.OverrideKeyword));
+                    info.IsAbstract = method.Modifiers.Any(m => m.IsKind(SyntaxKind.AbstractKeyword));
+                    info.Parameters = method.ParameterList.Parameters.Select(p => $"{p.Type} {p.Identifier}").ToList();
                     info.Signature = $"{info.Name}({string.Join(", ", method.ParameterList.Parameters.Select(p => p.Type?.ToString() ?? "var"))})";
+                    
+                    // NEW: Extract method body
+                    if (method.Body != null)
+                    {
+                        info.Body = method.Body.ToString();
+                        ExtractMethodCalls(method.Body, filePath, typeName, info.Name);
+                    }
+                    else if (method.ExpressionBody != null)
+                    {
+                        info.Body = method.ExpressionBody.ToString();
+                        ExtractMethodCalls(method.ExpressionBody, filePath, typeName, info.Name);
+                    }
                     break;
 
                 case PropertyDeclarationSyntax property:
@@ -208,6 +264,10 @@ namespace CodeMerger.Services
                     info.Kind = CodeMemberKind.Property;
                     info.ReturnType = property.Type.ToString();
                     info.AccessModifier = GetAccessModifier(property.Modifiers);
+                    info.IsStatic = property.Modifiers.Any(m => m.IsKind(SyntaxKind.StaticKeyword));
+                    info.IsVirtual = property.Modifiers.Any(m => m.IsKind(SyntaxKind.VirtualKeyword));
+                    info.IsOverride = property.Modifiers.Any(m => m.IsKind(SyntaxKind.OverrideKeyword));
+                    info.IsAbstract = property.Modifiers.Any(m => m.IsKind(SyntaxKind.AbstractKeyword));
                     break;
 
                 case FieldDeclarationSyntax field:
@@ -217,6 +277,7 @@ namespace CodeMerger.Services
                     info.Kind = CodeMemberKind.Field;
                     info.ReturnType = field.Declaration.Type.ToString();
                     info.AccessModifier = GetAccessModifier(field.Modifiers);
+                    info.IsStatic = field.Modifiers.Any(m => m.IsKind(SyntaxKind.StaticKeyword));
                     break;
 
                 case EventDeclarationSyntax eventDecl:
@@ -224,13 +285,22 @@ namespace CodeMerger.Services
                     info.Kind = CodeMemberKind.Event;
                     info.ReturnType = eventDecl.Type.ToString();
                     info.AccessModifier = GetAccessModifier(eventDecl.Modifiers);
+                    info.IsStatic = eventDecl.Modifiers.Any(m => m.IsKind(SyntaxKind.StaticKeyword));
                     break;
 
                 case ConstructorDeclarationSyntax ctor:
                     info.Name = ctor.Identifier.Text;
                     info.Kind = CodeMemberKind.Constructor;
                     info.AccessModifier = GetAccessModifier(ctor.Modifiers);
+                    info.IsStatic = ctor.Modifiers.Any(m => m.IsKind(SyntaxKind.StaticKeyword));
+                    info.Parameters = ctor.ParameterList.Parameters.Select(p => $"{p.Type} {p.Identifier}").ToList();
                     info.Signature = $"{info.Name}({string.Join(", ", ctor.ParameterList.Parameters.Select(p => p.Type?.ToString() ?? "var"))})";
+                    
+                    if (ctor.Body != null)
+                    {
+                        info.Body = ctor.Body.ToString();
+                        ExtractMethodCalls(ctor.Body, filePath, typeName, ".ctor");
+                    }
                     break;
 
                 default:
@@ -238,6 +308,41 @@ namespace CodeMerger.Services
             }
 
             return info;
+        }
+
+        // NEW: Extract method invocations for call graph
+        private void ExtractMethodCalls(SyntaxNode body, string filePath, string callerType, string callerMethod)
+        {
+            var invocations = body.DescendantNodes().OfType<InvocationExpressionSyntax>();
+
+            foreach (var invocation in invocations)
+            {
+                var callSite = new CallSite
+                {
+                    CallerType = callerType,
+                    CallerMethod = callerMethod,
+                    FilePath = filePath,
+                    Line = invocation.GetLocation().GetLineSpan().StartLinePosition.Line + 1
+                };
+
+                // Try to get the called method name
+                switch (invocation.Expression)
+                {
+                    case MemberAccessExpressionSyntax memberAccess:
+                        callSite.CalledMethod = memberAccess.Name.Identifier.Text;
+                        callSite.CalledType = memberAccess.Expression.ToString();
+                        break;
+                    case IdentifierNameSyntax identifier:
+                        callSite.CalledMethod = identifier.Identifier.Text;
+                        callSite.CalledType = callerType; // Same class
+                        break;
+                }
+
+                if (!string.IsNullOrEmpty(callSite.CalledMethod))
+                {
+                    CallSites.Add(callSite);
+                }
+            }
         }
 
         private string GetAccessModifier(SyntaxTokenList modifiers)

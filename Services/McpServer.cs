@@ -17,7 +17,12 @@ namespace CodeMerger.Services
         private CancellationTokenSource? _cancellationTokenSource;
         private Task? _serverTask;
         private ProjectAnalysis? _projectAnalysis;
-        private ContextAnalyzer? _contextAnalyzer; // NEW: Context analyzer instance
+        
+        // Services
+        private ContextAnalyzer? _contextAnalyzer;
+        private SemanticAnalyzer? _semanticAnalyzer;
+        private RefactoringService? _refactoringService;
+        
         private List<string> _inputDirectories = new();
         private string _projectName = string.Empty;
 
@@ -41,6 +46,9 @@ namespace CodeMerger.Services
             _projectName = projectName;
             _inputDirectories = inputDirectories;
 
+            // Clear previous call sites
+            _codeAnalyzer.CallSites.Clear();
+
             var fileAnalyses = new List<FileAnalysis>();
             foreach (var file in files)
             {
@@ -55,10 +63,12 @@ namespace CodeMerger.Services
             var chunks = chunkManager.CreateChunks(fileAnalyses);
             _projectAnalysis = _indexGenerator.BuildProjectAnalysis(projectName, fileAnalyses, chunks);
             
-            // NEW: Initialize context analyzer with project analysis
+            // Initialize all services
             _contextAnalyzer = new ContextAnalyzer(_projectAnalysis);
+            _semanticAnalyzer = new SemanticAnalyzer(_projectAnalysis, _codeAnalyzer.CallSites);
+            _refactoringService = new RefactoringService(_projectAnalysis, inputDirectories);
 
-            Log($"Indexed {fileAnalyses.Count} files, {_projectAnalysis.TypeHierarchy.Count} types");
+            Log($"Indexed {fileAnalyses.Count} files, {_projectAnalysis.TypeHierarchy.Count} types, {_codeAnalyzer.CallSites.Count} call sites");
         }
 
         public async Task StartAsync(Stream inputStream, Stream outputStream)
@@ -154,7 +164,7 @@ namespace CodeMerger.Services
                     serverInfo = new
                     {
                         name = "codemerger-mcp",
-                        version = "2.0.0" // VERSION BUMP for new features
+                        version = "3.0.0"
                     }
                 }
             };
@@ -163,149 +173,184 @@ namespace CodeMerger.Services
 
         private string HandleListTools(int id)
         {
-            var tools = new object[]
+            var tools = new List<object>
             {
-                new
-                {
-                    name = "codemerger_get_project_overview",
-                    description = "Get high-level project information including framework, structure, total files, and entry points",
-                    inputSchema = new Dictionary<string, object>
+                // ===== BASIC TOOLS =====
+                MakeTool("codemerger_get_project_overview",
+                    "Get high-level project information including framework, structure, total files, and entry points",
+                    new Dictionary<string, object>()),
+
+                MakeTool("codemerger_list_files",
+                    "List all files in the project with their classifications (View, Model, Service, etc.) and estimated tokens",
+                    new Dictionary<string, object>
                     {
-                        { "type", "object" },
-                        { "properties", new Dictionary<string, object>() },
-                        { "required", Array.Empty<string>() }
-                    }
-                },
-                new
-                {
-                    name = "codemerger_list_files",
-                    description = "List all files in the project with their classifications (View, Model, Service, etc.) and estimated tokens",
-                    inputSchema = new Dictionary<string, object>
+                        { "classification", StringParam("Filter by classification: View, Model, Service, Controller, Test, Config, Unknown") },
+                        { "limit", IntParam("Maximum files to return (default 50)") }
+                    }),
+
+                MakeTool("codemerger_get_file",
+                    "Get the full content of a specific file by its relative path",
+                    new Dictionary<string, object>
                     {
-                        { "type", "object" },
-                        { "properties", new Dictionary<string, object>
-                            {
-                                { "classification", new Dictionary<string, string> { { "type", "string" }, { "description", "Filter by classification: View, Model, Service, Controller, Test, Config, Unknown" } } },
-                                { "limit", new Dictionary<string, string> { { "type", "integer" }, { "description", "Maximum files to return (default 50)" } } }
-                            }
-                        },
-                        { "required", Array.Empty<string>() }
-                    }
-                },
-                new
-                {
-                    name = "codemerger_get_file",
-                    description = "Get the full content of a specific file by its relative path",
-                    inputSchema = new Dictionary<string, object>
+                        { "path", StringParam("Relative path to the file") }
+                    },
+                    new[] { "path" }),
+
+                MakeTool("codemerger_search_code",
+                    "Search for types, methods, or keywords in the codebase",
+                    new Dictionary<string, object>
                     {
-                        { "type", "object" },
-                        { "properties", new Dictionary<string, object>
-                            {
-                                { "path", new Dictionary<string, string> { { "type", "string" }, { "description", "Relative path to the file" } } }
-                            }
-                        },
-                        { "required", new[] { "path" } }
-                    }
-                },
-                new
-                {
-                    name = "codemerger_search_code",
-                    description = "Search for types, methods, or keywords in the codebase",
-                    inputSchema = new Dictionary<string, object>
+                        { "query", StringParam("Search query (type name, method name, or keyword)") },
+                        { "searchIn", StringParam("Where to search: types, methods, files, all (default: all)") }
+                    },
+                    new[] { "query" }),
+
+                MakeTool("codemerger_get_type",
+                    "Get detailed information about a specific type including its members, base types, and interfaces",
+                    new Dictionary<string, object>
                     {
-                        { "type", "object" },
-                        { "properties", new Dictionary<string, object>
-                            {
-                                { "query", new Dictionary<string, string> { { "type", "string" }, { "description", "Search query (type name, method name, or keyword)" } } },
-                                { "searchIn", new Dictionary<string, string> { { "type", "string" }, { "description", "Where to search: types, methods, files, all (default: all)" } } }
-                            }
-                        },
-                        { "required", new[] { "query" } }
-                    }
-                },
-                new
-                {
-                    name = "codemerger_get_type",
-                    description = "Get detailed information about a specific type including its members, base types, and interfaces",
-                    inputSchema = new Dictionary<string, object>
+                        { "typeName", StringParam("Name of the type") }
+                    },
+                    new[] { "typeName" }),
+
+                MakeTool("codemerger_get_dependencies",
+                    "Get dependencies of a type (what it uses) and reverse dependencies (what uses it)",
+                    new Dictionary<string, object>
                     {
-                        { "type", "object" },
-                        { "properties", new Dictionary<string, object>
-                            {
-                                { "typeName", new Dictionary<string, string> { { "type", "string" }, { "description", "Name of the type" } } }
-                            }
-                        },
-                        { "required", new[] { "typeName" } }
-                    }
-                },
-                new
-                {
-                    name = "codemerger_get_dependencies",
-                    description = "Get dependencies of a type (what it uses) and reverse dependencies (what uses it)",
-                    inputSchema = new Dictionary<string, object>
+                        { "typeName", StringParam("Name of the type") }
+                    },
+                    new[] { "typeName" }),
+
+                MakeTool("codemerger_get_type_hierarchy",
+                    "Get the inheritance hierarchy for all types in the project",
+                    new Dictionary<string, object>()),
+
+                // ===== SMART CONTEXT TOOLS =====
+                MakeTool("codemerger_search_content",
+                    "Search inside file contents using text or regex patterns. Returns matching lines with context. Great for finding usages, patterns, TODOs, or any text across the codebase.",
+                    new Dictionary<string, object>
                     {
-                        { "type", "object" },
-                        { "properties", new Dictionary<string, object>
-                            {
-                                { "typeName", new Dictionary<string, string> { { "type", "string" }, { "description", "Name of the type" } } }
-                            }
-                        },
-                        { "required", new[] { "typeName" } }
-                    }
-                },
-                new
-                {
-                    name = "codemerger_get_type_hierarchy",
-                    description = "Get the inheritance hierarchy for all types in the project",
-                    inputSchema = new Dictionary<string, object>
+                        { "pattern", StringParam("Search pattern (text or regex). Examples: 'TODO', 'catch.*Exception', 'async Task'") },
+                        { "isRegex", BoolParam("Treat pattern as regex (default: true)", true) },
+                        { "caseSensitive", BoolParam("Case-sensitive search (default: false)", false) },
+                        { "contextLines", IntParam("Number of context lines before/after match (default: 2)", 2) },
+                        { "maxResults", IntParam("Maximum number of matches to return (default: 50)", 50) }
+                    },
+                    new[] { "pattern" }),
+
+                MakeTool("codemerger_get_context_for_task",
+                    "SMART CONTEXT: Describe what you want to do and get the most relevant files automatically. Analyzes your task description, extracts keywords, scores files by relevance, and returns prioritized context with suggestions. Use this FIRST when starting a new task!",
+                    new Dictionary<string, object>
                     {
-                        { "type", "object" },
-                        { "properties", new Dictionary<string, object>() },
-                        { "required", Array.Empty<string>() }
-                    }
-                },
-                // ============================================================
-                // NEW TOOL: codemerger_search_content
-                // ============================================================
-                new
-                {
-                    name = "codemerger_search_content",
-                    description = "Search inside file contents using text or regex patterns. Returns matching lines with context. Great for finding usages, patterns, TODOs, or any text across the codebase.",
-                    inputSchema = new Dictionary<string, object>
+                        { "task", StringParam("Natural language description of what you want to do") },
+                        { "maxFiles", IntParam("Maximum number of relevant files to return (default: 10)", 10) },
+                        { "maxTokens", IntParam("Maximum total tokens for context budget (default: 50000)", 50000) }
+                    },
+                    new[] { "task" }),
+
+                // ===== SEMANTIC ANALYSIS TOOLS =====
+                MakeTool("codemerger_get_method_body",
+                    "Get a specific method's full body, signature, parameters, and documentation. More efficient than getting the whole file when you only need one method.",
+                    new Dictionary<string, object>
                     {
-                        { "type", "object" },
-                        { "properties", new Dictionary<string, object>
-                            {
-                                { "pattern", new Dictionary<string, string> { { "type", "string" }, { "description", "Search pattern (text or regex). Examples: 'TODO', 'catch.*Exception', 'async Task'" } } },
-                                { "isRegex", new Dictionary<string, object> { { "type", "boolean" }, { "description", "Treat pattern as regex (default: true)" }, { "default", true } } },
-                                { "caseSensitive", new Dictionary<string, object> { { "type", "boolean" }, { "description", "Case-sensitive search (default: false)" }, { "default", false } } },
-                                { "contextLines", new Dictionary<string, object> { { "type", "integer" }, { "description", "Number of context lines before/after match (default: 2)" }, { "default", 2 } } },
-                                { "maxResults", new Dictionary<string, object> { { "type", "integer" }, { "description", "Maximum number of matches to return (default: 50)" }, { "default", 50 } } }
-                            }
-                        },
-                        { "required", new[] { "pattern" } }
-                    }
-                },
-                // ============================================================
-                // NEW TOOL: codemerger_get_context_for_task
-                // ============================================================
-                new
-                {
-                    name = "codemerger_get_context_for_task",
-                    description = "SMART CONTEXT: Describe what you want to do and get the most relevant files automatically. Analyzes your task description, extracts keywords, scores files by relevance, and returns prioritized context with suggestions. Use this FIRST when starting a new task!",
-                    inputSchema = new Dictionary<string, object>
+                        { "typeName", StringParam("Name of the type containing the method") },
+                        { "methodName", StringParam("Name of the method") }
+                    },
+                    new[] { "typeName", "methodName" }),
+
+                MakeTool("codemerger_find_usages",
+                    "Find all usages of a symbol (type, method, property, field) across the codebase. Shows definitions, references, invocations, and implementations.",
+                    new Dictionary<string, object>
                     {
-                        { "type", "object" },
-                        { "properties", new Dictionary<string, object>
-                            {
-                                { "task", new Dictionary<string, string> { { "type", "string" }, { "description", "Natural language description of what you want to do. Examples: 'Add a new MCP tool for searching content', 'Fix the file path handling', 'Add a new model class for user settings'" } } },
-                                { "maxFiles", new Dictionary<string, object> { { "type", "integer" }, { "description", "Maximum number of relevant files to return (default: 10)" }, { "default", 10 } } },
-                                { "maxTokens", new Dictionary<string, object> { { "type", "integer" }, { "description", "Maximum total tokens for context budget (default: 50000)" }, { "default", 50000 } } }
-                            }
-                        },
-                        { "required", new[] { "task" } }
-                    }
-                }
+                        { "symbolName", StringParam("Name of the symbol to find") },
+                        { "symbolKind", StringParam("Optional filter: Type, Method, Property, Field") }
+                    },
+                    new[] { "symbolName" }),
+
+                MakeTool("codemerger_get_call_graph",
+                    "Get the call graph for a method - who calls it (callers) and what it calls (callees). Essential for understanding code flow and impact analysis.",
+                    new Dictionary<string, object>
+                    {
+                        { "typeName", StringParam("Name of the type containing the method (optional for broader search)") },
+                        { "methodName", StringParam("Name of the method") },
+                        { "depth", IntParam("How deep to trace calls (default: 2)", 2) }
+                    },
+                    new[] { "methodName" }),
+
+                MakeTool("codemerger_find_implementations",
+                    "Find all implementations of an interface or overrides of a base class method.",
+                    new Dictionary<string, object>
+                    {
+                        { "interfaceName", StringParam("Name of the interface or base class") },
+                        { "methodName", StringParam("Optional: specific method to find implementations of") }
+                    },
+                    new[] { "interfaceName" }),
+
+                MakeTool("codemerger_semantic_query",
+                    "Find code elements matching semantic criteria: async methods, static members, specific return types, missing docs, etc.",
+                    new Dictionary<string, object>
+                    {
+                        { "isAsync", BoolParam("Find async methods") },
+                        { "isStatic", BoolParam("Find static members") },
+                        { "isVirtual", BoolParam("Find virtual members") },
+                        { "returnType", StringParam("Filter by return type (e.g., 'Task', 'string')") },
+                        { "memberKind", StringParam("Filter: Method, Property, Field, Event, Constructor") },
+                        { "accessModifier", StringParam("Filter: public, private, protected, internal") },
+                        { "namePattern", StringParam("Filter by name pattern") },
+                        { "implementsInterface", StringParam("Find types implementing this interface") },
+                        { "findInterfaces", BoolParam("Find all interface definitions") },
+                        { "missingXmlDocs", BoolParam("Find public members without XML documentation") }
+                    }),
+
+                // ===== REFACTORING TOOLS =====
+                MakeTool("codemerger_write_file",
+                    "Write content to a file (create new or overwrite existing). Creates a backup of existing files. Returns diff of changes.",
+                    new Dictionary<string, object>
+                    {
+                        { "path", StringParam("Relative path for the file") },
+                        { "content", StringParam("Full content to write") },
+                        { "createBackup", BoolParam("Create .bak backup of existing files (default: true)", true) }
+                    },
+                    new[] { "path", "content" }),
+
+                MakeTool("codemerger_preview_write",
+                    "Preview what a file write would look like without actually writing. Shows diff against existing file.",
+                    new Dictionary<string, object>
+                    {
+                        { "path", StringParam("Relative path for the file") },
+                        { "content", StringParam("Content to preview") }
+                    },
+                    new[] { "path", "content" }),
+
+                MakeTool("codemerger_rename_symbol",
+                    "Rename a symbol across all files in the project. Use preview=true first to see what would change.",
+                    new Dictionary<string, object>
+                    {
+                        { "oldName", StringParam("Current name of the symbol") },
+                        { "newName", StringParam("New name for the symbol") },
+                        { "preview", BoolParam("Preview changes without applying (default: true)", true) }
+                    },
+                    new[] { "oldName", "newName" }),
+
+                MakeTool("codemerger_generate_interface",
+                    "Generate an interface from a class's public members. Returns the interface code and suggested file path.",
+                    new Dictionary<string, object>
+                    {
+                        { "className", StringParam("Name of the class to extract interface from") },
+                        { "interfaceName", StringParam("Name for the new interface (default: I{ClassName})") }
+                    },
+                    new[] { "className" }),
+
+                MakeTool("codemerger_extract_method",
+                    "Extract a range of lines into a new method. Returns the modified file content.",
+                    new Dictionary<string, object>
+                    {
+                        { "filePath", StringParam("Relative path to the file") },
+                        { "startLine", IntParam("First line to extract (1-based)") },
+                        { "endLine", IntParam("Last line to extract (1-based)") },
+                        { "methodName", StringParam("Name for the new method") }
+                    },
+                    new[] { "filePath", "startLine", "endLine", "methodName" })
             };
 
             var response = new
@@ -316,6 +361,42 @@ namespace CodeMerger.Services
             };
             return JsonSerializer.Serialize(response, JsonOptions);
         }
+
+        #region Tool Schema Helpers
+
+        private object MakeTool(string name, string description, Dictionary<string, object> properties, string[]? required = null)
+        {
+            return new
+            {
+                name,
+                description,
+                inputSchema = new Dictionary<string, object>
+                {
+                    { "type", "object" },
+                    { "properties", properties },
+                    { "required", required ?? Array.Empty<string>() }
+                }
+            };
+        }
+
+        private Dictionary<string, object> StringParam(string description) =>
+            new() { { "type", "string" }, { "description", description } };
+
+        private Dictionary<string, object> IntParam(string description, int? defaultVal = null)
+        {
+            var param = new Dictionary<string, object> { { "type", "integer" }, { "description", description } };
+            if (defaultVal.HasValue) param["default"] = defaultVal.Value;
+            return param;
+        }
+
+        private Dictionary<string, object> BoolParam(string description, bool? defaultVal = null)
+        {
+            var param = new Dictionary<string, object> { { "type", "boolean" }, { "description", description } };
+            if (defaultVal.HasValue) param["default"] = defaultVal.Value;
+            return param;
+        }
+
+        #endregion
 
         private string HandleToolCall(int id, JsonElement root)
         {
@@ -332,6 +413,7 @@ namespace CodeMerger.Services
 
             var result = toolName switch
             {
+                // Basic tools
                 "codemerger_get_project_overview" => GetProjectOverview(),
                 "codemerger_list_files" => ListFiles(arguments),
                 "codemerger_get_file" => GetFile(arguments),
@@ -339,14 +421,32 @@ namespace CodeMerger.Services
                 "codemerger_get_type" => GetType(arguments),
                 "codemerger_get_dependencies" => GetDependencies(arguments),
                 "codemerger_get_type_hierarchy" => GetTypeHierarchy(),
-                // NEW TOOL HANDLERS
+                
+                // Smart context tools
                 "codemerger_search_content" => SearchContent(arguments),
                 "codemerger_get_context_for_task" => GetContextForTask(arguments),
+                
+                // Semantic analysis tools
+                "codemerger_get_method_body" => GetMethodBody(arguments),
+                "codemerger_find_usages" => FindUsages(arguments),
+                "codemerger_get_call_graph" => GetCallGraph(arguments),
+                "codemerger_find_implementations" => FindImplementations(arguments),
+                "codemerger_semantic_query" => SemanticQuery(arguments),
+                
+                // Refactoring tools
+                "codemerger_write_file" => WriteFile(arguments),
+                "codemerger_preview_write" => PreviewWriteFile(arguments),
+                "codemerger_rename_symbol" => RenameSymbol(arguments),
+                "codemerger_generate_interface" => GenerateInterface(arguments),
+                "codemerger_extract_method" => ExtractMethod(arguments),
+                
                 _ => $"Unknown tool: {toolName}"
             };
 
             return CreateToolResponse(id, result);
         }
+
+        #region Basic Tool Implementations
 
         private string GetProjectOverview()
         {
@@ -359,9 +459,9 @@ namespace CodeMerger.Services
             sb.AppendLine($"**Total Files:** {_projectAnalysis.TotalFiles}");
             sb.AppendLine($"**Total Tokens:** {_projectAnalysis.TotalTokens:N0}");
             sb.AppendLine($"**Total Types:** {_projectAnalysis.TypeHierarchy.Count}");
+            sb.AppendLine($"**Call Sites Tracked:** {_codeAnalyzer.CallSites.Count}");
             sb.AppendLine();
 
-            // Classification breakdown
             sb.AppendLine("## File Breakdown");
             var byClassification = _projectAnalysis.AllFiles
                 .GroupBy(f => f.Classification)
@@ -372,7 +472,6 @@ namespace CodeMerger.Services
                 sb.AppendLine($"- {group.Key}: {group.Count()} files");
             }
 
-            // Entry points
             sb.AppendLine();
             sb.AppendLine("## Key Entry Points");
             var entryPoints = _projectAnalysis.AllFiles
@@ -393,7 +492,6 @@ namespace CodeMerger.Services
 
             var files = _projectAnalysis.AllFiles.AsEnumerable();
 
-            // Filter by classification
             if (arguments.ValueKind != JsonValueKind.Undefined && arguments.TryGetProperty("classification", out var classEl))
             {
                 var classFilter = classEl.GetString();
@@ -403,7 +501,6 @@ namespace CodeMerger.Services
                 }
             }
 
-            // Limit
             var limit = 50;
             if (arguments.ValueKind != JsonValueKind.Undefined && arguments.TryGetProperty("limit", out var limitEl))
             {
@@ -423,7 +520,7 @@ namespace CodeMerger.Services
             if (total > limit)
             {
                 sb.AppendLine();
-                sb.AppendLine($"*Showing {limit} of {total} files. Use 'classification' filter or increase 'limit' to see more.*");
+                sb.AppendLine($"*Showing {limit} of {total} files.*");
             }
 
             return sb.ToString();
@@ -439,10 +536,8 @@ namespace CodeMerger.Services
             }
 
             var path = pathEl.GetString();
-            
-            // FIXED: Normalize path separators for cross-platform compatibility
             var normalizedPath = path?.Replace('/', Path.DirectorySeparatorChar).Replace('\\', Path.DirectorySeparatorChar);
-            
+
             var file = _projectAnalysis.AllFiles.FirstOrDefault(f =>
             {
                 var normalizedFilePath = f.RelativePath.Replace('/', Path.DirectorySeparatorChar).Replace('\\', Path.DirectorySeparatorChar);
@@ -496,7 +591,6 @@ namespace CodeMerger.Services
             sb.AppendLine($"# Search Results for: {query}");
             sb.AppendLine();
 
-            // Search types
             if (searchIn == "all" || searchIn == "types")
             {
                 var matchingTypes = _projectAnalysis.AllFiles
@@ -515,7 +609,6 @@ namespace CodeMerger.Services
                 }
             }
 
-            // Search methods
             if (searchIn == "all" || searchIn == "methods")
             {
                 var matchingMethods = _projectAnalysis.AllFiles
@@ -535,7 +628,6 @@ namespace CodeMerger.Services
                 }
             }
 
-            // Search files
             if (searchIn == "all" || searchIn == "files")
             {
                 var matchingFiles = _projectAnalysis.AllFiles
@@ -585,7 +677,7 @@ namespace CodeMerger.Services
             sb.AppendLine($"# {match.Type.Name}");
             sb.AppendLine();
             sb.AppendLine($"**Kind:** {match.Type.Kind}");
-            sb.AppendLine($"**File:** {match.File.RelativePath}");
+            sb.AppendLine($"**File:** `{match.File.RelativePath}` (lines {match.Type.StartLine}-{match.Type.EndLine})");
 
             if (!string.IsNullOrEmpty(match.Type.BaseType))
                 sb.AppendLine($"**Base Type:** {match.Type.BaseType}");
@@ -604,7 +696,13 @@ namespace CodeMerger.Services
                 {
                     var sig = !string.IsNullOrEmpty(member.Signature) ? member.Signature : member.Name;
                     var ret = !string.IsNullOrEmpty(member.ReturnType) ? $" : {member.ReturnType}" : "";
-                    sb.AppendLine($"- {member.AccessModifier} {sig}{ret}");
+                    var mods = new List<string>();
+                    if (member.IsStatic) mods.Add("static");
+                    if (member.IsAsync) mods.Add("async");
+                    if (member.IsVirtual) mods.Add("virtual");
+                    if (member.IsOverride) mods.Add("override");
+                    var modStr = mods.Any() ? $" [{string.Join(", ", mods)}]" : "";
+                    sb.AppendLine($"- {member.AccessModifier} {sig}{ret}{modStr} (line {member.StartLine})");
                 }
             }
 
@@ -626,7 +724,6 @@ namespace CodeMerger.Services
             sb.AppendLine($"# Dependencies for: {typeName}");
             sb.AppendLine();
 
-            // What this type depends on
             if (_projectAnalysis.DependencyMap.TryGetValue(typeName, out var deps) && deps.Count > 0)
             {
                 sb.AppendLine("## Uses (depends on)");
@@ -637,7 +734,6 @@ namespace CodeMerger.Services
                 sb.AppendLine();
             }
 
-            // What depends on this type (reverse dependencies)
             var reverseDeps = _projectAnalysis.DependencyMap
                 .Where(kvp => kvp.Value.Contains(typeName))
                 .Select(kvp => kvp.Key)
@@ -677,12 +773,12 @@ namespace CodeMerger.Services
             return sb.ToString();
         }
 
-        // ============================================================
-        // NEW TOOL IMPLEMENTATION: SearchContent
-        // ============================================================
+        #endregion
+
+        #region Smart Context Tools
+
         private string SearchContent(JsonElement arguments)
         {
-            if (_projectAnalysis == null) return "No project indexed.";
             if (_contextAnalyzer == null) return "Context analyzer not initialized.";
 
             if (arguments.ValueKind == JsonValueKind.Undefined || !arguments.TryGetProperty("pattern", out var patternEl))
@@ -691,44 +787,17 @@ namespace CodeMerger.Services
             }
 
             var pattern = patternEl.GetString() ?? "";
-            
-            // Parse optional parameters with defaults
-            var isRegex = true;
-            if (arguments.TryGetProperty("isRegex", out var isRegexEl))
-            {
-                isRegex = isRegexEl.GetBoolean();
-            }
-
-            var caseSensitive = false;
-            if (arguments.TryGetProperty("caseSensitive", out var caseSensitiveEl))
-            {
-                caseSensitive = caseSensitiveEl.GetBoolean();
-            }
-
-            var contextLines = 2;
-            if (arguments.TryGetProperty("contextLines", out var contextLinesEl))
-            {
-                contextLines = contextLinesEl.GetInt32();
-            }
-
-            var maxResults = 50;
-            if (arguments.TryGetProperty("maxResults", out var maxResultsEl))
-            {
-                maxResults = maxResultsEl.GetInt32();
-            }
-
-            Log($"SearchContent: pattern='{pattern}', isRegex={isRegex}, caseSensitive={caseSensitive}");
+            var isRegex = GetBool(arguments, "isRegex", true);
+            var caseSensitive = GetBool(arguments, "caseSensitive", false);
+            var contextLines = GetInt(arguments, "contextLines", 2);
+            var maxResults = GetInt(arguments, "maxResults", 50);
 
             var result = _contextAnalyzer.SearchContent(pattern, isRegex, caseSensitive, contextLines, maxResults);
             return result.ToMarkdown();
         }
 
-        // ============================================================
-        // NEW TOOL IMPLEMENTATION: GetContextForTask
-        // ============================================================
         private string GetContextForTask(JsonElement arguments)
         {
-            if (_projectAnalysis == null) return "No project indexed.";
             if (_contextAnalyzer == null) return "Context analyzer not initialized.";
 
             if (arguments.ValueKind == JsonValueKind.Undefined || !arguments.TryGetProperty("task", out var taskEl))
@@ -737,24 +806,232 @@ namespace CodeMerger.Services
             }
 
             var task = taskEl.GetString() ?? "";
-
-            // Parse optional parameters with defaults
-            var maxFiles = 10;
-            if (arguments.TryGetProperty("maxFiles", out var maxFilesEl))
-            {
-                maxFiles = maxFilesEl.GetInt32();
-            }
-
-            var maxTokens = 50000;
-            if (arguments.TryGetProperty("maxTokens", out var maxTokensEl))
-            {
-                maxTokens = maxTokensEl.GetInt32();
-            }
-
-            Log($"GetContextForTask: task='{task}', maxFiles={maxFiles}, maxTokens={maxTokens}");
+            var maxFiles = GetInt(arguments, "maxFiles", 10);
+            var maxTokens = GetInt(arguments, "maxTokens", 50000);
 
             var result = _contextAnalyzer.GetContextForTask(task, maxFiles, maxTokens);
             return result.ToMarkdown();
+        }
+
+        #endregion
+
+        #region Semantic Analysis Tools
+
+        private string GetMethodBody(JsonElement arguments)
+        {
+            if (_semanticAnalyzer == null) return "Semantic analyzer not initialized.";
+
+            var typeName = GetString(arguments, "typeName");
+            var methodName = GetString(arguments, "methodName");
+
+            if (string.IsNullOrEmpty(typeName) || string.IsNullOrEmpty(methodName))
+            {
+                return "Error: 'typeName' and 'methodName' parameters are required.";
+            }
+
+            var result = _semanticAnalyzer.GetMethodBody(typeName, methodName);
+            return result.ToMarkdown();
+        }
+
+        private string FindUsages(JsonElement arguments)
+        {
+            if (_semanticAnalyzer == null) return "Semantic analyzer not initialized.";
+
+            var symbolName = GetString(arguments, "symbolName");
+            if (string.IsNullOrEmpty(symbolName))
+            {
+                return "Error: 'symbolName' parameter is required.";
+            }
+
+            var symbolKind = GetString(arguments, "symbolKind");
+            var result = _semanticAnalyzer.FindUsages(symbolName, symbolKind);
+            return result.ToMarkdown();
+        }
+
+        private string GetCallGraph(JsonElement arguments)
+        {
+            if (_semanticAnalyzer == null) return "Semantic analyzer not initialized.";
+
+            var methodName = GetString(arguments, "methodName");
+            if (string.IsNullOrEmpty(methodName))
+            {
+                return "Error: 'methodName' parameter is required.";
+            }
+
+            var typeName = GetString(arguments, "typeName") ?? "";
+            var depth = GetInt(arguments, "depth", 2);
+
+            var result = _semanticAnalyzer.GetCallGraph(typeName, methodName, depth);
+            return result.ToMarkdown();
+        }
+
+        private string FindImplementations(JsonElement arguments)
+        {
+            if (_semanticAnalyzer == null) return "Semantic analyzer not initialized.";
+
+            var interfaceName = GetString(arguments, "interfaceName");
+            if (string.IsNullOrEmpty(interfaceName))
+            {
+                return "Error: 'interfaceName' parameter is required.";
+            }
+
+            var methodName = GetString(arguments, "methodName");
+            var result = _semanticAnalyzer.FindImplementations(interfaceName, methodName);
+            return result.ToMarkdown();
+        }
+
+        private string SemanticQuery(JsonElement arguments)
+        {
+            if (_semanticAnalyzer == null) return "Semantic analyzer not initialized.";
+
+            var options = new SemanticQueryOptions
+            {
+                IsAsync = GetNullableBool(arguments, "isAsync"),
+                IsStatic = GetNullableBool(arguments, "isStatic"),
+                IsVirtual = GetNullableBool(arguments, "isVirtual"),
+                ReturnType = GetString(arguments, "returnType"),
+                AccessModifier = GetString(arguments, "accessModifier"),
+                NamePattern = GetString(arguments, "namePattern"),
+                ImplementsInterface = GetString(arguments, "implementsInterface"),
+                FindInterfaces = GetBool(arguments, "findInterfaces", false),
+                MissingXmlDocs = GetBool(arguments, "missingXmlDocs", false)
+            };
+
+            var memberKind = GetString(arguments, "memberKind");
+            if (!string.IsNullOrEmpty(memberKind) && Enum.TryParse<CodeMemberKind>(memberKind, true, out var kind))
+            {
+                options.MemberKind = kind;
+            }
+
+            var result = _semanticAnalyzer.SemanticQuery(options);
+            return result.ToMarkdown();
+        }
+
+        #endregion
+
+        #region Refactoring Tools
+
+        private string WriteFile(JsonElement arguments)
+        {
+            if (_refactoringService == null) return "Refactoring service not initialized.";
+
+            var path = GetString(arguments, "path");
+            var content = GetString(arguments, "content");
+
+            if (string.IsNullOrEmpty(path) || content == null)
+            {
+                return "Error: 'path' and 'content' parameters are required.";
+            }
+
+            var createBackup = GetBool(arguments, "createBackup", true);
+            var result = _refactoringService.WriteFile(path, content, createBackup);
+            return result.ToMarkdown();
+        }
+
+        private string PreviewWriteFile(JsonElement arguments)
+        {
+            if (_refactoringService == null) return "Refactoring service not initialized.";
+
+            var path = GetString(arguments, "path");
+            var content = GetString(arguments, "content");
+
+            if (string.IsNullOrEmpty(path) || content == null)
+            {
+                return "Error: 'path' and 'content' parameters are required.";
+            }
+
+            var result = _refactoringService.PreviewWriteFile(path, content);
+            return result.ToMarkdown();
+        }
+
+        private string RenameSymbol(JsonElement arguments)
+        {
+            if (_refactoringService == null) return "Refactoring service not initialized.";
+
+            var oldName = GetString(arguments, "oldName");
+            var newName = GetString(arguments, "newName");
+
+            if (string.IsNullOrEmpty(oldName) || string.IsNullOrEmpty(newName))
+            {
+                return "Error: 'oldName' and 'newName' parameters are required.";
+            }
+
+            var preview = GetBool(arguments, "preview", true);
+            var result = _refactoringService.RenameSymbol(oldName, newName, preview);
+            return result.ToMarkdown();
+        }
+
+        private string GenerateInterface(JsonElement arguments)
+        {
+            if (_refactoringService == null) return "Refactoring service not initialized.";
+
+            var className = GetString(arguments, "className");
+            if (string.IsNullOrEmpty(className))
+            {
+                return "Error: 'className' parameter is required.";
+            }
+
+            var interfaceName = GetString(arguments, "interfaceName");
+            var result = _refactoringService.GenerateInterface(className, interfaceName);
+            return result.ToMarkdown();
+        }
+
+        private string ExtractMethod(JsonElement arguments)
+        {
+            if (_refactoringService == null) return "Refactoring service not initialized.";
+
+            var filePath = GetString(arguments, "filePath");
+            var methodName = GetString(arguments, "methodName");
+            var startLine = GetInt(arguments, "startLine", 0);
+            var endLine = GetInt(arguments, "endLine", 0);
+
+            if (string.IsNullOrEmpty(filePath) || string.IsNullOrEmpty(methodName) || startLine == 0 || endLine == 0)
+            {
+                return "Error: 'filePath', 'startLine', 'endLine', and 'methodName' parameters are required.";
+            }
+
+            var result = _refactoringService.ExtractMethod(filePath, startLine, endLine, methodName);
+            return result.ToMarkdown();
+        }
+
+        #endregion
+
+        #region Helper Methods
+
+        private string? GetString(JsonElement args, string name)
+        {
+            if (args.ValueKind != JsonValueKind.Undefined && args.TryGetProperty(name, out var el))
+            {
+                return el.GetString();
+            }
+            return null;
+        }
+
+        private int GetInt(JsonElement args, string name, int defaultValue)
+        {
+            if (args.ValueKind != JsonValueKind.Undefined && args.TryGetProperty(name, out var el))
+            {
+                return el.GetInt32();
+            }
+            return defaultValue;
+        }
+
+        private bool GetBool(JsonElement args, string name, bool defaultValue)
+        {
+            if (args.ValueKind != JsonValueKind.Undefined && args.TryGetProperty(name, out var el))
+            {
+                return el.GetBoolean();
+            }
+            return defaultValue;
+        }
+
+        private bool? GetNullableBool(JsonElement args, string name)
+        {
+            if (args.ValueKind != JsonValueKind.Undefined && args.TryGetProperty(name, out var el))
+            {
+                return el.GetBoolean();
+            }
+            return null;
         }
 
         private string CreateToolResponse(int id, string content)
@@ -789,5 +1066,7 @@ namespace CodeMerger.Services
         {
             OnLog?.Invoke($"[MCP] {message}");
         }
+
+        #endregion
     }
 }
