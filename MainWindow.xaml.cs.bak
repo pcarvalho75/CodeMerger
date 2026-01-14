@@ -40,8 +40,11 @@ namespace CodeMerger
         private Process? _mcpProcess;
         private NamedPipeServerStream? _pipeServer;
         private readonly ClaudeDesktopService _claudeDesktopService = new ClaudeDesktopService();
+        private CancellationTokenSource? _handshakeListenerCts;
+        private CancellationTokenSource? _activityListenerCts;
 
         private const int MCP_RECOMMENDED_THRESHOLD = 500000;
+        public const string HandshakePipeName = "codemerger_handshake";
 
         public string StatusText
         {
@@ -89,20 +92,119 @@ namespace CodeMerger
                 PromptCreateFirstProject();
             }
 
-            // Check if paths were auto-healed (ClickOnce update detection)
-            if (Application.Current.Properties.Contains("ConfigHealedCount"))
+            // Check if config was auto-healed
+            if (Application.Current.Properties.Contains("ConfigHealed"))
             {
-                int count = (int)Application.Current.Properties["ConfigHealedCount"];
-                if (count > 0)
+                bool healed = (bool)Application.Current.Properties["ConfigHealed"];
+                if (healed)
                 {
                     string message = _claudeDesktopService.IsClickOnceDeployment()
-                        ? $"ClickOnce update detected. Updated {count} config entry(s). Please restart Claude Desktop."
-                        : $"Updated {count} Claude Desktop config entry(s) to match current installation.";
+                        ? "ClickOnce update detected. Updated Claude Desktop config. Please restart Claude Desktop."
+                        : "Updated Claude Desktop config to match current installation.";
                     UpdateStatus(message, Brushes.DarkGreen);
                 }
             }
 
             RefreshClaudeDesktopStatus();
+            StartHandshakeListener();
+            StartActivityListener();
+        }
+
+        private void StartHandshakeListener()
+        {
+            _handshakeListenerCts = new CancellationTokenSource();
+            var token = _handshakeListenerCts.Token;
+
+            Task.Run(async () =>
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    try
+                    {
+                        using var pipe = new NamedPipeServerStream(HandshakePipeName, PipeDirection.In, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+                        await pipe.WaitForConnectionAsync(token);
+
+                        using var reader = new StreamReader(pipe);
+                        string? message = await reader.ReadLineAsync();
+
+                        if (!string.IsNullOrEmpty(message))
+                        {
+                            Application.Current.Dispatcher.Invoke(() =>
+                            {
+                                OnHandshakeReceived(message);
+                            });
+                        }
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        break;
+                    }
+                    catch
+                    {
+                        // Pipe error, retry after short delay
+                        await Task.Delay(500, token);
+                    }
+                }
+            }, token);
+        }
+
+        private void StartActivityListener()
+        {
+            _activityListenerCts = new CancellationTokenSource();
+            var token = _activityListenerCts.Token;
+
+            Task.Run(async () =>
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    try
+                    {
+                        using var pipe = new NamedPipeServerStream(McpServer.ActivityPipeName, PipeDirection.In, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+                        await pipe.WaitForConnectionAsync(token);
+
+                        using var reader = new StreamReader(pipe);
+                        string? message = await reader.ReadLineAsync();
+
+                        if (!string.IsNullOrEmpty(message))
+                        {
+                            Application.Current.Dispatcher.Invoke(() =>
+                            {
+                                OnActivityReceived(message);
+                            });
+                        }
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        break;
+                    }
+                    catch
+                    {
+                        // Pipe error, retry after short delay
+                        await Task.Delay(100, token);
+                    }
+                }
+            }, token);
+        }
+
+        private void OnHandshakeReceived(string projectName)
+        {
+            UpdateStatus($"✓ Claude connected via MCP (project: {projectName})", Brushes.DarkGreen);
+        }
+
+        private void OnActivityReceived(string message)
+        {
+            // Message format: "projectName|activity"
+            var parts = message.Split('|', 2);
+            if (parts.Length == 2)
+            {
+                var projectName = parts[0];
+                var activity = parts[1];
+                UpdateStatus($"🔄 [{projectName}] {activity}", Brushes.DarkCyan);
+            }
+            else
+            {
+                UpdateStatus($"🔄 {message}", Brushes.DarkCyan);
+            }
         }
 
         private void RefreshClaudeDesktopStatus()
@@ -120,22 +222,16 @@ namespace CodeMerger
                 claudeDownloadButton.Visibility = Visibility.Visible;
             }
 
-            if (_currentProject == null)
+            // Check if CodeMerger is configured in Claude Desktop
+            if (_claudeDesktopService.IsConfigured())
             {
-                claudeConfigStatus.Text = "No project selected";
-                claudeConfigStatus.Foreground = Brushes.Gray;
-                claudeAddConfigButton.Visibility = Visibility.Collapsed;
-                return;
-            }
-
-            if (_claudeDesktopService.IsProjectConfigured(_currentProject.Name))
-            {
-                var configuredPath = _claudeDesktopService.GetEntryPath(_currentProject.Name);
+                var configuredPath = _claudeDesktopService.GetConfiguredExePath();
                 var currentPath = _claudeDesktopService.GetCurrentExePath();
 
                 if (string.Equals(configuredPath, currentPath, StringComparison.OrdinalIgnoreCase))
                 {
-                    claudeConfigStatus.Text = $"Configured ✓ ({_currentProject.Name})";
+                    var activeProject = _projectService.GetActiveProject();
+                    claudeConfigStatus.Text = $"Configured ✓ (active: {activeProject ?? "none"})";
                     claudeConfigStatus.Foreground = Brushes.Green;
                 }
                 else
@@ -147,7 +243,7 @@ namespace CodeMerger
             }
             else
             {
-                claudeConfigStatus.Text = $"Not configured ({_currentProject.Name})";
+                claudeConfigStatus.Text = "Not configured";
                 claudeConfigStatus.Foreground = Brushes.Gray;
                 claudeAddConfigButton.Visibility = Visibility.Visible;
             }
@@ -160,17 +256,11 @@ namespace CodeMerger
 
         private void ClaudeAddConfig_Click(object sender, RoutedEventArgs e)
         {
-            if (_currentProject == null)
-            {
-                UpdateStatus("No project selected.", Brushes.Red);
-                return;
-            }
-
             try
             {
                 var exePath = _claudeDesktopService.GetCurrentExePath();
-                _claudeDesktopService.UpsertProjectEntry(_currentProject.Name, exePath);
-                UpdateStatus($"Added '{_currentProject.Name}' to Claude Desktop config.", Brushes.Green);
+                _claudeDesktopService.EnsureConfigured(exePath);
+                UpdateStatus("Added CodeMerger to Claude Desktop config.", Brushes.Green);
                 RefreshClaudeDesktopStatus();
             }
             catch (Exception ex)
@@ -186,6 +276,16 @@ namespace CodeMerger
 
         private void MainWindow_Closing(object? sender, CancelEventArgs e)
         {
+            // Stop handshake listener
+            _handshakeListenerCts?.Cancel();
+            _handshakeListenerCts?.Dispose();
+            _handshakeListenerCts = null;
+
+            // Stop activity listener
+            _activityListenerCts?.Cancel();
+            _activityListenerCts?.Dispose();
+            _activityListenerCts = null;
+
             StopMcpServer();
 
             // Unsubscribe from GitService events to prevent leaks
@@ -210,7 +310,10 @@ namespace CodeMerger
 
             if (projects.Count > 0)
             {
-                projectComboBox.SelectedIndex = 0;
+                // Try to select the active project, otherwise select first
+                var activeProject = _projectService.GetActiveProject();
+                var projectToSelect = projects.Find(p => p.Name == activeProject) ?? projects[0];
+                projectComboBox.SelectedItem = projectToSelect;
             }
         }
 
@@ -237,6 +340,9 @@ namespace CodeMerger
 
                 _currentProject = selected;
 
+                // Set as active project for MCP mode
+                _projectService.SetActiveProject(_currentProject.Name);
+
                 // Initialize GitService for this project
                 string projectFolder = _projectService.GetProjectFolder(_currentProject.Name);
                 _gitService = new GitService(projectFolder);
@@ -245,7 +351,8 @@ namespace CodeMerger
                 LoadProjectData(_currentProject);
                 projectStatusText.Text = $"Last modified: {_currentProject.LastModifiedDate:g}";
 
-                AutoUpdateClaudeConfig();
+                // Ensure Claude Desktop config is set up
+                EnsureClaudeConfig();
                 RefreshClaudeDesktopStatus();
             }
         }
@@ -258,14 +365,12 @@ namespace CodeMerger
             });
         }
 
-        private void AutoUpdateClaudeConfig()
+        private void EnsureClaudeConfig()
         {
-            if (_currentProject == null) return;
-
             try
             {
                 var exePath = _claudeDesktopService.GetCurrentExePath();
-                _claudeDesktopService.UpsertProjectEntry(_currentProject.Name, exePath);
+                _claudeDesktopService.EnsureConfigured(exePath);
             }
             catch
             {
@@ -808,12 +913,9 @@ namespace CodeMerger
 
             try
             {
-                if (!_claudeDesktopService.IsProjectConfigured(_currentProject.Name))
-                {
-                    var exePath = _claudeDesktopService.GetCurrentExePath();
-                    _claudeDesktopService.UpsertProjectEntry(_currentProject.Name, exePath);
-                    RefreshClaudeDesktopStatus();
-                }
+                // Ensure config is set up
+                EnsureClaudeConfig();
+                RefreshClaudeDesktopStatus();
 
                 UpdateStatus("Indexing project for MCP...", Brushes.Blue);
 
