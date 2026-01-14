@@ -7,6 +7,7 @@ namespace CodeMerger.Models
     {
         public string Name { get; set; } = string.Empty;
         public List<string> InputDirectories { get; set; } = new List<string>();
+        public List<string> DisabledDirectories { get; set; } = new List<string>(); // Directories that are unchecked
         public string Extensions { get; set; } = ".cs, .xaml";
         public string IgnoredDirectories { get; set; } = "bin, obj, .vs, Properties";
         public DateTime CreatedDate { get; set; } = DateTime.Now;

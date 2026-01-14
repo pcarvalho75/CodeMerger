@@ -217,7 +217,25 @@ namespace CodeMerger
                 _currentProject = selected;
                 LoadProjectData(_currentProject);
                 projectStatusText.Text = $"Last modified: {_currentProject.LastModifiedDate:g}";
+                
+                // Auto-update Claude Desktop config when switching projects (#1)
+                AutoUpdateClaudeConfig();
                 RefreshClaudeDesktopStatus();
+            }
+        }
+
+        private void AutoUpdateClaudeConfig()
+        {
+            if (_currentProject == null) return;
+
+            try
+            {
+                var exePath = _claudeDesktopService.GetCurrentExePath();
+                _claudeDesktopService.UpsertProjectEntry(_currentProject.Name, exePath);
+            }
+            catch
+            {
+                // Silently fail - user can manually add config if needed
             }
         }
 
@@ -232,7 +250,9 @@ namespace CodeMerger
                 InputDirectories.Clear();
                 foreach (var dir in project.InputDirectories)
                 {
-                    InputDirectories.Add(new SelectableItem(dir, true));
+                    // Check if directory was previously disabled (#2 - persist checkbox state)
+                    bool isSelected = !project.DisabledDirectories.Contains(dir);
+                    InputDirectories.Add(new SelectableItem(dir, isSelected));
                 }
 
                 extensionsTextBox.Text = project.Extensions;
@@ -248,6 +268,7 @@ namespace CodeMerger
             finally
             {
                 _isLoadingProject = false;
+                UpdateDirectoryCount();
                 await ScanFilesAsync();
             }
         }
@@ -323,6 +344,13 @@ namespace CodeMerger
             if (_currentProject == null || _isLoadingProject) return;
 
             _currentProject.InputDirectories = InputDirectories.Select(item => item.Path).ToList();
+            
+            // Save disabled directories (#2 - persist checkbox state)
+            _currentProject.DisabledDirectories = InputDirectories
+                .Where(item => !item.IsSelected)
+                .Select(item => item.Path)
+                .ToList();
+            
             _currentProject.Extensions = extensionsTextBox.Text;
             _currentProject.IgnoredDirectories = ignoredDirsTextBox.Text;
 
@@ -347,6 +375,7 @@ namespace CodeMerger
                 {
                     InputDirectories.Add(new SelectableItem(folderPath, true));
                     SaveCurrentProject();
+                    UpdateDirectoryCount();
                     await ScanFilesAsync();
                 }
             }
@@ -362,7 +391,52 @@ namespace CodeMerger
                     InputDirectories.Remove(item);
                 }
                 SaveCurrentProject();
+                UpdateDirectoryCount();
                 await ScanFilesAsync();
+            }
+        }
+
+        // #4 - Select All directories
+        private async void SelectAllDirectories_Click(object sender, RoutedEventArgs e)
+        {
+            foreach (var item in InputDirectories)
+            {
+                item.IsSelected = true;
+            }
+            SaveCurrentProject();
+            UpdateDirectoryCount();
+            await ScanFilesAsync();
+        }
+
+        // #4 - Deselect All directories
+        private async void DeselectAllDirectories_Click(object sender, RoutedEventArgs e)
+        {
+            foreach (var item in InputDirectories)
+            {
+                item.IsSelected = false;
+            }
+            SaveCurrentProject();
+            UpdateDirectoryCount();
+            await ScanFilesAsync();
+        }
+
+        // #5 - Update directory count display
+        private void UpdateDirectoryCount()
+        {
+            int total = InputDirectories.Count;
+            int active = InputDirectories.Count(item => item.IsSelected);
+            
+            if (total == 0)
+            {
+                directoryCountText.Text = "";
+            }
+            else if (active == total)
+            {
+                directoryCountText.Text = $"({total})";
+            }
+            else
+            {
+                directoryCountText.Text = $"({active}/{total} active)";
             }
         }
 
@@ -707,6 +781,7 @@ namespace CodeMerger
         {
             if (!IsLoaded || _isLoadingProject) return;
             SaveCurrentProject();
+            UpdateDirectoryCount();
             await ScanFilesAsync();
         }
 

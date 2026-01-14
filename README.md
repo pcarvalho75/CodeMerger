@@ -1,4 +1,5 @@
-Could not copy "C:\Users\paulo\source\repos\pcarvalho75\CodeMerger\obj\Debug\net8.0-windows\apphost.exe" to "bin\Debug\net8.0-windows\CodeMerger.exe". Exceeded retry count of 10. Failed. The file is locked by: "CodeMerger (21724)"
+ok, and one more thing i would like to add an option so i can copy and paste a git repository (notmine but open) and then it also includes that in the project, i dont know what is the best way, if you have to download everythng and index,  the index will need to be very smart in order to handle big things. also, make the program understant python, besides c#, do all and update my project
+
 # CodeMerger v3.0 - Comprehensive Upgrade
 
 ## Overview
