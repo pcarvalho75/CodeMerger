@@ -195,6 +195,17 @@ namespace CodeMerger
             {
                 var projectName = parts[0];
                 var activity = parts[1];
+
+                // Handle disconnect notification
+                if (activity == "DISCONNECT")
+                {
+                    connectionIndicator.Fill = new SolidColorBrush(Color.FromRgb(136, 146, 160)); // Gray
+                    connectionStatusText.Text = "Disconnected";
+                    connectionStatusText.Foreground = new SolidColorBrush(Color.FromRgb(136, 146, 160));
+                    UpdateStatus($"MCP server disconnected (project: {projectName})", Brushes.Gray);
+                    return;
+                }
+
                 UpdateStatus($"🔄 [{projectName}] {activity}", new SolidColorBrush(Color.FromRgb(100, 200, 255)));
             }
             else

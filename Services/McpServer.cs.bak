@@ -219,7 +219,6 @@ namespace CodeMerger.Services
 
         public void Stop()
         {
-            SendDisconnect();
             _cancellationTokenSource?.Cancel();
             Log("MCP Server stopping...");
         }

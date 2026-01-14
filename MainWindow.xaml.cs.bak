@@ -28,23 +28,18 @@ namespace CodeMerger
         private readonly CodeAnalyzer _codeAnalyzer = new CodeAnalyzer();
         private readonly IndexGenerator _indexGenerator = new IndexGenerator();
         private readonly McpServer _mcpServer = new McpServer();
-        private Project? _currentProject;
-        private CancellationTokenSource? _mcpCancellation;
-        private GitService? _gitService;
-
-        private string _statusText = string.Empty;
-        private Brush _statusForeground = Brushes.Black;
-        private bool _isScanning = false;
-        private bool _isLoadingProject = false;
-        private int _estimatedTokens = 0;
-        private Process? _mcpProcess;
-        private NamedPipeServerStream? _pipeServer;
         private readonly ClaudeDesktopService _claudeDesktopService = new ClaudeDesktopService();
+        
+        private Project? _currentProject;
+        private GitService? _gitService;
         private CancellationTokenSource? _handshakeListenerCts;
         private CancellationTokenSource? _activityListenerCts;
 
-        private const int MCP_RECOMMENDED_THRESHOLD = 500000;
-        public const string HandshakePipeName = "codemerger_handshake";
+        private string _statusText = string.Empty;
+        private Brush _statusForeground = Brushes.White;
+        private bool _isScanning = false;
+        private bool _isLoadingProject = false;
+        private int _estimatedTokens = 0;
 
         public string StatusText
         {
@@ -78,7 +73,7 @@ namespace CodeMerger
 
             _mcpServer.OnLog += OnMcpLog;
 
-            UpdateStatus("Ready.", Brushes.Black);
+            UpdateStatus("Ready", Brushes.Gray);
             Loaded += MainWindow_Loaded;
             Closing += MainWindow_Closing;
         }
@@ -92,16 +87,15 @@ namespace CodeMerger
                 PromptCreateFirstProject();
             }
 
-            // Check if config was auto-healed
             if (Application.Current.Properties.Contains("ConfigHealed"))
             {
                 bool healed = (bool)Application.Current.Properties["ConfigHealed"];
                 if (healed)
                 {
                     string message = _claudeDesktopService.IsClickOnceDeployment()
-                        ? "ClickOnce update detected. Updated Claude Desktop config. Please restart Claude Desktop."
+                        ? "ClickOnce update detected. Updated Claude Desktop config."
                         : "Updated Claude Desktop config to match current installation.";
-                    UpdateStatus(message, Brushes.DarkGreen);
+                    UpdateStatus(message, Brushes.LightGreen);
                 }
             }
 
@@ -121,7 +115,7 @@ namespace CodeMerger
                 {
                     try
                     {
-                        using var pipe = new NamedPipeServerStream(HandshakePipeName, PipeDirection.In, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+                        using var pipe = new NamedPipeServerStream(App.HandshakePipeName, PipeDirection.In, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
                         await pipe.WaitForConnectionAsync(token);
 
                         using var reader = new StreamReader(pipe);
@@ -141,7 +135,6 @@ namespace CodeMerger
                     }
                     catch
                     {
-                        // Pipe error, retry after short delay
                         await Task.Delay(500, token);
                     }
                 }
@@ -179,7 +172,6 @@ namespace CodeMerger
                     }
                     catch
                     {
-                        // Pipe error, retry after short delay
                         await Task.Delay(100, token);
                     }
                 }
@@ -188,22 +180,26 @@ namespace CodeMerger
 
         private void OnHandshakeReceived(string projectName)
         {
-            UpdateStatus($"✓ Claude connected via MCP (project: {projectName})", Brushes.DarkGreen);
+            // Update connection indicator
+            connectionIndicator.Fill = new SolidColorBrush(Color.FromRgb(0, 217, 165)); // AccentSuccess
+            connectionStatusText.Text = $"Connected: {projectName}";
+            connectionStatusText.Foreground = new SolidColorBrush(Color.FromRgb(0, 217, 165));
+            
+            UpdateStatus($"✓ Claude connected via MCP (project: {projectName})", Brushes.LightGreen);
         }
 
         private void OnActivityReceived(string message)
         {
-            // Message format: "projectName|activity"
             var parts = message.Split('|', 2);
             if (parts.Length == 2)
             {
                 var projectName = parts[0];
                 var activity = parts[1];
-                UpdateStatus($"🔄 [{projectName}] {activity}", Brushes.DarkCyan);
+                UpdateStatus($"🔄 [{projectName}] {activity}", new SolidColorBrush(Color.FromRgb(100, 200, 255)));
             }
             else
             {
-                UpdateStatus($"🔄 {message}", Brushes.DarkCyan);
+                UpdateStatus($"🔄 {message}", new SolidColorBrush(Color.FromRgb(100, 200, 255)));
             }
         }
 
@@ -212,17 +208,16 @@ namespace CodeMerger
             if (_claudeDesktopService.IsClaudeDesktopInstalled())
             {
                 claudeInstallStatus.Text = "Installed ✓";
-                claudeInstallStatus.Foreground = Brushes.Green;
+                claudeInstallStatus.Foreground = new SolidColorBrush(Color.FromRgb(0, 217, 165));
                 claudeDownloadButton.Visibility = Visibility.Collapsed;
             }
             else
             {
                 claudeInstallStatus.Text = "Not installed";
-                claudeInstallStatus.Foreground = Brushes.Gray;
+                claudeInstallStatus.Foreground = new SolidColorBrush(Color.FromRgb(136, 146, 160));
                 claudeDownloadButton.Visibility = Visibility.Visible;
             }
 
-            // Check if CodeMerger is configured in Claude Desktop
             if (_claudeDesktopService.IsConfigured())
             {
                 var configuredPath = _claudeDesktopService.GetConfiguredExePath();
@@ -231,20 +226,20 @@ namespace CodeMerger
                 if (string.Equals(configuredPath, currentPath, StringComparison.OrdinalIgnoreCase))
                 {
                     var activeProject = _projectService.GetActiveProject();
-                    claudeConfigStatus.Text = $"Configured ✓ (active: {activeProject ?? "none"})";
-                    claudeConfigStatus.Foreground = Brushes.Green;
+                    claudeConfigStatus.Text = $"Ready ✓";
+                    claudeConfigStatus.Foreground = new SolidColorBrush(Color.FromRgb(0, 217, 165));
                 }
                 else
                 {
-                    claudeConfigStatus.Text = "Path mismatch (will auto-fix)";
-                    claudeConfigStatus.Foreground = Brushes.Orange;
+                    claudeConfigStatus.Text = "Path mismatch";
+                    claudeConfigStatus.Foreground = new SolidColorBrush(Color.FromRgb(255, 193, 7));
                 }
                 claudeAddConfigButton.Visibility = Visibility.Collapsed;
             }
             else
             {
                 claudeConfigStatus.Text = "Not configured";
-                claudeConfigStatus.Foreground = Brushes.Gray;
+                claudeConfigStatus.Foreground = new SolidColorBrush(Color.FromRgb(136, 146, 160));
                 claudeAddConfigButton.Visibility = Visibility.Visible;
             }
         }
@@ -260,12 +255,12 @@ namespace CodeMerger
             {
                 var exePath = _claudeDesktopService.GetCurrentExePath();
                 _claudeDesktopService.EnsureConfigured(exePath);
-                UpdateStatus("Added CodeMerger to Claude Desktop config.", Brushes.Green);
+                UpdateStatus("Added CodeMerger to Claude Desktop config.", Brushes.LightGreen);
                 RefreshClaudeDesktopStatus();
             }
             catch (Exception ex)
             {
-                UpdateStatus($"Failed to update config: {ex.Message}", Brushes.Red);
+                UpdateStatus($"Failed to update config: {ex.Message}", new SolidColorBrush(Color.FromRgb(233, 69, 96)));
             }
         }
 
@@ -276,19 +271,14 @@ namespace CodeMerger
 
         private void MainWindow_Closing(object? sender, CancelEventArgs e)
         {
-            // Stop handshake listener
             _handshakeListenerCts?.Cancel();
             _handshakeListenerCts?.Dispose();
             _handshakeListenerCts = null;
 
-            // Stop activity listener
             _activityListenerCts?.Cancel();
             _activityListenerCts?.Dispose();
             _activityListenerCts = null;
 
-            StopMcpServer();
-
-            // Unsubscribe from GitService events to prevent leaks
             if (_gitService != null)
             {
                 _gitService.OnProgress -= OnGitProgress;
@@ -299,7 +289,7 @@ namespace CodeMerger
         {
             Dispatcher.Invoke(() =>
             {
-                UpdateStatus(message, Brushes.DarkGreen);
+                UpdateStatus(message, Brushes.LightGreen);
             });
         }
 
@@ -310,7 +300,6 @@ namespace CodeMerger
 
             if (projects.Count > 0)
             {
-                // Try to select the active project, otherwise select first
                 var activeProject = _projectService.GetActiveProject();
                 var projectToSelect = projects.Find(p => p.Name == activeProject) ?? projects[0];
                 projectComboBox.SelectedItem = projectToSelect;
@@ -332,26 +321,20 @@ namespace CodeMerger
         {
             if (projectComboBox.SelectedItem is Project selected)
             {
-                // Unsubscribe from previous GitService if exists
                 if (_gitService != null)
                 {
                     _gitService.OnProgress -= OnGitProgress;
                 }
 
                 _currentProject = selected;
-
-                // Set as active project for MCP mode
                 _projectService.SetActiveProject(_currentProject.Name);
 
-                // Initialize GitService for this project
                 string projectFolder = _projectService.GetProjectFolder(_currentProject.Name);
                 _gitService = new GitService(projectFolder);
                 _gitService.OnProgress += OnGitProgress;
 
                 LoadProjectData(_currentProject);
-                projectStatusText.Text = $"Last modified: {_currentProject.LastModifiedDate:g}";
 
-                // Ensure Claude Desktop config is set up
                 EnsureClaudeConfig();
                 RefreshClaudeDesktopStatus();
             }
@@ -393,7 +376,6 @@ namespace CodeMerger
                     InputDirectories.Add(new SelectableItem(dir, isSelected));
                 }
 
-                // Load external repositories
                 ExternalRepositories.Clear();
                 foreach (var repo in project.ExternalRepositories)
                 {
@@ -406,12 +388,11 @@ namespace CodeMerger
                 string projectFolder = _projectService.GetProjectFolder(project.Name);
                 outputFileTextBox.Text = projectFolder;
 
-                // Auto-update external repos
                 await UpdateExternalReposAsync();
             }
             catch (Exception ex)
             {
-                UpdateStatus($"Error loading project data: {ex.Message}", Brushes.Red);
+                UpdateStatus($"Error loading project: {ex.Message}", new SolidColorBrush(Color.FromRgb(233, 69, 96)));
             }
             finally
             {
@@ -523,12 +504,9 @@ namespace CodeMerger
 
             _currentProject.Extensions = extensionsTextBox.Text;
             _currentProject.IgnoredDirectories = ignoredDirsTextBox.Text;
-
-            // Save external repositories
             _currentProject.ExternalRepositories = ExternalRepositories.ToList();
 
             _projectService.SaveProject(_currentProject);
-            projectStatusText.Text = $"Saved: {_currentProject.LastModifiedDate:g}";
         }
 
         private async void AddDirectory_Click(object sender, RoutedEventArgs e)
@@ -616,7 +594,7 @@ namespace CodeMerger
         {
             if (_gitService == null || _currentProject == null)
             {
-                UpdateStatus("No project selected.", Brushes.Red);
+                UpdateStatus("No project selected.", new SolidColorBrush(Color.FromRgb(233, 69, 96)));
                 return;
             }
 
@@ -624,14 +602,13 @@ namespace CodeMerger
 
             if (!GitService.IsValidGitUrl(url))
             {
-                UpdateStatus("Invalid Git URL. Use https://github.com/user/repo format.", Brushes.Red);
+                UpdateStatus("Invalid Git URL. Use https://github.com/user/repo format.", new SolidColorBrush(Color.FromRgb(233, 69, 96)));
                 return;
             }
 
-            // Check if already added
             if (ExternalRepositories.Any(r => r.Url.Equals(url, StringComparison.OrdinalIgnoreCase)))
             {
-                UpdateStatus("Repository already added.", Brushes.Orange);
+                UpdateStatus("Repository already added.", new SolidColorBrush(Color.FromRgb(255, 193, 7)));
                 return;
             }
 
@@ -652,7 +629,7 @@ namespace CodeMerger
             catch (Exception ex)
             {
                 gitStatusText.Text = $"Clone failed: {ex.Message}";
-                UpdateStatus($"Failed to clone: {ex.Message}", Brushes.Red);
+                UpdateStatus($"Failed to clone: {ex.Message}", new SolidColorBrush(Color.FromRgb(233, 69, 96)));
             }
             finally
             {
@@ -743,7 +720,7 @@ namespace CodeMerger
             }
             else
             {
-                MessageBox.Show("Output folder does not exist yet. Run Merge first.", "Info", MessageBoxButton.OK, MessageBoxImage.Information);
+                MessageBox.Show("Output folder does not exist yet.", "Info", MessageBoxButton.OK, MessageBoxImage.Information);
             }
         }
 
@@ -753,58 +730,33 @@ namespace CodeMerger
             {
                 recommendationBanner.Visibility = Visibility.Collapsed;
             }
-            else if (_estimatedTokens < MCP_RECOMMENDED_THRESHOLD)
-            {
-                recommendationBanner.Visibility = Visibility.Visible;
-                recommendationBanner.Background = new SolidColorBrush(Color.FromRgb(212, 237, 218));
-                recommendationBanner.BorderBrush = new SolidColorBrush(Color.FromRgb(195, 230, 203));
-                recommendationText.Text = $"Project size: ~{_estimatedTokens:N0} tokens. Recommended: Generate Chunks and upload to Claude Project.";
-            }
             else
             {
                 recommendationBanner.Visibility = Visibility.Visible;
-                recommendationBanner.Background = new SolidColorBrush(Color.FromRgb(255, 243, 205));
-                recommendationBanner.BorderBrush = new SolidColorBrush(Color.FromRgb(255, 238, 186));
-                recommendationText.Text = $"Large project: ~{_estimatedTokens:N0} tokens. Recommended: Use MCP Server for dynamic access (better for large codebases).";
+                recommendationText.Text = $"Project size: ~{_estimatedTokens:N0} tokens. Claude will access files dynamically via MCP.";
             }
         }
 
+        // Keep for compatibility - hidden in UI
         private async void Merge_Click(object sender, RoutedEventArgs e)
         {
             if (FoundFiles.Count == 0)
             {
-                UpdateStatus("No files to merge. Please add directories and check filters.", Brushes.Red);
+                UpdateStatus("No files to merge.", new SolidColorBrush(Color.FromRgb(233, 69, 96)));
                 return;
             }
 
             if (_currentProject == null)
             {
-                UpdateStatus("No project selected.", Brushes.Red);
+                UpdateStatus("No project selected.", new SolidColorBrush(Color.FromRgb(233, 69, 96)));
                 return;
-            }
-
-            int estimatedChunks = (int)Math.Ceiling(_estimatedTokens / 150000.0);
-
-            if (estimatedChunks > 5)
-            {
-                var result = MessageBox.Show(
-                    $"This project is large (~{_estimatedTokens:N0} tokens) and will generate {estimatedChunks} chunks.\n\nContinue?",
-                    "Large Project Warning",
-                    MessageBoxButton.YesNo,
-                    MessageBoxImage.Warning);
-
-                if (result != MessageBoxResult.Yes)
-                {
-                    UpdateStatus("Merge cancelled.", Brushes.Black);
-                    return;
-                }
             }
 
             string projectFolder = _projectService.GetProjectFolder(_currentProject.Name);
             var filesToMerge = FoundFiles.ToList();
 
             SetUIState(false);
-            UpdateStatus("Analyzing files...", Brushes.Blue);
+            UpdateStatus("Analyzing files...", new SolidColorBrush(Color.FromRgb(100, 200, 255)));
             progressBar.Value = 0;
             progressBar.Maximum = filesToMerge.Count + 2;
 
@@ -813,7 +765,6 @@ namespace CodeMerger
                 var fileAnalyses = new List<FileAnalysis>();
                 var selectedDirs = InputDirectories.Where(item => item.IsSelected).Select(item => item.Path).ToList();
 
-                // Add enabled external repo paths
                 var enabledRepos = ExternalRepositories.Where(r => r.IsEnabled).ToList();
                 foreach (var repo in enabledRepos)
                 {
@@ -839,7 +790,7 @@ namespace CodeMerger
                     }
                 });
 
-                UpdateStatus("Creating chunks...", Brushes.Blue);
+                UpdateStatus("Creating chunks...", new SolidColorBrush(Color.FromRgb(100, 200, 255)));
                 var chunkManager = new ChunkManager(150000);
                 var chunks = chunkManager.CreateChunks(fileAnalyses);
 
@@ -879,11 +830,11 @@ namespace CodeMerger
                 });
 
                 int totalTokens = fileAnalyses.Sum(f => f.EstimatedTokens);
-                UpdateStatus($"Success! Generated {chunks.Count} chunk(s) with ~{totalTokens:N0} tokens. Output: {projectFolder}", Brushes.Green);
+                UpdateStatus($"Generated {chunks.Count} chunk(s) with ~{totalTokens:N0} tokens", Brushes.LightGreen);
             }
             catch (Exception ex)
             {
-                UpdateStatus($"Error: {ex.Message}", Brushes.Red);
+                UpdateStatus($"Error: {ex.Message}", new SolidColorBrush(Color.FromRgb(233, 69, 96)));
             }
             finally
             {
@@ -891,109 +842,11 @@ namespace CodeMerger
             }
         }
 
-        private async void McpServer_Click(object sender, RoutedEventArgs e)
+        // Keep for compatibility - hidden in UI
+        private void McpServer_Click(object sender, RoutedEventArgs e)
         {
-            if (_mcpServer.IsRunning)
-            {
-                StopMcpServer();
-            }
-            else
-            {
-                await StartMcpServerAsync();
-            }
-        }
-
-        private async Task StartMcpServerAsync()
-        {
-            if (_currentProject == null || FoundFiles.Count == 0)
-            {
-                UpdateStatus("No project or files to serve.", Brushes.Red);
-                return;
-            }
-
-            try
-            {
-                // Ensure config is set up
-                EnsureClaudeConfig();
-                RefreshClaudeDesktopStatus();
-
-                UpdateStatus("Indexing project for MCP...", Brushes.Blue);
-
-                var selectedDirs = InputDirectories.Where(item => item.IsSelected).Select(item => item.Path).ToList();
-
-                // Add enabled external repo paths
-                foreach (var repo in ExternalRepositories.Where(r => r.IsEnabled))
-                {
-                    selectedDirs.Add(repo.LocalPath);
-                }
-
-                _mcpServer.IndexProject(_currentProject.Name, selectedDirs, FoundFiles.ToList());
-
-                string pipeName = $"codemerger_mcp_{_currentProject.Name}_{Environment.ProcessId}";
-
-                mcpButton.Content = "Stop MCP Server";
-                mcpButton.Style = (Style)FindResource("McpStopButton");
-                mcpStatusPanel.Visibility = Visibility.Visible;
-                mcpConfigText.Text = $"MCP server ready for project: {_currentProject.Name}\n\n" +
-                                     $"Claude Desktop will launch CodeMerger automatically when needed.\n" +
-                                     $"Make sure to restart Claude Desktop if it was already running.";
-
-                _mcpCancellation = new CancellationTokenSource();
-
-                _pipeServer = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
-
-                UpdateStatus($"MCP Server ready. Waiting for connection...", Brushes.DarkGreen);
-
-                // Capture project name for use in Task
-                string currentProjectName = _currentProject.Name;
-
-                await Task.Run(async () =>
-                {
-                    await _pipeServer.WaitForConnectionAsync(_mcpCancellation.Token);
-
-                    // Notify UI of successful connection (handshake)
-                    Application.Current.Dispatcher.Invoke(() =>
-                    {
-                        UpdateStatus("✓ MCP Server connected to Claude Desktop!", Brushes.DarkGreen);
-                        mcpConfigText.Text = $"✅ Connected to Claude Desktop\n\nProject: {currentProjectName}";
-                    });
-
-                    await _mcpServer.StartAsync(_pipeServer, _pipeServer);
-                });
-            }
-            catch (OperationCanceledException)
-            {
-                // Normal shutdown
-            }
-            catch (Exception ex)
-            {
-                UpdateStatus($"MCP Error: {ex.Message}", Brushes.Red);
-                StopMcpServer();
-            }
-        }
-
-        private void StopMcpServer()
-        {
-            _mcpCancellation?.Cancel();
-
-            // Dispose pipe BEFORE waiting for cancellation to prevent file locks
-            try
-            {
-                _pipeServer?.Dispose();
-            }
-            catch { }
-            _pipeServer = null;
-
-            _mcpServer.Stop();
-
-            _mcpCancellation?.Dispose();
-            _mcpCancellation = null;
-
-            mcpButton.Content = "Start MCP Server";
-            mcpButton.Style = (Style)FindResource("McpButton");
-            mcpStatusPanel.Visibility = Visibility.Collapsed;
-
-            UpdateStatus("MCP Server stopped.", Brushes.Black);
+            // MCP is now managed by Claude Desktop automatically
+            UpdateStatus("MCP is managed automatically by Claude Desktop.", Brushes.Gray);
         }
 
         private async Task ScanFilesAsync()
@@ -1008,13 +861,13 @@ namespace CodeMerger
 
             if (selectedDirs.Count == 0 && enabledRepos.Count == 0)
             {
-                UpdateStatus("Ready. Please add input directories or enable at least one source.", Brushes.Black);
+                UpdateStatus("Add directories or enable repositories to get started.", Brushes.Gray);
                 _isScanning = false;
                 UpdateRecommendation();
                 return;
             }
 
-            UpdateStatus("Scanning...", Brushes.Blue);
+            UpdateStatus("Scanning...", new SolidColorBrush(Color.FromRgb(100, 200, 255)));
             SetUIState(false);
 
             try
@@ -1033,7 +886,6 @@ namespace CodeMerger
 
                 await Task.Run(() =>
                 {
-                    // Scan local directories
                     foreach (var item in selectedDirs)
                     {
                         var dir = item.Path;
@@ -1055,7 +907,6 @@ namespace CodeMerger
                         allFoundFiles.AddRange(allFilesInDir);
                     }
 
-                    // Scan external repositories
                     if (_gitService != null)
                     {
                         foreach (var repo in enabledRepos)
@@ -1079,12 +930,12 @@ namespace CodeMerger
                 }
                 _estimatedTokens = (int)(totalBytes / 4);
 
-                UpdateStatus($"Found {FoundFiles.Count} files (~{_estimatedTokens:N0} tokens).", Brushes.Black);
+                UpdateStatus($"Found {FoundFiles.Count} files (~{_estimatedTokens:N0} tokens)", Brushes.Gray);
                 UpdateRecommendation();
             }
             catch (Exception ex)
             {
-                UpdateStatus($"Error scanning files: {ex.Message}", Brushes.Red);
+                UpdateStatus($"Scan error: {ex.Message}", new SolidColorBrush(Color.FromRgb(233, 69, 96)));
             }
             finally
             {

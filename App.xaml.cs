@@ -99,12 +99,12 @@ namespace CodeMerger
                 using var inputStream = Console.OpenStandardInput();
                 using var outputStream = Console.OpenStandardOutput();
 
+                // StartAsync now properly awaits until stdin closes or parent dies
                 mcpServer.StartAsync(inputStream, outputStream).GetAwaiter().GetResult();
 
-                while (true)
-                {
-                    System.Threading.Thread.Sleep(100);
-                }
+                // Server has stopped - exit cleanly
+                Console.Error.WriteLine("[MCP] Server shutdown complete");
+                Environment.Exit(0);
             }
             catch (Exception ex)
             {
