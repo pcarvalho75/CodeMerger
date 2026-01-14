@@ -1,4 +1,4 @@
-using CodeMerger.Models;
+﻿using CodeMerger.Models;
 using CodeMerger.Services;
 using Microsoft.Win32;
 using System;
@@ -35,6 +35,7 @@ namespace CodeMerger
         private int _estimatedTokens = 0;
         private Process? _mcpProcess;
         private NamedPipeServerStream? _pipeServer;
+        private readonly ClaudeDesktopService _claudeDesktopService = new ClaudeDesktopService();
 
         private const int MCP_RECOMMENDED_THRESHOLD = 500000; // 500k tokens
 
@@ -80,6 +81,96 @@ namespace CodeMerger
             {
                 PromptCreateFirstProject();
             }
+
+            // Check if config was self-healed on startup
+            if (Application.Current.Properties.Contains("ConfigHealedCount"))
+            {
+                int count = (int)Application.Current.Properties["ConfigHealedCount"];
+                UpdateStatus($"Updated {count} Claude Desktop config entry(s) to match current installation.", Brushes.DarkGreen);
+            }
+
+            RefreshClaudeDesktopStatus();
+        }
+
+        private void RefreshClaudeDesktopStatus()
+        {
+            // Check installation
+            if (_claudeDesktopService.IsClaudeDesktopInstalled())
+            {
+                claudeInstallStatus.Text = "Installed ✓";
+                claudeInstallStatus.Foreground = Brushes.Green;
+                claudeDownloadButton.Visibility = Visibility.Collapsed;
+            }
+            else
+            {
+                claudeInstallStatus.Text = "Not installed";
+                claudeInstallStatus.Foreground = Brushes.Gray;
+                claudeDownloadButton.Visibility = Visibility.Visible;
+            }
+
+            // Check config for current project
+            if (_currentProject == null)
+            {
+                claudeConfigStatus.Text = "No project selected";
+                claudeConfigStatus.Foreground = Brushes.Gray;
+                claudeAddConfigButton.Visibility = Visibility.Collapsed;
+                return;
+            }
+
+            if (_claudeDesktopService.IsProjectConfigured(_currentProject.Name))
+            {
+                var configuredPath = _claudeDesktopService.GetEntryPath(_currentProject.Name);
+                var currentPath = _claudeDesktopService.GetCurrentExePath();
+
+                if (string.Equals(configuredPath, currentPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    claudeConfigStatus.Text = $"Configured ✓ ({_currentProject.Name})";
+                    claudeConfigStatus.Foreground = Brushes.Green;
+                }
+                else
+                {
+                    claudeConfigStatus.Text = "Path mismatch (will auto-fix)";
+                    claudeConfigStatus.Foreground = Brushes.Orange;
+                }
+                claudeAddConfigButton.Visibility = Visibility.Collapsed;
+            }
+            else
+            {
+                claudeConfigStatus.Text = $"Not configured ({_currentProject.Name})";
+                claudeConfigStatus.Foreground = Brushes.Gray;
+                claudeAddConfigButton.Visibility = Visibility.Visible;
+            }
+        }
+
+        private void ClaudeDownload_Click(object sender, RoutedEventArgs e)
+        {
+            _claudeDesktopService.OpenDownloadPage();
+        }
+
+        private void ClaudeAddConfig_Click(object sender, RoutedEventArgs e)
+        {
+            if (_currentProject == null)
+            {
+                UpdateStatus("No project selected.", Brushes.Red);
+                return;
+            }
+
+            try
+            {
+                var exePath = _claudeDesktopService.GetCurrentExePath();
+                _claudeDesktopService.UpsertProjectEntry(_currentProject.Name, exePath);
+                UpdateStatus($"Added '{_currentProject.Name}' to Claude Desktop config.", Brushes.Green);
+                RefreshClaudeDesktopStatus();
+            }
+            catch (Exception ex)
+            {
+                UpdateStatus($"Failed to update config: {ex.Message}", Brushes.Red);
+            }
+        }
+
+        private void ClaudeOpenConfigFolder_Click(object sender, RoutedEventArgs e)
+        {
+            _claudeDesktopService.OpenConfigFolder();
         }
 
         private void MainWindow_Closing(object? sender, CancelEventArgs e)
@@ -124,6 +215,7 @@ namespace CodeMerger
                 _currentProject = selected;
                 LoadProjectData(_currentProject);
                 projectStatusText.Text = $"Last modified: {_currentProject.LastModifiedDate:g}";
+                RefreshClaudeDesktopStatus();
             }
         }
 
@@ -446,6 +538,14 @@ namespace CodeMerger
 
             try
             {
+                // Auto-add to Claude Desktop config if not configured
+                if (!_claudeDesktopService.IsProjectConfigured(_currentProject.Name))
+                {
+                    var exePath = _claudeDesktopService.GetCurrentExePath();
+                    _claudeDesktopService.UpsertProjectEntry(_currentProject.Name, exePath);
+                    RefreshClaudeDesktopStatus();
+                }
+
                 UpdateStatus("Indexing project for MCP...", Brushes.Blue);
 
                 // Index the project
@@ -453,20 +553,19 @@ namespace CodeMerger
 
                 // Create named pipe for communication
                 string pipeName = $"codemerger_mcp_{_currentProject.Name}_{Environment.ProcessId}";
-                
-                // Generate config for Claude Desktop
-                var config = GenerateClaudeConfig(pipeName);
 
                 // Update UI
                 mcpButton.Content = "Stop MCP Server";
                 mcpButton.Style = (Style)FindResource("McpStopButton");
                 mcpStatusPanel.Visibility = Visibility.Visible;
-                mcpConfigText.Text = $"Add this to Claude Desktop config (claude_desktop_config.json):\n\n{config}";
+                mcpConfigText.Text = $"MCP server ready for project: {_currentProject.Name}\n\n" +
+                                     $"Claude Desktop will launch CodeMerger automatically when needed.\n" +
+                                     $"Make sure to restart Claude Desktop if it was already running.";
 
                 // Start the pipe server
                 _pipeServer = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
-                
-                UpdateStatus($"MCP Server ready. Waiting for Claude Desktop connection on pipe: {pipeName}", Brushes.DarkGreen);
+
+                UpdateStatus($"MCP Server ready. Waiting for connection...", Brushes.DarkGreen);
 
                 // Wait for connection and start serving
                 await Task.Run(async () =>
@@ -494,35 +593,6 @@ namespace CodeMerger
             mcpStatusPanel.Visibility = Visibility.Collapsed;
 
             UpdateStatus("MCP Server stopped.", Brushes.Black);
-        }
-
-        private string GenerateClaudeConfig(string pipeName)
-        {
-            var exePath = Process.GetCurrentProcess().MainModule?.FileName ?? "CodeMerger.exe";
-            
-            return $@"{{
-  ""mcpServers"": {{
-    ""codemerger"": {{
-      ""command"": ""{exePath.Replace("\\", "\\\\")}"",
-      ""args"": [""--mcp"", ""{_currentProject?.Name ?? "project"}""]
-    }}
-  }}
-}}";
-        }
-
-        private void CopyConfig_Click(object sender, RoutedEventArgs e)
-        {
-            var config = mcpConfigText.Text;
-            if (!string.IsNullOrEmpty(config))
-            {
-                // Extract just the JSON part
-                var jsonStart = config.IndexOf('{');
-                if (jsonStart >= 0)
-                {
-                    Clipboard.SetText(config.Substring(jsonStart));
-                    UpdateStatus("Config copied to clipboard!", Brushes.Green);
-                }
-            }
         }
 
         private async Task ScanFilesAsync()

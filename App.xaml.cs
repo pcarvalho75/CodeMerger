@@ -12,6 +12,22 @@ namespace CodeMerger
         {
             base.OnStartup(e);
 
+            // Self-heal Claude Desktop config if needed
+            try
+            {
+                var claudeService = new ClaudeDesktopService();
+                int healed = claudeService.SelfHeal();
+                if (healed > 0)
+                {
+                    // Store count so MainWindow can show message
+                    Application.Current.Properties["ConfigHealedCount"] = healed;
+                }
+            }
+            catch
+            {
+                // Don't crash on heal failure — not critical
+            }
+
             // Check for MCP mode
             if (e.Args.Length >= 2 && e.Args[0] == "--mcp")
             {

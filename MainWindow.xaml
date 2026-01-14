@@ -84,6 +84,19 @@
                 </Trigger>
             </Style.Triggers>
         </Style>
+        <Style TargetType="Button" x:Key="LinkButton" BasedOn="{StaticResource ModernButton}">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Foreground" Value="#007ACC"/>
+            <Setter Property="Padding" Value="5,2"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Foreground" Value="#005A9E"/>
+                    <Setter Property="Background" Value="Transparent"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
     </Window.Resources>
 
     <Grid x:Name="mainGrid" Margin="20">
@@ -94,7 +107,11 @@
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
+            <!-- Claude Desktop panel (NEW) -->
             <RowDefinition Height="Auto"/>
+            <!-- MCP status panel -->
+            <RowDefinition Height="Auto"/>
+            <!-- Status bar -->
         </Grid.RowDefinitions>
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="2*"/>
@@ -188,8 +205,30 @@
             <Button x:Name="mcpButton" Content="Start MCP Server" Click="McpServer_Click" Style="{StaticResource McpButton}"/>
         </StackPanel>
 
+        <!-- Claude Desktop Panel -->
+        <Border x:Name="claudeDesktopPanel" Grid.Row="5" Grid.ColumnSpan="2" Margin="0,15,0,0" Background="#F0F4F8" BorderBrush="#D0D9E3" BorderThickness="1" CornerRadius="4" Padding="15">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="Claude Desktop:" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                    <TextBlock x:Name="claudeInstallStatus" Text="Checking..." VerticalAlignment="Center" Margin="0,0,20,0"/>
+                    <TextBlock Text="MCP Config:" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                    <TextBlock x:Name="claudeConfigStatus" Text="Checking..." VerticalAlignment="Center"/>
+                </StackPanel>
+                <StackPanel Grid.Column="2" Orientation="Horizontal">
+                    <Button x:Name="claudeDownloadButton" Content="Download Claude" Click="ClaudeDownload_Click" Style="{StaticResource LinkButton}" Visibility="Collapsed"/>
+                    <Button x:Name="claudeAddConfigButton" Content="Add to Claude Desktop" Click="ClaudeAddConfig_Click" Style="{StaticResource ModernButton}" Margin="5,0" Visibility="Collapsed"/>
+                    <Button Content="Open Config Folder" Click="ClaudeOpenConfigFolder_Click" Style="{StaticResource LinkButton}"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
         <!-- MCP Status Panel -->
-        <Border x:Name="mcpStatusPanel" Grid.Row="5" Grid.ColumnSpan="2" Margin="0,15,0,0" Background="#E8F5E9" BorderBrush="#A5D6A7" BorderThickness="1" CornerRadius="4" Padding="15" Visibility="Collapsed">
+        <Border x:Name="mcpStatusPanel" Grid.Row="6" Grid.ColumnSpan="2" Margin="0,15,0,0" Background="#E8F5E9" BorderBrush="#A5D6A7" BorderThickness="1" CornerRadius="4" Padding="15" Visibility="Collapsed">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
@@ -199,12 +238,11 @@
                     <TextBlock Text="MCP Server Running" FontWeight="Bold" Foreground="#2E7D32"/>
                     <TextBlock x:Name="mcpConfigText" TextWrapping="Wrap" Foreground="#555" Margin="0,5,0,0"/>
                 </StackPanel>
-                <Button x:Name="copyConfigButton" Grid.Column="1" Content="Copy Config" VerticalAlignment="Center" Click="CopyConfig_Click" Style="{StaticResource ModernButton}"/>
             </Grid>
         </Border>
 
         <!-- Status Bar -->
-        <StatusBar Grid.Row="6" Grid.ColumnSpan="2" Margin="0,15,0,0" Background="Transparent">
+        <StatusBar Grid.Row="7" Grid.ColumnSpan="2" Margin="0,15,0,0" Background="Transparent">
             <StatusBar.ItemsPanel>
                 <ItemsPanelTemplate>
                     <Grid>
