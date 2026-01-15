@@ -64,25 +64,58 @@ namespace CodeMerger.Services
             _workspaceService = new WorkspaceService();
         }
 
-        public void IndexWorkspace(string workspaceName, List<string> inputDirectories, List<string> files)
+        public void IndexWorkspace(string workspaceName, List<string> inputDirectories, List<string> extensions, HashSet<string> ignoredDirs)
         {
             _workspaceName = workspaceName;
             _inputDirectories = inputDirectories;
-            _files = files;
+            _extensions = extensions;
+            _ignoredDirs = ignoredDirs;
 
             PerformIndexing();
+        }
+
+        private List<string> ScanFiles()
+        {
+            return _inputDirectories
+                .Where(Directory.Exists)
+                .SelectMany(dir =>
+                {
+                    try
+                    {
+                        return Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories);
+                    }
+                    catch
+                    {
+                        return Enumerable.Empty<string>();
+                    }
+                })
+                .Where(file =>
+                {
+                    var pathParts = file.Split(Path.DirectorySeparatorChar);
+                    if (pathParts.Any(part => _ignoredDirs.Contains(part.ToLowerInvariant())))
+                        return false;
+
+                    var fileExtension = Path.GetExtension(file);
+                    if (_extensions.Count == 0 || _extensions.Contains("*.*")) return true;
+                    return _extensions.Contains(fileExtension, StringComparer.OrdinalIgnoreCase);
+                })
+                .Distinct()
+                .ToList();
         }
 
         private void PerformIndexing()
         {
             lock (_stateLock)
             {
+                // Rescan directories to discover new/deleted files
+                var files = ScanFiles();
+                
                 // Clear previous call sites
                 _codeAnalyzer.CallSites.Clear();
                 _callSites.Clear();
 
                 var fileAnalyses = new List<FileAnalysis>();
-                foreach (var file in _files)
+                foreach (var file in files)
                 {
                     var baseDir = _inputDirectories.FirstOrDefault(dir => file.StartsWith(dir, StringComparison.OrdinalIgnoreCase));
                     if (baseDir == null) continue;
