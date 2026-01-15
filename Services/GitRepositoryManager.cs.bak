@@ -10,11 +10,6 @@ namespace CodeMerger.Services
         public ObservableCollection<ExternalRepository> Repositories { get; } = new ObservableCollection<ExternalRepository>();
 
         private GitService? _gitService;
-        
-        /// <summary>
-        /// Exposes the internal GitService for file scanning operations.
-        /// </summary>
-        public GitService? GitService => _gitService;
 
         public event Action<string>? OnProgress;
         public event Action<string>? OnError;

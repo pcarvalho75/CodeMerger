@@ -19,9 +19,8 @@ namespace CodeMerger
     public partial class MainWindow : Window, INotifyPropertyChanged
     {
         public ObservableCollection<string> FoundFiles { get; set; }
-        public ObservableCollection<ExternalRepository> ExternalRepositories { get; set; }
 
-        private readonly WorkspaceService _workspaceService = new WorkspaceService();
+        private readonly WorkspaceManager _workspaceManager = new WorkspaceManager();
         private readonly CodeAnalyzer _codeAnalyzer = new CodeAnalyzer();
         private readonly IndexGenerator _indexGenerator = new IndexGenerator();
         private readonly McpServer _mcpServer = new McpServer();
@@ -29,9 +28,9 @@ namespace CodeMerger
         private readonly McpConnectionService _mcpConnectionService;
         private readonly FileScannerService _fileScannerService = new FileScannerService();
         private readonly DirectoryManager _directoryManager = new DirectoryManager();
+        private readonly GitRepositoryManager _gitRepositoryManager = new GitRepositoryManager();
         
-        private Workspace? _currentWorkspace;
-        private GitService? _gitService;
+        private Workspace? _currentWorkspace => _workspaceManager.CurrentWorkspace;
 
         private string _statusText = string.Empty;
         private Brush _statusForeground = Brushes.White;
@@ -62,11 +61,11 @@ namespace CodeMerger
             InitializeComponent();
             DataContext = this;
             FoundFiles = new ObservableCollection<string>();
-            ExternalRepositories = new ObservableCollection<ExternalRepository>();
 
             inputDirListBox.ItemsSource = _directoryManager.Directories;
             fileListBox.ItemsSource = FoundFiles;
-            gitRepoListBox.ItemsSource = ExternalRepositories;
+            gitRepoListBox.ItemsSource = _gitRepositoryManager.Repositories;
+            projectComboBox.ItemsSource = _workspaceManager.Workspaces;
 
             // Bind directory count text
             _directoryManager.PropertyChanged += (s, e) =>
@@ -74,6 +73,14 @@ namespace CodeMerger
                 if (e.PropertyName == nameof(DirectoryManager.CountText))
                     directoryCountText.Text = _directoryManager.CountText;
             };
+
+            // Wire up git repository manager events
+            _gitRepositoryManager.OnProgress += msg => Dispatcher.Invoke(() => gitStatusText.Text = msg);
+            _gitRepositoryManager.OnError += msg => Dispatcher.Invoke(() => 
+                UpdateStatus(msg, new SolidColorBrush(Color.FromRgb(233, 69, 96))));
+
+            // Wire up workspace manager events
+            _workspaceManager.OnWorkspaceChanged += OnWorkspaceChanged;
 
             _mcpServer.OnLog += OnMcpLog;
 
@@ -188,7 +195,7 @@ namespace CodeMerger
 
                 if (string.Equals(configuredPath, currentPath, StringComparison.OrdinalIgnoreCase))
                 {
-                    var activeWorkspace = _workspaceService.GetActiveWorkspace();
+                    var activeWorkspace = _workspaceManager.GetActiveWorkspaceName();
                     claudeConfigStatus.Text = $"Ready ✓";
                     claudeConfigStatus.Foreground = new SolidColorBrush(Color.FromRgb(0, 217, 165));
                 }
@@ -261,11 +268,6 @@ namespace CodeMerger
         private void MainWindow_Closing(object? sender, CancelEventArgs e)
         {
             _mcpConnectionService.Dispose();
-
-            if (_gitService != null)
-            {
-                _gitService.OnProgress -= OnGitProgress;
-            }
         }
 
         private void OnMcpLog(string message)
@@ -278,14 +280,15 @@ namespace CodeMerger
 
         private void LoadWorkspaceList()
         {
-            var workspaces = _workspaceService.LoadAllWorkspaces();
-            projectComboBox.ItemsSource = workspaces;
+            _workspaceManager.LoadWorkspaces();
 
-            if (workspaces.Count > 0)
+            if (_workspaceManager.Workspaces.Count > 0)
             {
-                var activeWorkspace = _workspaceService.GetActiveWorkspace();
-                var workspaceToSelect = workspaces.Find(w => w.Name == activeWorkspace) ?? workspaces[0];
-                projectComboBox.SelectedItem = workspaceToSelect;
+                var defaultWorkspace = _workspaceManager.GetDefaultWorkspace();
+                if (defaultWorkspace != null)
+                {
+                    projectComboBox.SelectedItem = defaultWorkspace;
+                }
             }
         }
 
@@ -294,7 +297,7 @@ namespace CodeMerger
             MessageBox.Show("Welcome! Create your first workspace to get started.", "CodeMerger", MessageBoxButton.OK, MessageBoxImage.Information);
             NewWorkspace_Click(null, null);
 
-            if (projectComboBox.Items.Count == 0)
+            if (_workspaceManager.Workspaces.Count == 0)
             {
                 Application.Current.Shutdown();
             }
@@ -304,31 +307,21 @@ namespace CodeMerger
         {
             if (projectComboBox.SelectedItem is Workspace selected)
             {
-                if (_gitService != null)
-                {
-                    _gitService.OnProgress -= OnGitProgress;
-                }
-
-                _currentWorkspace = selected;
-                _workspaceService.SetActiveWorkspace(_currentWorkspace.Name);
-
-                string workspaceFolder = _workspaceService.GetWorkspaceFolder(_currentWorkspace.Name);
-                _gitService = new GitService(workspaceFolder);
-                _gitService.OnProgress += OnGitProgress;
-
-                LoadWorkspaceData(_currentWorkspace);
-
-                EnsureClaudeConfig();
-                RefreshClaudeDesktopStatus();
+                _workspaceManager.SelectWorkspace(selected);
             }
         }
 
-        private void OnGitProgress(string message)
+        private async void OnWorkspaceChanged(Workspace? workspace)
         {
-            Dispatcher.Invoke(() =>
-            {
-                gitStatusText.Text = message;
-            });
+            if (workspace == null) return;
+
+            string workspaceFolder = _workspaceManager.GetWorkspaceFolder(workspace.Name);
+            _gitRepositoryManager.SetWorkspaceFolder(workspaceFolder);
+
+            await LoadWorkspaceDataAsync(workspace);
+
+            EnsureClaudeConfig();
+            RefreshClaudeDesktopStatus();
         }
 
         private void EnsureClaudeConfig()
@@ -344,7 +337,7 @@ namespace CodeMerger
             }
         }
 
-        private async void LoadWorkspaceData(Workspace workspace)
+        private async Task LoadWorkspaceDataAsync(Workspace workspace)
         {
             if (workspace == null) return;
 
@@ -353,20 +346,15 @@ namespace CodeMerger
             try
             {
                 _directoryManager.Load(workspace.InputDirectories, workspace.DisabledDirectories);
-
-                ExternalRepositories.Clear();
-                foreach (var repo in workspace.ExternalRepositories)
-                {
-                    ExternalRepositories.Add(repo);
-                }
+                _gitRepositoryManager.Load(workspace.ExternalRepositories);
 
                 extensionsTextBox.Text = workspace.Extensions;
                 ignoredDirsTextBox.Text = workspace.IgnoredDirectories;
 
-                string workspaceFolder = _workspaceService.GetWorkspaceFolder(workspace.Name);
+                string workspaceFolder = _workspaceManager.GetWorkspaceFolder(workspace.Name);
                 outputFileTextBox.Text = workspaceFolder;
 
-                await UpdateExternalReposAsync();
+                await _gitRepositoryManager.UpdateAllAsync();
             }
             catch (Exception ex)
             {
@@ -379,29 +367,6 @@ namespace CodeMerger
             }
         }
 
-        private async Task UpdateExternalReposAsync()
-        {
-            if (_gitService == null || ExternalRepositories.Count == 0) return;
-
-            foreach (var repo in ExternalRepositories.Where(r => r.IsEnabled))
-            {
-                try
-                {
-                    gitStatusText.Text = $"Updating {repo.Name}...";
-                    await _gitService.CloneOrPullAsync(repo.Url);
-                    repo.LastUpdated = DateTime.Now;
-                }
-                catch (Exception ex)
-                {
-                    gitStatusText.Text = $"Failed to update {repo.Name}: {ex.Message}";
-                }
-            }
-
-            gitStatusText.Text = ExternalRepositories.Count > 0
-                ? $"{ExternalRepositories.Count} repository(s) loaded"
-                : "";
-        }
-
         private void NewWorkspace_Click(object? sender, RoutedEventArgs? e)
         {
             var dialog = new InputDialog("New Workspace", "Enter workspace name:");
@@ -409,17 +374,14 @@ namespace CodeMerger
             {
                 string name = dialog.ResponseText.Trim();
 
-                if (_workspaceService.WorkspaceExists(name))
+                var workspace = _workspaceManager.CreateWorkspace(name);
+                if (workspace == null)
                 {
                     MessageBox.Show("A workspace with that name already exists.", "Error", MessageBoxButton.OK, MessageBoxImage.Warning);
                     return;
                 }
 
-                var workspace = new Workspace { Name = name };
-                _workspaceService.SaveWorkspace(workspace);
-
-                LoadWorkspaceList();
-                projectComboBox.SelectedItem = ((List<Workspace>)projectComboBox.ItemsSource).Find(w => w.Name == name);
+                projectComboBox.SelectedItem = workspace;
             }
         }
 
@@ -432,10 +394,14 @@ namespace CodeMerger
             {
                 string newName = dialog.ResponseText.Trim();
 
-                if (_workspaceService.RenameWorkspace(_currentWorkspace.Name, newName))
+                if (_workspaceManager.RenameWorkspace(_currentWorkspace.Name, newName))
                 {
-                    LoadWorkspaceList();
-                    projectComboBox.SelectedItem = ((List<Workspace>)projectComboBox.ItemsSource).Find(w => w.Name == newName);
+                    // Reload to refresh the ComboBox display
+                    var renamed = _workspaceManager.Workspaces.FirstOrDefault(w => w.Name == newName);
+                    if (renamed != null)
+                    {
+                        projectComboBox.SelectedItem = renamed;
+                    }
                 }
                 else
                 {
@@ -456,14 +422,15 @@ namespace CodeMerger
 
             if (result == MessageBoxResult.Yes)
             {
-                _workspaceService.DeleteWorkspace(_currentWorkspace.Name);
-                _currentWorkspace = null;
+                _workspaceManager.DeleteWorkspace(_currentWorkspace.Name);
 
-                LoadWorkspaceList();
-
-                if (projectComboBox.Items.Count == 0)
+                if (_workspaceManager.Workspaces.Count == 0)
                 {
                     PromptCreateFirstWorkspace();
+                }
+                else
+                {
+                    projectComboBox.SelectedItem = _workspaceManager.Workspaces.FirstOrDefault();
                 }
             }
         }
@@ -476,9 +443,9 @@ namespace CodeMerger
             _currentWorkspace.DisabledDirectories = _directoryManager.GetDisabledPaths().ToList();
             _currentWorkspace.Extensions = extensionsTextBox.Text;
             _currentWorkspace.IgnoredDirectories = ignoredDirsTextBox.Text;
-            _currentWorkspace.ExternalRepositories = ExternalRepositories.ToList();
+            _currentWorkspace.ExternalRepositories = _gitRepositoryManager.ToList();
 
-            _workspaceService.SaveWorkspace(_currentWorkspace);
+            _workspaceManager.SaveCurrent();
         }
 
         private async void AddDirectory_Click(object sender, RoutedEventArgs e)
@@ -536,85 +503,44 @@ namespace CodeMerger
 
         private async void AddGitRepo_Click(object sender, RoutedEventArgs e)
         {
-            if (_gitService == null || _currentWorkspace == null)
+            if (_currentWorkspace == null)
             {
                 UpdateStatus("No workspace selected.", new SolidColorBrush(Color.FromRgb(233, 69, 96)));
                 return;
             }
 
             string url = gitUrlTextBox.Text.Trim();
-
-            if (!GitService.IsValidGitUrl(url))
-            {
-                UpdateStatus("Invalid Git URL. Use https://github.com/user/repo format.", new SolidColorBrush(Color.FromRgb(233, 69, 96)));
-                return;
-            }
-
-            if (ExternalRepositories.Any(r => r.Url.Equals(url, StringComparison.OrdinalIgnoreCase)))
-            {
-                UpdateStatus("Repository already added.", new SolidColorBrush(Color.FromRgb(255, 193, 7)));
-                return;
-            }
-
             SetUIState(false);
-            gitStatusText.Text = "Cloning repository...";
 
-            try
+            if (await _gitRepositoryManager.AddRepositoryAsync(url))
             {
-                var repo = await _gitService.CloneOrPullAsync(url);
-                ExternalRepositories.Add(repo);
                 SaveCurrentWorkspace();
-
-                gitStatusText.Text = $"Cloned {repo.Name} ({repo.Branch})";
                 gitUrlTextBox.Text = "https://github.com/user/repo";
-
                 await ScanFilesAsync();
             }
-            catch (Exception ex)
-            {
-                gitStatusText.Text = $"Clone failed: {ex.Message}";
-                UpdateStatus($"Failed to clone: {ex.Message}", new SolidColorBrush(Color.FromRgb(233, 69, 96)));
-            }
-            finally
-            {
-                SetUIState(true);
-            }
+
+            SetUIState(true);
         }
 
         private async void RefreshGitRepo_Click(object sender, RoutedEventArgs e)
         {
-            if (_gitService == null) return;
-
             var button = sender as Button;
             var repo = button?.DataContext as ExternalRepository;
             if (repo == null) return;
 
             SetUIState(false);
-            gitStatusText.Text = $"Updating {repo.Name}...";
 
-            try
+            if (await _gitRepositoryManager.RefreshRepositoryAsync(repo))
             {
-                await _gitService.CloneOrPullAsync(repo.Url);
-                repo.LastUpdated = DateTime.Now;
                 SaveCurrentWorkspace();
-
-                gitStatusText.Text = $"Updated {repo.Name}";
                 await ScanFilesAsync();
             }
-            catch (Exception ex)
-            {
-                gitStatusText.Text = $"Update failed: {ex.Message}";
-            }
-            finally
-            {
-                SetUIState(true);
-            }
+
+            SetUIState(true);
         }
 
         private async void RemoveGitRepo_Click(object sender, RoutedEventArgs e)
         {
-            if (_gitService == null) return;
-
             var button = sender as Button;
             var repo = button?.DataContext as ExternalRepository;
             if (repo == null) return;
@@ -627,18 +553,10 @@ namespace CodeMerger
 
             if (result == MessageBoxResult.Yes)
             {
-                try
+                if (_gitRepositoryManager.RemoveRepository(repo))
                 {
-                    _gitService.DeleteRepository(repo);
-                    ExternalRepositories.Remove(repo);
                     SaveCurrentWorkspace();
-
-                    gitStatusText.Text = $"Removed {repo.Name}";
                     await ScanFilesAsync();
-                }
-                catch (Exception ex)
-                {
-                    gitStatusText.Text = $"Remove failed: {ex.Message}";
                 }
             }
         }
@@ -646,6 +564,7 @@ namespace CodeMerger
         private async void GitRepoCheckBox_Changed(object sender, RoutedEventArgs e)
         {
             if (_isLoadingWorkspace) return;
+            _gitRepositoryManager.NotifySelectionChanged();
             SaveCurrentWorkspace();
             await ScanFilesAsync();
         }
@@ -656,7 +575,7 @@ namespace CodeMerger
         {
             if (_currentWorkspace == null) return;
 
-            string folder = _workspaceService.GetWorkspaceFolder(_currentWorkspace.Name);
+            string folder = _workspaceManager.GetCurrentWorkspaceFolder();
 
             if (Directory.Exists(folder))
             {
@@ -696,7 +615,7 @@ namespace CodeMerger
                 return;
             }
 
-            string workspaceFolder = _workspaceService.GetWorkspaceFolder(_currentWorkspace.Name);
+            string workspaceFolder = _workspaceManager.GetCurrentWorkspaceFolder();
             var filesToMerge = FoundFiles.ToList();
 
             SetUIState(false);
@@ -707,10 +626,9 @@ namespace CodeMerger
             try
             {
                 var fileAnalyses = new List<FileAnalysis>();
-                var selectedDirs = InputDirectories.Where(item => item.IsSelected).Select(item => item.Path).ToList();
+                var selectedDirs = _directoryManager.GetSelectedPaths().ToList();
 
-                var enabledRepos = ExternalRepositories.Where(r => r.IsEnabled).ToList();
-                foreach (var repo in enabledRepos)
+                foreach (var repo in _gitRepositoryManager.Repositories.Where(r => r.IsEnabled))
                 {
                     selectedDirs.Add(repo.LocalPath);
                 }
@@ -801,7 +719,7 @@ namespace CodeMerger
             FoundFiles.Clear();
 
             var selectedDirs = _directoryManager.GetSelectedPaths().ToList();
-            var enabledRepos = ExternalRepositories.Where(r => r.IsEnabled).ToList();
+            var enabledRepos = _gitRepositoryManager.Repositories.Where(r => r.IsEnabled).ToList();
 
             if (selectedDirs.Count == 0 && enabledRepos.Count == 0)
             {
@@ -819,7 +737,7 @@ namespace CodeMerger
                 var result = await _fileScannerService.ScanAsync(
                     selectedDirs,
                     enabledRepos,
-                    _gitService,
+                    _gitRepositoryManager.GitService,
                     extensionsTextBox.Text,
                     ignoredDirsTextBox.Text);
 
