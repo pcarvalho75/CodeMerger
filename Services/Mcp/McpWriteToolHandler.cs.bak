@@ -63,22 +63,27 @@ namespace CodeMerger.Services.Mcp
             {
                 var content = File.ReadAllText(file.FilePath);
 
+                // Normalize search string line endings to match file's line endings
+                var fileLineEnding = DetectLineEnding(content);
+                var normalizedOldStr = NormalizeLineEndings(oldStr, fileLineEnding);
+                var normalizedNewStr = NormalizeLineEndings(newStr, fileLineEnding);
+
                 var count = 0;
                 var index = 0;
-                while ((index = content.IndexOf(oldStr, index, StringComparison.Ordinal)) != -1)
+                while ((index = content.IndexOf(normalizedOldStr, index, StringComparison.Ordinal)) != -1)
                 {
                     count++;
-                    index += oldStr.Length;
+                    index += normalizedOldStr.Length;
                 }
 
                 if (count == 0)
                 {
-                    return $"Error: String not found in file.\n\n**Looking for:**\n```\n{oldStr}\n```";
+                    return BuildNotFoundDiagnostic(content, normalizedOldStr, file.RelativePath);
                 }
 
                 if (count > 1)
                 {
-                    return $"Error: String appears {count} times in file. It must be unique (appear exactly once).\n\n**Looking for:**\n```\n{oldStr}\n```";
+                    return $"Error: String appears {count} times in file. It must be unique (appear exactly once).\n\n**Looking for:**\n```\n{normalizedOldStr}\n```";
                 }
 
                 if (createBackup && File.Exists(file.FilePath))
@@ -86,7 +91,7 @@ namespace CodeMerger.Services.Mcp
                     File.Copy(file.FilePath, file.FilePath + ".bak", true);
                 }
 
-                var newContent = content.Replace(oldStr, newStr);
+                var newContent = content.Replace(normalizedOldStr, normalizedNewStr);
                 File.WriteAllText(file.FilePath, newContent);
 
                 var action = string.IsNullOrEmpty(newStr) ? "deleted" : "replaced";
@@ -109,6 +114,134 @@ namespace CodeMerger.Services.Mcp
             {
                 return $"Error: {ex.Message}";
             }
+        }
+
+        /// <summary>
+        /// Builds a diagnostic message when the search string is not found.
+        /// Shows whitespace details and tries to find partial matches.
+        /// </summary>
+        private string BuildNotFoundDiagnostic(string content, string oldStr, string filePath)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("# Error: String not found in file");
+            sb.AppendLine();
+            sb.AppendLine($"**File:** `{filePath}`");
+            sb.AppendLine();
+
+            // Show what we were looking for with whitespace visualization
+            var oldStrLines = oldStr.Split('\n');
+            sb.AppendLine($"**Looking for ({oldStrLines.Length} lines, {oldStr.Length} chars):**");
+            sb.AppendLine("```");
+            foreach (var line in oldStrLines.Take(10))
+            {
+                sb.AppendLine(VisualizeWhitespace(line.TrimEnd('\r')));
+            }
+            if (oldStrLines.Length > 10)
+                sb.AppendLine($"... ({oldStrLines.Length - 10} more lines)");
+            sb.AppendLine("```");
+            sb.AppendLine();
+
+            // Try to find partial matches using the first non-empty line
+            var firstLine = oldStrLines.FirstOrDefault(l => l.Trim().Length > 0)?.Trim() ?? "";
+            if (firstLine.Length > 10)
+            {
+                var contentLines = content.Split('\n');
+                var partialMatches = new System.Collections.Generic.List<(int lineNum, string line)>();
+
+                for (int i = 0; i < contentLines.Length; i++)
+                {
+                    // Check if the trimmed content matches (ignoring whitespace differences)
+                    if (contentLines[i].Trim().Contains(firstLine.Substring(0, Math.Min(20, firstLine.Length))))
+                    {
+                        partialMatches.Add((i + 1, contentLines[i]));
+                    }
+                }
+
+                if (partialMatches.Count > 0)
+                {
+                    sb.AppendLine("**Possible matches found (similar content at these lines):**");
+                    sb.AppendLine("```");
+                    foreach (var (lineNum, line) in partialMatches.Take(5))
+                    {
+                        sb.AppendLine($"Line {lineNum}: {VisualizeWhitespace(line.TrimEnd('\r'))}");
+                    }
+                    sb.AppendLine("```");
+                    sb.AppendLine();
+                    sb.AppendLine("**Hint:** Whitespace mismatch? Use `codemerger_get_lines` to see exact file content.");
+                }
+                else
+                {
+                    sb.AppendLine("**No similar content found.** The code may have changed or the search text is incorrect.");
+                }
+            }
+
+            // Show whitespace legend
+            sb.AppendLine();
+            sb.AppendLine("**Whitespace legend:** `→` = tab, space = space");
+
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// Detects the line ending style used in the file content.
+        /// </summary>
+        private static string DetectLineEnding(string content)
+        {
+            // Check for Windows-style CRLF first
+            if (content.Contains("\r\n"))
+                return "\r\n";
+            // Check for old Mac-style CR (rare)
+            if (content.Contains("\r"))
+                return "\r";
+            // Default to Unix-style LF
+            return "\n";
+        }
+
+        /// <summary>
+        /// Normalizes the search string's line endings to match the file's line endings.
+        /// </summary>
+        private static string NormalizeLineEndings(string searchStr, string targetLineEnding)
+        {
+            // First normalize to LF, then convert to target
+            var normalized = searchStr.Replace("\r\n", "\n").Replace("\r", "\n");
+            if (targetLineEnding != "\n")
+                normalized = normalized.Replace("\n", targetLineEnding);
+            return normalized;
+        }
+
+        /// <summary>
+        /// Trims trailing whitespace from each line while preserving line endings.
+        /// </summary>
+        private static string TrimTrailingWhitespacePerLine(string text)
+        {
+            var lines = text.Split('\n');
+            for (int i = 0; i < lines.Length; i++)
+            {
+                // Remove trailing whitespace but preserve \r if present (will be before the split point)
+                lines[i] = lines[i].TrimEnd(' ', '\t', '\r');
+            }
+            return string.Join("\n", lines);
+        }
+
+        /// <summary>
+        /// Makes leading whitespace visible by showing tabs as → and preserving spaces.
+        /// </summary>
+        private static string VisualizeWhitespace(string line)
+        {
+            if (string.IsNullOrEmpty(line)) return line;
+
+            // Find the end of leading whitespace
+            int i = 0;
+            while (i < line.Length && (line[i] == ' ' || line[i] == '\t'))
+                i++;
+
+            if (i == 0) return line;
+
+            // Visualize leading whitespace: tabs become →, spaces stay as spaces
+            var leading = line.Substring(0, i).Replace("\t", "→");
+            var rest = line.Substring(i);
+
+            return leading + rest;
         }
 
         public string WriteFile(JsonElement arguments)

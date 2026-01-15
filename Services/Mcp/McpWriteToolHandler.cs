@@ -63,22 +63,33 @@ namespace CodeMerger.Services.Mcp
             {
                 var content = File.ReadAllText(file.FilePath);
 
+                // Normalize line endings and trim trailing whitespace for matching
+                var fileLineEnding = DetectLineEnding(content);
+                var normalizedContent = TrimTrailingWhitespacePerLine(content);
+                normalizedContent = NormalizeLineEndings(normalizedContent, "\n");
+                
+                var normalizedOldStr = TrimTrailingWhitespacePerLine(oldStr);
+                normalizedOldStr = NormalizeLineEndings(normalizedOldStr, "\n");
+                
+                var normalizedNewStr = TrimTrailingWhitespacePerLine(newStr);
+                normalizedNewStr = NormalizeLineEndings(normalizedNewStr, fileLineEnding);
+
                 var count = 0;
                 var index = 0;
-                while ((index = content.IndexOf(oldStr, index, StringComparison.Ordinal)) != -1)
+                while ((index = normalizedContent.IndexOf(normalizedOldStr, index, StringComparison.Ordinal)) != -1)
                 {
                     count++;
-                    index += oldStr.Length;
+                    index += normalizedOldStr.Length;
                 }
 
                 if (count == 0)
                 {
-                    return BuildNotFoundDiagnostic(content, oldStr, file.RelativePath);
+                    return BuildNotFoundDiagnostic(normalizedContent, normalizedOldStr, file.RelativePath);
                 }
 
                 if (count > 1)
                 {
-                    return $"Error: String appears {count} times in file. It must be unique (appear exactly once).\n\n**Looking for:**\n```\n{oldStr}\n```";
+                    return $"Error: String appears {count} times in file. It must be unique (appear exactly once).\n\n**Looking for:**\n```\n{normalizedOldStr}\n```";
                 }
 
                 if (createBackup && File.Exists(file.FilePath))
@@ -86,7 +97,9 @@ namespace CodeMerger.Services.Mcp
                     File.Copy(file.FilePath, file.FilePath + ".bak", true);
                 }
 
-                var newContent = content.Replace(oldStr, newStr);
+                // Replace in normalized content, then restore file's line endings
+                var newContent = normalizedContent.Replace(normalizedOldStr, normalizedNewStr);
+                newContent = NormalizeLineEndings(newContent, fileLineEnding);
                 File.WriteAllText(file.FilePath, newContent);
 
                 var action = string.IsNullOrEmpty(newStr) ? "deleted" : "replaced";
@@ -175,6 +188,47 @@ namespace CodeMerger.Services.Mcp
             sb.AppendLine("**Whitespace legend:** `→` = tab, space = space");
 
             return sb.ToString();
+        }
+
+        /// <summary>
+        /// Detects the line ending style used in the file content.
+        /// </summary>
+        private static string DetectLineEnding(string content)
+        {
+            // Check for Windows-style CRLF first
+            if (content.Contains("\r\n"))
+                return "\r\n";
+            // Check for old Mac-style CR (rare)
+            if (content.Contains("\r"))
+                return "\r";
+            // Default to Unix-style LF
+            return "\n";
+        }
+
+        /// <summary>
+        /// Normalizes the search string's line endings to match the file's line endings.
+        /// </summary>
+        private static string NormalizeLineEndings(string searchStr, string targetLineEnding)
+        {
+            // First normalize to LF, then convert to target
+            var normalized = searchStr.Replace("\r\n", "\n").Replace("\r", "\n");
+            if (targetLineEnding != "\n")
+                normalized = normalized.Replace("\n", targetLineEnding);
+            return normalized;
+        }
+
+        /// <summary>
+        /// Trims trailing whitespace from each line while preserving line endings.
+        /// </summary>
+        private static string TrimTrailingWhitespacePerLine(string text)
+        {
+            var lines = text.Split('\n');
+            for (int i = 0; i < lines.Length; i++)
+            {
+                // Remove trailing whitespace but preserve \r if present (will be before the split point)
+                lines[i] = lines[i].TrimEnd(' ', '\t', '\r');
+            }
+            return string.Join("\n", lines);
         }
 
         /// <summary>
