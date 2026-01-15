@@ -304,8 +304,13 @@ namespace CodeMerger.Services
             {
                 var typeName = baseType.Type.ToString();
 
-                // First one could be base class (if not interface-like name)
-                if (string.IsNullOrEmpty(typeInfo.BaseType) && !typeName.StartsWith("I") || !char.IsUpper(typeName.ElementAtOrDefault(1)))
+                // Check if this looks like an interface name (starts with 'I' followed by uppercase letter)
+                bool looksLikeInterface = typeName.Length > 1 && 
+                                          typeName.StartsWith("I") && 
+                                          char.IsUpper(typeName[1]);
+
+                // First non-interface type becomes the base class
+                if (string.IsNullOrEmpty(typeInfo.BaseType) && !looksLikeInterface)
                 {
                     typeInfo.BaseType = typeName;
                 }

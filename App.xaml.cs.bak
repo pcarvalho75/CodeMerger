@@ -42,38 +42,38 @@ namespace CodeMerger
         {
             try
             {
-                var projectService = new ProjectService();
+                var workspaceService = new WorkspaceService();
                 var mcpServer = new McpServer();
 
-                var projectName = projectService.GetActiveProject();
+                var workspaceName = workspaceService.GetActiveWorkspace();
 
-                if (string.IsNullOrEmpty(projectName))
+                if (string.IsNullOrEmpty(workspaceName))
                 {
-                    Console.Error.WriteLine("[MCP] No active project set. Please select a project in CodeMerger GUI first.");
+                    Console.Error.WriteLine("[MCP] No active workspace set. Please select a workspace in CodeMerger GUI first.");
                     Environment.Exit(1);
                     return;
                 }
 
-                var project = projectService.LoadProject(projectName);
+                var workspace = workspaceService.LoadWorkspace(workspaceName);
 
-                if (project == null)
+                if (workspace == null)
                 {
-                    Console.Error.WriteLine($"[MCP] Project not found: {projectName}");
+                    Console.Error.WriteLine($"[MCP] Workspace not found: {workspaceName}");
                     Environment.Exit(1);
                     return;
                 }
 
-                var extensions = project.Extensions.Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries)
+                var extensions = workspace.Extensions.Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries)
                     .Select(ext => ext.Trim())
                     .Where(ext => !string.IsNullOrEmpty(ext))
                     .ToList();
 
-                var ignoredDirsInput = project.IgnoredDirectories + ",.git";
+                var ignoredDirsInput = workspace.IgnoredDirectories + ",.git";
                 var ignoredDirNames = ignoredDirsInput.Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries)
                     .Select(dir => dir.Trim().ToLowerInvariant())
                     .ToHashSet();
 
-                var allFiles = project.InputDirectories
+                var allFiles = workspace.InputDirectories
                     .Where(Directory.Exists)
                     .SelectMany(dir => Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
                     .Where(file =>
@@ -89,11 +89,11 @@ namespace CodeMerger
                     .Distinct()
                     .ToList();
 
-                mcpServer.IndexProject(project.Name, project.InputDirectories, allFiles);
+                mcpServer.IndexWorkspace(workspace.Name, workspace.InputDirectories, allFiles);
 
-                SendHandshakeToMainWindow(projectName);
+                SendHandshakeToMainWindow(workspaceName);
 
-                Console.Error.WriteLine($"[MCP] Starting server for project: {project.Name}");
+                Console.Error.WriteLine($"[MCP] Starting server for workspace: {workspace.Name}");
                 Console.Error.WriteLine($"[MCP] Indexed {allFiles.Count} files");
 
                 using var inputStream = Console.OpenStandardInput();
@@ -113,7 +113,7 @@ namespace CodeMerger
             }
         }
 
-        private void SendHandshakeToMainWindow(string projectName)
+        private void SendHandshakeToMainWindow(string workspaceName)
         {
             try
             {
@@ -121,7 +121,7 @@ namespace CodeMerger
                 pipe.Connect(500);
 
                 using var writer = new StreamWriter(pipe);
-                writer.WriteLine(projectName);
+                writer.WriteLine(workspaceName);
                 writer.Flush();
             }
             catch

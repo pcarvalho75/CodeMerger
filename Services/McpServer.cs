@@ -25,13 +25,19 @@ namespace CodeMerger.Services
         private CancellationTokenSource? _cancellationTokenSource;
         private Task? _serverTask;
         
+        // Thread safety lock for workspace state
+        private readonly object _stateLock = new object();
+        
         // Workspace state
         private WorkspaceAnalysis? _workspaceAnalysis;
         private RefactoringService? _refactoringService;
         private List<CallSite> _callSites = new();
         private List<string> _inputDirectories = new();
-        private List<string> _files = new();
         private string _workspaceName = string.Empty;
+        
+        // File scanning settings
+        private List<string> _extensions = new();
+        private HashSet<string> _ignoredDirs = new();
 
         // Tool handlers
         private McpReadToolHandler? _readHandler;
@@ -58,43 +64,79 @@ namespace CodeMerger.Services
             _workspaceService = new WorkspaceService();
         }
 
-        public void IndexWorkspace(string workspaceName, List<string> inputDirectories, List<string> files)
+        public void IndexWorkspace(string workspaceName, List<string> inputDirectories, List<string> extensions, HashSet<string> ignoredDirs)
         {
             _workspaceName = workspaceName;
             _inputDirectories = inputDirectories;
-            _files = files;
+            _extensions = extensions;
+            _ignoredDirs = ignoredDirs;
 
             PerformIndexing();
         }
 
+        private List<string> ScanFiles()
+        {
+            return _inputDirectories
+                .Where(Directory.Exists)
+                .SelectMany(dir =>
+                {
+                    try
+                    {
+                        return Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories);
+                    }
+                    catch
+                    {
+                        return Enumerable.Empty<string>();
+                    }
+                })
+                .Where(file =>
+                {
+                    var pathParts = file.Split(Path.DirectorySeparatorChar);
+                    if (pathParts.Any(part => _ignoredDirs.Contains(part.ToLowerInvariant())))
+                        return false;
+
+                    var fileExtension = Path.GetExtension(file);
+                    if (_extensions.Count == 0 || _extensions.Contains("*.*")) return true;
+                    return _extensions.Contains(fileExtension, StringComparer.OrdinalIgnoreCase);
+                })
+                .Distinct()
+                .ToList();
+        }
+
         private void PerformIndexing()
         {
-            // Clear previous call sites
-            _codeAnalyzer.CallSites.Clear();
-            _callSites.Clear();
-
-            var fileAnalyses = new List<FileAnalysis>();
-            foreach (var file in _files)
+            lock (_stateLock)
             {
-                var baseDir = _inputDirectories.FirstOrDefault(dir => file.StartsWith(dir, StringComparison.OrdinalIgnoreCase));
-                if (baseDir == null) continue;
+                // Rescan directories to discover new/deleted files
+                var files = ScanFiles();
+                
+                // Clear previous call sites
+                _codeAnalyzer.CallSites.Clear();
+                _callSites.Clear();
 
-                var analysis = _codeAnalyzer.AnalyzeFile(file, baseDir);
-                fileAnalyses.Add(analysis);
+                var fileAnalyses = new List<FileAnalysis>();
+                foreach (var file in files)
+                {
+                    var baseDir = _inputDirectories.FirstOrDefault(dir => file.StartsWith(dir, StringComparison.OrdinalIgnoreCase));
+                    if (baseDir == null) continue;
+
+                    var analysis = _codeAnalyzer.AnalyzeFile(file, baseDir);
+                    fileAnalyses.Add(analysis);
+                }
+
+                // Store call sites for semantic analysis
+                _callSites = _codeAnalyzer.CallSites.ToList();
+
+                var chunkManager = new ChunkManager(150000);
+                var chunks = chunkManager.CreateChunks(fileAnalyses);
+                _workspaceAnalysis = _indexGenerator.BuildWorkspaceAnalysis(_workspaceName, fileAnalyses, chunks);
+
+                // Initialize services and handlers
+                _refactoringService = new RefactoringService(_workspaceAnalysis, _inputDirectories);
+                InitializeHandlers();
+
+                Log($"Indexed {fileAnalyses.Count} files, {_workspaceAnalysis.TypeHierarchy.Count} types, {_callSites.Count} call sites");
             }
-
-            // Store call sites for semantic analysis
-            _callSites = _codeAnalyzer.CallSites.ToList();
-
-            var chunkManager = new ChunkManager(150000);
-            var chunks = chunkManager.CreateChunks(fileAnalyses);
-            _workspaceAnalysis = _indexGenerator.BuildWorkspaceAnalysis(_workspaceName, fileAnalyses, chunks);
-
-            // Initialize services and handlers
-            _refactoringService = new RefactoringService(_workspaceAnalysis, _inputDirectories);
-            InitializeHandlers();
-
-            Log($"Indexed {fileAnalyses.Count} files, {_workspaceAnalysis.TypeHierarchy.Count} types, {_callSites.Count} call sites");
         }
 
         private void InitializeHandlers()
@@ -102,7 +144,7 @@ namespace CodeMerger.Services
             if (_workspaceAnalysis == null || _refactoringService == null) return;
 
             _readHandler = new McpReadToolHandler(_workspaceAnalysis, SendActivity);
-            _writeHandler = new McpWriteToolHandler(_workspaceAnalysis, _refactoringService, SendActivity, Log);
+            _writeHandler = new McpWriteToolHandler(_workspaceAnalysis, _refactoringService, () => PerformIndexing(), SendActivity, Log);
             _semanticHandler = new McpSemanticToolHandler(_workspaceAnalysis, _callSites, SendActivity);
             _refactoringHandler = new McpRefactoringToolHandler(_workspaceAnalysis, _refactoringService, _callSites, SendActivity, Log);
             _workspaceHandler = new McpWorkspaceToolHandler(
@@ -341,39 +383,42 @@ namespace CodeMerger.Services
 
         private string DispatchToolCall(string toolName, JsonElement arguments)
         {
-            return toolName switch
+            lock (_stateLock)
             {
-                // Read tools
-                "codemerger_get_project_overview" => _readHandler!.GetWorkspaceOverview(),
-                "codemerger_list_files" => _readHandler!.ListFiles(arguments),
-                "codemerger_get_file" => _readHandler!.GetFile(arguments),
-                "codemerger_search_code" => _readHandler!.SearchCode(arguments),
-                "codemerger_get_type" => _readHandler!.GetType(arguments),
-                "codemerger_get_dependencies" => _readHandler!.GetDependencies(arguments),
-                "codemerger_get_type_hierarchy" => _readHandler!.GetTypeHierarchy(),
-                "codemerger_grep" => _readHandler!.Grep(arguments),
-                "codemerger_get_context" => _readHandler!.GetContext(arguments),
+                return toolName switch
+                {
+                    // Read tools
+                    "codemerger_get_project_overview" => _readHandler!.GetWorkspaceOverview(),
+                    "codemerger_list_files" => _readHandler!.ListFiles(arguments),
+                    "codemerger_get_file" => _readHandler!.GetFile(arguments),
+                    "codemerger_search_code" => _readHandler!.SearchCode(arguments),
+                    "codemerger_get_type" => _readHandler!.GetType(arguments),
+                    "codemerger_get_dependencies" => _readHandler!.GetDependencies(arguments),
+                    "codemerger_get_type_hierarchy" => _readHandler!.GetTypeHierarchy(),
+                    "codemerger_grep" => _readHandler!.Grep(arguments),
+                    "codemerger_get_context" => _readHandler!.GetContext(arguments),
 
-                // Semantic tools
-                "codemerger_find_references" => _semanticHandler!.FindReferences(arguments),
-                "codemerger_get_callers" => _semanticHandler!.GetCallers(arguments),
-                "codemerger_get_callees" => _semanticHandler!.GetCallees(arguments),
+                    // Semantic tools
+                    "codemerger_find_references" => _semanticHandler!.FindReferences(arguments),
+                    "codemerger_get_callers" => _semanticHandler!.GetCallers(arguments),
+                    "codemerger_get_callees" => _semanticHandler!.GetCallees(arguments),
 
-                // Write tools
-                "codemerger_str_replace" => _writeHandler!.StrReplace(arguments),
-                "codemerger_write_file" => _writeHandler!.WriteFile(arguments),
-                "codemerger_preview_write" => _writeHandler!.PreviewWriteFile(arguments),
+                    // Write tools
+                    "codemerger_str_replace" => _writeHandler!.StrReplace(arguments),
+                    "codemerger_write_file" => _writeHandler!.WriteFile(arguments),
+                    "codemerger_preview_write" => _writeHandler!.PreviewWriteFile(arguments),
 
-                // Refactoring tools
-                "codemerger_rename_symbol" => _refactoringHandler!.RenameSymbol(arguments),
-                "codemerger_generate_interface" => _refactoringHandler!.GenerateInterface(arguments),
-                "codemerger_extract_method" => _refactoringHandler!.ExtractMethod(arguments),
-                "codemerger_add_parameter" => _refactoringHandler!.AddParameter(arguments),
-                "codemerger_implement_interface" => _refactoringHandler!.ImplementInterface(arguments),
-                "codemerger_generate_constructor" => _refactoringHandler!.GenerateConstructor(arguments),
+                    // Refactoring tools
+                    "codemerger_rename_symbol" => _refactoringHandler!.RenameSymbol(arguments),
+                    "codemerger_generate_interface" => _refactoringHandler!.GenerateInterface(arguments),
+                    "codemerger_extract_method" => _refactoringHandler!.ExtractMethod(arguments),
+                    "codemerger_add_parameter" => _refactoringHandler!.AddParameter(arguments),
+                    "codemerger_implement_interface" => _refactoringHandler!.ImplementInterface(arguments),
+                    "codemerger_generate_constructor" => _refactoringHandler!.GenerateConstructor(arguments),
 
-                _ => $"Unknown tool: {toolName}"
-            };
+                    _ => $"Unknown tool: {toolName}"
+                };
+            }
         }
 
         // Fallbacks for when handlers aren't initialized

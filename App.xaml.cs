@@ -73,28 +73,12 @@ namespace CodeMerger
                     .Select(dir => dir.Trim().ToLowerInvariant())
                     .ToHashSet();
 
-                var allFiles = workspace.InputDirectories
-                    .Where(Directory.Exists)
-                    .SelectMany(dir => Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
-                    .Where(file =>
-                    {
-                        var pathParts = file.Split(Path.DirectorySeparatorChar);
-                        if (pathParts.Any(part => ignoredDirNames.Contains(part.ToLowerInvariant())))
-                            return false;
-
-                        var fileExtension = Path.GetExtension(file);
-                        if (extensions.Count == 0 || extensions.Contains("*.*")) return true;
-                        return extensions.Contains(fileExtension, StringComparer.OrdinalIgnoreCase);
-                    })
-                    .Distinct()
-                    .ToList();
-
-                mcpServer.IndexWorkspace(workspace.Name, workspace.InputDirectories, allFiles);
+                // Pass filter settings - McpServer will scan files itself
+                mcpServer.IndexWorkspace(workspace.Name, workspace.InputDirectories, extensions, ignoredDirNames);
 
                 SendHandshakeToMainWindow(workspaceName);
 
                 Console.Error.WriteLine($"[MCP] Starting server for workspace: {workspace.Name}");
-                Console.Error.WriteLine($"[MCP] Indexed {allFiles.Count} files");
 
                 using var inputStream = Console.OpenStandardInput();
                 using var outputStream = Console.OpenStandardOutput();

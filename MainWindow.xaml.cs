@@ -7,10 +7,8 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
-using System.IO.Pipes;
 using System.Linq;
 using System.Text;
-using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -29,11 +27,11 @@ namespace CodeMerger
         private readonly IndexGenerator _indexGenerator = new IndexGenerator();
         private readonly McpServer _mcpServer = new McpServer();
         private readonly ClaudeDesktopService _claudeDesktopService = new ClaudeDesktopService();
+        private readonly McpConnectionService _mcpConnectionService;
+        private readonly FileScannerService _fileScannerService = new FileScannerService();
         
         private Workspace? _currentWorkspace;
         private GitService? _gitService;
-        private CancellationTokenSource? _handshakeListenerCts;
-        private CancellationTokenSource? _activityListenerCts;
 
         private string _statusText = string.Empty;
         private Brush _statusForeground = Brushes.White;
@@ -73,6 +71,13 @@ namespace CodeMerger
 
             _mcpServer.OnLog += OnMcpLog;
 
+            // Initialize MCP connection service
+            _mcpConnectionService = new McpConnectionService(App.HandshakePipeName, McpServer.ActivityPipeName);
+            _mcpConnectionService.OnConnected += OnMcpConnected;
+            _mcpConnectionService.OnDisconnected += OnMcpDisconnected;
+            _mcpConnectionService.OnActivity += OnMcpActivity;
+            _mcpConnectionService.OnError += OnMcpConnectionError;
+
             UpdateStatus("Ready", Brushes.Gray);
             Loaded += MainWindow_Loaded;
             Closing += MainWindow_Closing;
@@ -100,127 +105,60 @@ namespace CodeMerger
             }
 
             RefreshClaudeDesktopStatus();
-            StartHandshakeListener();
-            StartActivityListener();
+            _mcpConnectionService.Start();
         }
 
-        private void StartHandshakeListener()
-        {
-            _handshakeListenerCts = new CancellationTokenSource();
-            var token = _handshakeListenerCts.Token;
+        #region MCP Connection Events
 
-            Task.Run(async () =>
+        private void OnMcpConnected(string workspaceName)
+        {
+            Dispatcher.Invoke(() =>
             {
-                while (!token.IsCancellationRequested)
-                {
-                    try
-                    {
-                        using var pipe = new NamedPipeServerStream(App.HandshakePipeName, PipeDirection.In, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
-                        await pipe.WaitForConnectionAsync(token);
+                connectionIndicator.Fill = new SolidColorBrush(Color.FromRgb(0, 217, 165)); // AccentSuccess
+                connectionStatusText.Text = $"Connected: {workspaceName}";
+                connectionStatusText.Foreground = new SolidColorBrush(Color.FromRgb(0, 217, 165));
+                stopServerButton.Visibility = Visibility.Visible;
 
-                        using var reader = new StreamReader(pipe);
-                        string? message = await reader.ReadLineAsync();
-
-                        if (!string.IsNullOrEmpty(message))
-                        {
-                            Application.Current.Dispatcher.Invoke(() =>
-                            {
-                                OnHandshakeReceived(message);
-                            });
-                        }
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        break;
-                    }
-                    catch
-                    {
-                        await Task.Delay(500, token);
-                    }
-                }
-            }, token);
+                UpdateStatus($"✓ Claude connected via MCP (workspace: {workspaceName})", Brushes.LightGreen);
+            });
         }
 
-        private void StartActivityListener()
+        private void OnMcpDisconnected(string workspaceName)
         {
-            _activityListenerCts = new CancellationTokenSource();
-            var token = _activityListenerCts.Token;
-
-            Task.Run(async () =>
+            Dispatcher.Invoke(() =>
             {
-                while (!token.IsCancellationRequested)
-                {
-                    try
-                    {
-                        using var pipe = new NamedPipeServerStream(McpServer.ActivityPipeName, PipeDirection.In, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
-                        await pipe.WaitForConnectionAsync(token);
+                connectionIndicator.Fill = new SolidColorBrush(Color.FromRgb(136, 146, 160)); // Gray
+                connectionStatusText.Text = "Disconnected";
+                connectionStatusText.Foreground = new SolidColorBrush(Color.FromRgb(136, 146, 160));
+                stopServerButton.Visibility = Visibility.Collapsed;
 
-                        using var reader = new StreamReader(pipe);
-                        string? message = await reader.ReadLineAsync();
-
-                        if (!string.IsNullOrEmpty(message))
-                        {
-                            Application.Current.Dispatcher.Invoke(() =>
-                            {
-                                OnActivityReceived(message);
-                            });
-                        }
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        break;
-                    }
-                    catch
-                    {
-                        await Task.Delay(100, token);
-                    }
-                }
-            }, token);
+                UpdateStatus($"MCP server disconnected (workspace: {workspaceName})", Brushes.Gray);
+            });
         }
 
-        private void OnHandshakeReceived(string workspaceName)
+        private void OnMcpActivity(string workspaceName, string activity)
         {
-            // Update connection indicator
-            connectionIndicator.Fill = new SolidColorBrush(Color.FromRgb(0, 217, 165)); // AccentSuccess
-            connectionStatusText.Text = $"Connected: {workspaceName}";
-            connectionStatusText.Foreground = new SolidColorBrush(Color.FromRgb(0, 217, 165));
-            stopServerButton.Visibility = Visibility.Visible;
-            
-            UpdateStatus($"✓ Claude connected via MCP (workspace: {workspaceName})", Brushes.LightGreen);
-        }
-
-        private void OnActivityReceived(string message)
-        {
-            var parts = message.Split('|', 2);
-            if (parts.Length == 2)
+            Dispatcher.Invoke(() =>
             {
-                var workspaceName = parts[0];
-                var activity = parts[1];
-
-                // Handle disconnect notification
-                if (activity == "DISCONNECT")
-                {
-                    connectionIndicator.Fill = new SolidColorBrush(Color.FromRgb(136, 146, 160)); // Gray
-                    connectionStatusText.Text = "Disconnected";
-                    connectionStatusText.Foreground = new SolidColorBrush(Color.FromRgb(136, 146, 160));
-                    stopServerButton.Visibility = Visibility.Collapsed;
-                    UpdateStatus($"MCP server disconnected (workspace: {workspaceName})", Brushes.Gray);
-                    return;
-                }
-
-                // Update connection status since we're clearly connected if receiving activity
+                // Update connection status since we're receiving activity
                 connectionIndicator.Fill = new SolidColorBrush(Color.FromRgb(0, 217, 165)); // AccentSuccess
                 connectionStatusText.Text = $"Connected: {workspaceName}";
                 connectionStatusText.Foreground = new SolidColorBrush(Color.FromRgb(0, 217, 165));
                 stopServerButton.Visibility = Visibility.Visible;
 
                 UpdateStatus($"🔄 [{workspaceName}] {activity}", new SolidColorBrush(Color.FromRgb(100, 200, 255)));
-            }
-            else
-            {
-                UpdateStatus($"🔄 {message}", new SolidColorBrush(Color.FromRgb(100, 200, 255)));
-            }
+            });
         }
+
+        private void OnMcpConnectionError(string errorMessage)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                UpdateStatus(errorMessage, new SolidColorBrush(Color.FromRgb(255, 193, 7)));
+            });
+        }
+
+        #endregion
 
         private void RefreshClaudeDesktopStatus()
         {
@@ -267,42 +205,21 @@ namespace CodeMerger
         {
             try
             {
-                var currentProcessId = Process.GetCurrentProcess().Id;
-                var currentProcessName = Process.GetCurrentProcess().ProcessName;
+                int killed = _mcpConnectionService.KillServerProcesses();
 
-                // Find all CodeMerger processes except this one (the GUI)
-                var mcpProcesses = Process.GetProcessesByName(currentProcessName)
-                    .Where(p => p.Id != currentProcessId)
-                    .ToList();
-
-                if (mcpProcesses.Count == 0)
+                if (killed == 0)
                 {
                     UpdateStatus("No MCP server process found.", Brushes.Gray);
-                    connectionIndicator.Fill = new SolidColorBrush(Color.FromRgb(136, 146, 160));
-                    connectionStatusText.Text = "Not connected";
-                    connectionStatusText.Foreground = new SolidColorBrush(Color.FromRgb(136, 146, 160));
-                    stopServerButton.Visibility = Visibility.Collapsed;
-                    return;
                 }
-
-                foreach (var process in mcpProcesses)
+                else
                 {
-                    try
-                    {
-                        process.Kill();
-                        process.WaitForExit(1000);
-                    }
-                    catch
-                    {
-                        // Process may have already exited
-                    }
+                    UpdateStatus($"Stopped {killed} MCP server process(es). You can now recompile.", Brushes.LightGreen);
                 }
 
                 connectionIndicator.Fill = new SolidColorBrush(Color.FromRgb(136, 146, 160));
-                connectionStatusText.Text = "Server stopped";
+                connectionStatusText.Text = killed == 0 ? "Not connected" : "Server stopped";
                 connectionStatusText.Foreground = new SolidColorBrush(Color.FromRgb(136, 146, 160));
                 stopServerButton.Visibility = Visibility.Collapsed;
-                UpdateStatus($"Stopped {mcpProcesses.Count} MCP server process(es). You can now recompile.", Brushes.LightGreen);
             }
             catch (Exception ex)
             {
@@ -337,13 +254,7 @@ namespace CodeMerger
 
         private void MainWindow_Closing(object? sender, CancelEventArgs e)
         {
-            _handshakeListenerCts?.Cancel();
-            _handshakeListenerCts?.Dispose();
-            _handshakeListenerCts = null;
-
-            _activityListenerCts?.Cancel();
-            _activityListenerCts?.Dispose();
-            _activityListenerCts = null;
+            _mcpConnectionService.Dispose();
 
             if (_gitService != null)
             {
@@ -922,7 +833,11 @@ namespace CodeMerger
 
             FoundFiles.Clear();
 
-            var selectedDirs = InputDirectories.Where(item => item.IsSelected).ToList();
+            var selectedDirs = InputDirectories
+                .Where(item => item.IsSelected)
+                .Select(item => item.Path)
+                .ToList();
+
             var enabledRepos = ExternalRepositories.Where(r => r.IsEnabled).ToList();
 
             if (selectedDirs.Count == 0 && enabledRepos.Count == 0)
@@ -938,65 +853,20 @@ namespace CodeMerger
 
             try
             {
-                var extensions = extensionsTextBox.Text.Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries)
-                    .Select(ext => ext.Trim())
-                    .Where(ext => !string.IsNullOrEmpty(ext))
-                    .ToList();
+                var result = await _fileScannerService.ScanAsync(
+                    selectedDirs,
+                    enabledRepos,
+                    _gitService,
+                    extensionsTextBox.Text,
+                    ignoredDirsTextBox.Text);
 
-                var ignoredDirsInput = ignoredDirsTextBox.Text + ",.git";
-                var ignoredDirNames = ignoredDirsInput.Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries)
-                    .Select(dir => dir.Trim().ToLowerInvariant())
-                    .ToHashSet();
-
-                List<string> allFoundFiles = new List<string>();
-
-                await Task.Run(() =>
-                {
-                    foreach (var item in selectedDirs)
-                    {
-                        var dir = item.Path;
-                        if (!Directory.Exists(dir)) continue;
-
-                        var allFilesInDir = Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories)
-                            .Where(file =>
-                            {
-                                var pathParts = file.Split(Path.DirectorySeparatorChar);
-                                if (pathParts.Any(part => ignoredDirNames.Contains(part.ToLowerInvariant())))
-                                {
-                                    return false;
-                                }
-
-                                var fileExtension = Path.GetExtension(file);
-                                if (extensions.Count == 0 || extensions.Contains("*.*")) return true;
-                                return extensions.Contains(fileExtension, StringComparer.OrdinalIgnoreCase);
-                            });
-                        allFoundFiles.AddRange(allFilesInDir);
-                    }
-
-                    if (_gitService != null)
-                    {
-                        foreach (var repo in enabledRepos)
-                        {
-                            var repoFiles = _gitService.GetRepositoryFiles(repo, extensionsTextBox.Text, ignoredDirsTextBox.Text);
-                            allFoundFiles.AddRange(repoFiles);
-                        }
-                    }
-                });
-
-                var distinctFiles = allFoundFiles.Distinct().OrderBy(f => f);
-                foreach (var file in distinctFiles)
+                foreach (var file in result.Files)
                 {
                     FoundFiles.Add(file);
                 }
 
-                long totalBytes = 0;
-                foreach (var file in FoundFiles)
-                {
-                    try { totalBytes += new FileInfo(file).Length; } catch { }
-                }
-                _estimatedTokens = (int)(totalBytes / 4);
-
-                UpdateStatus($"Found {FoundFiles.Count} files (~{_estimatedTokens:N0} tokens)", Brushes.Gray);
+                _estimatedTokens = result.EstimatedTokens;
+                UpdateStatus($"Found {result.Files.Count} files (~{_estimatedTokens:N0} tokens)", Brushes.Gray);
                 UpdateRecommendation();
             }
             catch (Exception ex)

@@ -16,12 +16,12 @@ namespace CodeMerger.Services
     /// </summary>
     public class RefactoringService
     {
-        private readonly ProjectAnalysis _projectAnalysis;
+        private readonly WorkspaceAnalysis _workspaceAnalysis;
         private readonly List<string> _inputDirectories;
 
-        public RefactoringService(ProjectAnalysis projectAnalysis, List<string> inputDirectories)
+        public RefactoringService(WorkspaceAnalysis workspaceAnalysis, List<string> inputDirectories)
         {
-            _projectAnalysis = projectAnalysis;
+            _workspaceAnalysis = workspaceAnalysis;
             _inputDirectories = inputDirectories;
         }
 
@@ -34,8 +34,16 @@ namespace CodeMerger.Services
 
             try
             {
+                // Security: Validate path doesn't escape workspace
+                if (!IsPathSafe(relativePath))
+                {
+                    result.Success = false;
+                    result.Error = "Invalid path: path traversal not allowed";
+                    return result;
+                }
+
                 // Find the file or determine where to create it
-                var existingFile = _projectAnalysis.AllFiles
+                var existingFile = _workspaceAnalysis.AllFiles
                     .FirstOrDefault(f => f.RelativePath.Equals(relativePath, StringComparison.OrdinalIgnoreCase) ||
                                         f.RelativePath.Replace('\\', '/').Equals(relativePath.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase));
 
@@ -61,7 +69,16 @@ namespace CodeMerger.Services
                 {
                     // New file - use first input directory
                     var baseDir = _inputDirectories.FirstOrDefault() ?? Directory.GetCurrentDirectory();
-                    fullPath = Path.Combine(baseDir, relativePath.Replace('/', Path.DirectorySeparatorChar));
+                    fullPath = Path.GetFullPath(Path.Combine(baseDir, relativePath.Replace('/', Path.DirectorySeparatorChar)));
+                    
+                    // Security: Verify resolved path is still within workspace
+                    if (!IsPathWithinWorkspace(fullPath))
+                    {
+                        result.Success = false;
+                        result.Error = "Invalid path: resolved path escapes workspace directory";
+                        return result;
+                    }
+                    
                     result.IsNewFile = true;
 
                     // Ensure directory exists
@@ -72,8 +89,8 @@ namespace CodeMerger.Services
                     }
                 }
 
-                // Write the file
-                File.WriteAllText(fullPath, content);
+                // Write the file atomically
+                WriteFileAtomic(fullPath, content);
                 result.FullPath = fullPath;
                 result.Success = true;
                 result.BytesWritten = content.Length;
@@ -88,6 +105,81 @@ namespace CodeMerger.Services
         }
 
         /// <summary>
+        /// Check if a relative path is safe (no traversal attempts).
+        /// </summary>
+        private bool IsPathSafe(string relativePath)
+        {
+            if (string.IsNullOrWhiteSpace(relativePath))
+                return false;
+
+            // Reject absolute paths
+            if (Path.IsPathRooted(relativePath))
+                return false;
+
+            // Reject paths with .. components
+            var normalized = relativePath.Replace('\\', '/');
+            var parts = normalized.Split('/');
+            foreach (var part in parts)
+            {
+                if (part == ".." || part == ".")
+                    return false;
+            }
+
+            // Reject paths with null bytes or other dangerous characters
+            if (relativePath.Contains('\0'))
+                return false;
+
+            return true;
+        }
+
+        /// <summary>
+        /// Check if a fully resolved path is within one of the workspace directories.
+        /// </summary>
+        private bool IsPathWithinWorkspace(string fullPath)
+        {
+            var normalizedPath = Path.GetFullPath(fullPath);
+            
+            foreach (var inputDir in _inputDirectories)
+            {
+                var normalizedDir = Path.GetFullPath(inputDir);
+                if (!normalizedDir.EndsWith(Path.DirectorySeparatorChar.ToString()))
+                    normalizedDir += Path.DirectorySeparatorChar;
+
+                if (normalizedPath.StartsWith(normalizedDir, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Write file atomically: write to temp file, then move to target.
+        /// Prevents corruption if process crashes mid-write.
+        /// </summary>
+        private void WriteFileAtomic(string targetPath, string content)
+        {
+            var dir = Path.GetDirectoryName(targetPath) ?? ".";
+            var tempPath = Path.Combine(dir, $".{Path.GetFileName(targetPath)}.{Guid.NewGuid():N}.tmp");
+
+            try
+            {
+                // Write to temp file
+                File.WriteAllText(tempPath, content);
+
+                // Atomic move (replace if exists)
+                File.Move(tempPath, targetPath, overwrite: true);
+            }
+            finally
+            {
+                // Clean up temp file if it still exists (move failed)
+                if (File.Exists(tempPath))
+                {
+                    try { File.Delete(tempPath); } catch { }
+                }
+            }
+        }
+
+        /// <summary>
         /// Preview what a file write would look like without actually writing.
         /// </summary>
         public WriteFileResult PreviewWriteFile(string relativePath, string content)
@@ -98,7 +190,7 @@ namespace CodeMerger.Services
                 IsPreview = true
             };
 
-            var existingFile = _projectAnalysis.AllFiles
+            var existingFile = _workspaceAnalysis.AllFiles
                 .FirstOrDefault(f => f.RelativePath.Equals(relativePath, StringComparison.OrdinalIgnoreCase) ||
                                     f.RelativePath.Replace('\\', '/').Equals(relativePath.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase));
 
@@ -132,7 +224,7 @@ namespace CodeMerger.Services
 
             var affectedFiles = new Dictionary<string, RenameFileChange>();
 
-            foreach (var file in _projectAnalysis.AllFiles.Where(f => f.Extension == ".cs"))
+            foreach (var file in _workspaceAnalysis.AllFiles.Where(f => f.Extension == ".cs"))
             {
                 try
                 {
@@ -183,7 +275,7 @@ namespace CodeMerger.Services
             var result = new GenerateInterfaceResult { ClassName = className };
 
             // Find the class
-            var classFile = _projectAnalysis.AllFiles
+            var classFile = _workspaceAnalysis.AllFiles
                 .SelectMany(f => f.Types.Select(t => new { File = f, Type = t }))
                 .FirstOrDefault(x => x.Type.Name.Equals(className, StringComparison.OrdinalIgnoreCase));
 
@@ -269,7 +361,7 @@ namespace CodeMerger.Services
                 NewMethodName = newMethodName
             };
 
-            var file = _projectAnalysis.AllFiles
+            var file = _workspaceAnalysis.AllFiles
                 .FirstOrDefault(f => f.RelativePath.Equals(filePath, StringComparison.OrdinalIgnoreCase));
 
             if (file == null)
