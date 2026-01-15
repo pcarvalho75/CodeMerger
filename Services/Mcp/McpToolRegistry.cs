@@ -462,7 +462,7 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_switch_project",
-                    description = "Switch to a different CodeMerger project. This will set the new project as active and restart the server to load it. Use codemerger_list_projects first to see available projects.",
+                    description = "Switch to a different CodeMerger project. The server will hot-swap to the new workspace without restarting - no reconnection needed. Use codemerger_list_projects first to see available projects.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },

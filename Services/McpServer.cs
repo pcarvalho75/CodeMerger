@@ -74,6 +74,53 @@ namespace CodeMerger.Services
             PerformIndexing();
         }
 
+        /// <summary>
+        /// Switches to a different workspace without restarting the server.
+        /// Loads the new workspace config and re-indexes.
+        /// </summary>
+        public bool SwitchToWorkspace(string workspaceName)
+        {
+            var workspace = _workspaceService.LoadWorkspace(workspaceName);
+            if (workspace == null)
+            {
+                Log($"SwitchToWorkspace failed: workspace '{workspaceName}' not found");
+                return false;
+            }
+
+            Log($"Switching to workspace: {workspaceName}");
+
+            // Parse extensions
+            var extensions = workspace.Extensions
+                .Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(ext => ext.Trim())
+                .Where(ext => !string.IsNullOrEmpty(ext))
+                .ToList();
+
+            // Parse ignored directories
+            var ignoredDirsInput = workspace.IgnoredDirectories + ",.git";
+            var ignoredDirNames = ignoredDirsInput
+                .Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(dir => dir.Trim().ToLowerInvariant())
+                .ToHashSet();
+
+            // Update instance state - filter out disabled directories
+            _workspaceName = workspaceName;
+            _inputDirectories = workspace.InputDirectories
+                .Where(dir => !workspace.DisabledDirectories.Contains(dir))
+                .ToList();
+            _extensions = extensions;
+            _ignoredDirs = ignoredDirNames;
+
+            // Set as active workspace
+            _workspaceService.SetActiveWorkspace(workspaceName);
+
+            // Re-index with new config
+            PerformIndexing();
+
+            Log($"Switched to workspace: {workspaceName} ({_workspaceAnalysis?.TotalFiles ?? 0} files)");
+            return true;
+        }
+
         private List<string> ScanFiles()
         {
             return _inputDirectories
@@ -153,6 +200,7 @@ namespace CodeMerger.Services
                 _inputDirectories,
                 () => PerformIndexing(), // Refresh callback
                 () => RequestShutdown(), // Shutdown callback
+                (name) => SwitchToWorkspace(name), // Switch workspace callback
                 SendActivity,
                 Log);
         }

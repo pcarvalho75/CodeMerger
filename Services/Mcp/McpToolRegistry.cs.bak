@@ -366,7 +366,11 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_add_parameter",
-                    description = "Add a parameter to a method and update all call sites. Use preview=true first to see all affected locations.",
+                    description = "Add a parameter to a method and update all call sites. Use preview=true first to see all affected locations.\n\n" +
+                        "IMPORTANT WORKFLOW - Before applying changes (preview=false):\n" +
+                        "1. Always run with preview=true first and show results to user\n" +
+                        "2. Ask user to confirm before running with preview=false\n" +
+                        "3. Only set preview=false AFTER user explicitly approves the changes",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },

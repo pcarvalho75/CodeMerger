@@ -74,6 +74,51 @@ namespace CodeMerger.Services
             PerformIndexing();
         }
 
+        /// <summary>
+        /// Switches to a different workspace without restarting the server.
+        /// Loads the new workspace config and re-indexes.
+        /// </summary>
+        public bool SwitchToWorkspace(string workspaceName)
+        {
+            var workspace = _workspaceService.LoadWorkspace(workspaceName);
+            if (workspace == null)
+            {
+                Log($"SwitchToWorkspace failed: workspace '{workspaceName}' not found");
+                return false;
+            }
+
+            Log($"Switching to workspace: {workspaceName}");
+
+            // Parse extensions
+            var extensions = workspace.Extensions
+                .Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(ext => ext.Trim())
+                .Where(ext => !string.IsNullOrEmpty(ext))
+                .ToList();
+
+            // Parse ignored directories
+            var ignoredDirsInput = workspace.IgnoredDirectories + ",.git";
+            var ignoredDirNames = ignoredDirsInput
+                .Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(dir => dir.Trim().ToLowerInvariant())
+                .ToHashSet();
+
+            // Update instance state
+            _workspaceName = workspaceName;
+            _inputDirectories = workspace.InputDirectories;
+            _extensions = extensions;
+            _ignoredDirs = ignoredDirNames;
+
+            // Set as active workspace
+            _workspaceService.SetActiveWorkspace(workspaceName);
+
+            // Re-index with new config
+            PerformIndexing();
+
+            Log($"Switched to workspace: {workspaceName} ({_workspaceAnalysis?.TotalFiles ?? 0} files)");
+            return true;
+        }
+
         private List<string> ScanFiles()
         {
             return _inputDirectories
@@ -153,6 +198,7 @@ namespace CodeMerger.Services
                 _inputDirectories,
                 () => PerformIndexing(), // Refresh callback
                 () => RequestShutdown(), // Shutdown callback
+                (name) => SwitchToWorkspace(name), // Switch workspace callback
                 SendActivity,
                 Log);
         }
@@ -397,6 +443,7 @@ namespace CodeMerger.Services
                 "codemerger_get_type_hierarchy" => _readHandler!.GetTypeHierarchy(),
                 "codemerger_grep" => _readHandler!.Grep(arguments),
                 "codemerger_get_context" => _readHandler!.GetContext(arguments),
+                "codemerger_get_lines" => _readHandler!.GetLines(arguments),
 
                 // Semantic tools
                 "codemerger_find_references" => _semanticHandler!.FindReferences(arguments),

@@ -73,8 +73,13 @@ namespace CodeMerger
                     .Select(dir => dir.Trim().ToLowerInvariant())
                     .ToHashSet();
 
+                // Filter out disabled directories
+                var activeDirectories = workspace.InputDirectories
+                    .Where(dir => !workspace.DisabledDirectories.Contains(dir))
+                    .ToList();
+
                 // Pass filter settings - McpServer will scan files itself
-                mcpServer.IndexWorkspace(workspace.Name, workspace.InputDirectories, extensions, ignoredDirNames);
+                mcpServer.IndexWorkspace(workspace.Name, activeDirectories, extensions, ignoredDirNames);
 
                 SendHandshakeToMainWindow(workspaceName);
 
