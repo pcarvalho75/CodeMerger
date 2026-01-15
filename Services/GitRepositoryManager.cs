@@ -2,6 +2,7 @@ using System;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Threading.Tasks;
+using CodeMerger.Models;
 
 namespace CodeMerger.Services
 {
@@ -18,7 +19,6 @@ namespace CodeMerger.Services
 
         public event Action<string>? OnProgress;
         public event Action<string>? OnError;
-        public event Action? OnRepositoriesChanged;
 
         public void SetWorkspaceFolder(string workspaceFolder)
         {
@@ -62,7 +62,6 @@ namespace CodeMerger.Services
                 var repo = await _gitService.CloneOrPullAsync(url);
                 Repositories.Add(repo);
                 OnProgress?.Invoke($"Cloned {repo.Name} ({repo.Branch})");
-                OnRepositoriesChanged?.Invoke();
                 return true;
             }
             catch (Exception ex)
@@ -82,7 +81,6 @@ namespace CodeMerger.Services
                 await _gitService.CloneOrPullAsync(repo.Url);
                 repo.LastUpdated = DateTime.Now;
                 OnProgress?.Invoke($"Updated {repo.Name}");
-                OnRepositoriesChanged?.Invoke();
                 return true;
             }
             catch (Exception ex)
@@ -101,7 +99,6 @@ namespace CodeMerger.Services
                 _gitService.DeleteRepository(repo);
                 Repositories.Remove(repo);
                 OnProgress?.Invoke($"Removed {repo.Name}");
-                OnRepositoriesChanged?.Invoke();
                 return true;
             }
             catch (Exception ex)
@@ -164,11 +161,6 @@ namespace CodeMerger.Services
         public void Clear()
         {
             Repositories.Clear();
-        }
-
-        public void NotifySelectionChanged()
-        {
-            OnRepositoriesChanged?.Invoke();
         }
     }
 }

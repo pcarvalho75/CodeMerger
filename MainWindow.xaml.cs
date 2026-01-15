@@ -2,13 +2,11 @@ using CodeMerger.Models;
 using CodeMerger.Services;
 using Microsoft.Win32;
 using System;
-using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System.Text;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -21,9 +19,6 @@ namespace CodeMerger
         public ObservableCollection<string> FoundFiles { get; set; }
 
         private readonly WorkspaceManager _workspaceManager = new WorkspaceManager();
-        private readonly CodeAnalyzer _codeAnalyzer = new CodeAnalyzer();
-        private readonly IndexGenerator _indexGenerator = new IndexGenerator();
-        private readonly McpServer _mcpServer = new McpServer();
         private readonly ClaudeDesktopService _claudeDesktopService = new ClaudeDesktopService();
         private readonly McpConnectionService _mcpConnectionService;
         private readonly FileScannerService _fileScannerService = new FileScannerService();
@@ -79,10 +74,11 @@ namespace CodeMerger
             _gitRepositoryManager.OnError += msg => Dispatcher.Invoke(() => 
                 UpdateStatus(msg, new SolidColorBrush(Color.FromRgb(233, 69, 96))));
 
+            // Wire up file scanner progress
+            _fileScannerService.OnProgress += msg => Dispatcher.Invoke(() => UpdateStatus(msg, Brushes.Gray));
+
             // Wire up workspace manager events
             _workspaceManager.OnWorkspaceChanged += OnWorkspaceChanged;
-
-            _mcpServer.OnLog += OnMcpLog;
 
             // Initialize MCP connection service
             _mcpConnectionService = new McpConnectionService(App.HandshakePipeName, McpServer.ActivityPipeName);
@@ -268,14 +264,6 @@ namespace CodeMerger
         private void MainWindow_Closing(object? sender, CancelEventArgs e)
         {
             _mcpConnectionService.Dispose();
-        }
-
-        private void OnMcpLog(string message)
-        {
-            Dispatcher.Invoke(() =>
-            {
-                UpdateStatus(message, Brushes.LightGreen);
-            });
         }
 
         private void LoadWorkspaceList()
@@ -564,7 +552,6 @@ namespace CodeMerger
         private async void GitRepoCheckBox_Changed(object sender, RoutedEventArgs e)
         {
             if (_isLoadingWorkspace) return;
-            _gitRepositoryManager.NotifySelectionChanged();
             SaveCurrentWorkspace();
             await ScanFilesAsync();
         }
@@ -601,107 +588,10 @@ namespace CodeMerger
         }
 
         // Keep for compatibility - hidden in UI
-        private async void Merge_Click(object sender, RoutedEventArgs e)
+        private void Merge_Click(object sender, RoutedEventArgs e)
         {
-            if (FoundFiles.Count == 0)
-            {
-                UpdateStatus("No files to merge.", new SolidColorBrush(Color.FromRgb(233, 69, 96)));
-                return;
-            }
-
-            if (_currentWorkspace == null)
-            {
-                UpdateStatus("No workspace selected.", new SolidColorBrush(Color.FromRgb(233, 69, 96)));
-                return;
-            }
-
-            string workspaceFolder = _workspaceManager.GetCurrentWorkspaceFolder();
-            var filesToMerge = FoundFiles.ToList();
-
-            SetUIState(false);
-            UpdateStatus("Analyzing files...", new SolidColorBrush(Color.FromRgb(100, 200, 255)));
-            progressBar.Value = 0;
-            progressBar.Maximum = filesToMerge.Count + 2;
-
-            try
-            {
-                var fileAnalyses = new List<FileAnalysis>();
-                var selectedDirs = _directoryManager.GetSelectedPaths().ToList();
-
-                foreach (var repo in _gitRepositoryManager.Repositories.Where(r => r.IsEnabled))
-                {
-                    selectedDirs.Add(repo.LocalPath);
-                }
-
-                await Task.Run(() =>
-                {
-                    for (int i = 0; i < filesToMerge.Count; i++)
-                    {
-                        var file = filesToMerge[i];
-                        var baseDir = selectedDirs.FirstOrDefault(dir => file.StartsWith(dir, StringComparison.OrdinalIgnoreCase));
-                        if (baseDir == null) continue;
-
-                        var analysis = _codeAnalyzer.AnalyzeFile(file, baseDir);
-                        fileAnalyses.Add(analysis);
-
-                        Application.Current.Dispatcher.Invoke(() =>
-                        {
-                            progressBar.Value = i + 1;
-                            fileStatusLabel.Text = $"Analyzing: {analysis.FileName}";
-                        });
-                    }
-                });
-
-                UpdateStatus("Creating chunks...", new SolidColorBrush(Color.FromRgb(100, 200, 255)));
-                var chunkManager = new ChunkManager(150000);
-                var chunks = chunkManager.CreateChunks(fileAnalyses);
-
-                var workspaceAnalysis = _indexGenerator.BuildWorkspaceAnalysis(_currentWorkspace.Name, fileAnalyses, chunks);
-
-                Application.Current.Dispatcher.Invoke(() =>
-                {
-                    progressBar.Value = filesToMerge.Count + 1;
-                    fileStatusLabel.Text = "Generating index...";
-                });
-
-                await Task.Run(() =>
-                {
-                    Directory.CreateDirectory(workspaceFolder);
-
-                    string masterIndexPath = Path.Combine(workspaceFolder, $"{_currentWorkspace.Name}_master_index.txt");
-                    string masterIndex = _indexGenerator.GenerateMasterIndex(workspaceAnalysis);
-                    File.WriteAllText(masterIndexPath, masterIndex, new UTF8Encoding(false));
-
-                    for (int i = 0; i < chunks.Count; i++)
-                    {
-                        var chunk = chunks[i];
-                        string chunkPath = Path.Combine(workspaceFolder, $"{_currentWorkspace.Name}_chunk_{chunk.ChunkNumber}.txt");
-                        string chunkContent = _indexGenerator.GenerateChunkContent(chunk, chunks.Count, fileAnalyses);
-                        File.WriteAllText(chunkPath, chunkContent, new UTF8Encoding(false));
-
-                        Application.Current.Dispatcher.Invoke(() =>
-                        {
-                            fileStatusLabel.Text = $"Writing chunk {i + 1} of {chunks.Count}...";
-                        });
-                    }
-                });
-
-                Application.Current.Dispatcher.Invoke(() =>
-                {
-                    progressBar.Value = progressBar.Maximum;
-                });
-
-                int totalTokens = fileAnalyses.Sum(f => f.EstimatedTokens);
-                UpdateStatus($"Generated {chunks.Count} chunk(s) with ~{totalTokens:N0} tokens", Brushes.LightGreen);
-            }
-            catch (Exception ex)
-            {
-                UpdateStatus($"Error: {ex.Message}", new SolidColorBrush(Color.FromRgb(233, 69, 96)));
-            }
-            finally
-            {
-                SetUIState(true);
-            }
+            // Legacy feature - MCP now handles file access dynamically
+            UpdateStatus("Legacy merge feature is no longer needed. Use MCP.", Brushes.Gray);
         }
 
         // Keep for compatibility - hidden in UI

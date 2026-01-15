@@ -101,6 +101,7 @@ namespace CodeMerger.Services
         public void NotifySelectionChanged()
         {
             UpdateCountText();
+            OnDirectoriesChanged?.Invoke();
         }
 
         private void UpdateCountText()
