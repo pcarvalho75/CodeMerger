@@ -131,6 +131,10 @@ namespace CodeMerger.Services.Mcp
             var result = _refactoringService.WriteFile(path, content, createBackup);
             _log($"WriteFile: {path} - {(result.Success ? "OK" : "FAILED")}");
 
+            // Refresh index to reflect changes
+            if (result.Success)
+                _refreshIndex();
+
             return result.ToMarkdown();
         }
 

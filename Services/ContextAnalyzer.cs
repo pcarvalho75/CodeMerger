@@ -542,14 +542,14 @@ namespace CodeMerger.Services
 
                     foreach (var ctx in match.ContextBefore)
                     {
-                        sb.AppendLine($"  {ctx}");
+                        sb.AppendLine(VisualizeWhitespace(ctx));
                     }
 
-                    sb.AppendLine($"> {match.Line}");
+                    sb.AppendLine($"> {VisualizeWhitespace(match.Line)}");
 
                     foreach (var ctx in match.ContextAfter)
                     {
-                        sb.AppendLine($"  {ctx}");
+                        sb.AppendLine(VisualizeWhitespace(ctx));
                     }
 
                     sb.AppendLine("```");
@@ -558,6 +558,27 @@ namespace CodeMerger.Services
             }
 
             return sb.ToString();
+        }
+
+        /// <summary>
+        /// Makes leading whitespace visible by showing tabs as → and preserving spaces.
+        /// </summary>
+        private static string VisualizeWhitespace(string line)
+        {
+            if (string.IsNullOrEmpty(line)) return line;
+
+            // Find the end of leading whitespace
+            int i = 0;
+            while (i < line.Length && (line[i] == ' ' || line[i] == '\t'))
+                i++;
+
+            if (i == 0) return line;
+
+            // Visualize leading whitespace: tabs become →, spaces stay as spaces
+            var leading = line.Substring(0, i).Replace("\t", "→");
+            var rest = line.Substring(i);
+
+            return leading + rest;
         }
     }
 

@@ -383,42 +383,41 @@ namespace CodeMerger.Services
 
         private string DispatchToolCall(string toolName, JsonElement arguments)
         {
-            lock (_stateLock)
+            // Note: No lock here - read operations are safe, write operations 
+            // trigger PerformIndexing() which has its own lock for state mutation
+            return toolName switch
             {
-                return toolName switch
-                {
-                    // Read tools
-                    "codemerger_get_project_overview" => _readHandler!.GetWorkspaceOverview(),
-                    "codemerger_list_files" => _readHandler!.ListFiles(arguments),
-                    "codemerger_get_file" => _readHandler!.GetFile(arguments),
-                    "codemerger_search_code" => _readHandler!.SearchCode(arguments),
-                    "codemerger_get_type" => _readHandler!.GetType(arguments),
-                    "codemerger_get_dependencies" => _readHandler!.GetDependencies(arguments),
-                    "codemerger_get_type_hierarchy" => _readHandler!.GetTypeHierarchy(),
-                    "codemerger_grep" => _readHandler!.Grep(arguments),
-                    "codemerger_get_context" => _readHandler!.GetContext(arguments),
+                // Read tools
+                "codemerger_get_project_overview" => _readHandler!.GetWorkspaceOverview(),
+                "codemerger_list_files" => _readHandler!.ListFiles(arguments),
+                "codemerger_get_file" => _readHandler!.GetFile(arguments),
+                "codemerger_search_code" => _readHandler!.SearchCode(arguments),
+                "codemerger_get_type" => _readHandler!.GetType(arguments),
+                "codemerger_get_dependencies" => _readHandler!.GetDependencies(arguments),
+                "codemerger_get_type_hierarchy" => _readHandler!.GetTypeHierarchy(),
+                "codemerger_grep" => _readHandler!.Grep(arguments),
+                "codemerger_get_context" => _readHandler!.GetContext(arguments),
 
-                    // Semantic tools
-                    "codemerger_find_references" => _semanticHandler!.FindReferences(arguments),
-                    "codemerger_get_callers" => _semanticHandler!.GetCallers(arguments),
-                    "codemerger_get_callees" => _semanticHandler!.GetCallees(arguments),
+                // Semantic tools
+                "codemerger_find_references" => _semanticHandler!.FindReferences(arguments),
+                "codemerger_get_callers" => _semanticHandler!.GetCallers(arguments),
+                "codemerger_get_callees" => _semanticHandler!.GetCallees(arguments),
 
-                    // Write tools
-                    "codemerger_str_replace" => _writeHandler!.StrReplace(arguments),
-                    "codemerger_write_file" => _writeHandler!.WriteFile(arguments),
-                    "codemerger_preview_write" => _writeHandler!.PreviewWriteFile(arguments),
+                // Write tools
+                "codemerger_str_replace" => _writeHandler!.StrReplace(arguments),
+                "codemerger_write_file" => _writeHandler!.WriteFile(arguments),
+                "codemerger_preview_write" => _writeHandler!.PreviewWriteFile(arguments),
 
-                    // Refactoring tools
-                    "codemerger_rename_symbol" => _refactoringHandler!.RenameSymbol(arguments),
-                    "codemerger_generate_interface" => _refactoringHandler!.GenerateInterface(arguments),
-                    "codemerger_extract_method" => _refactoringHandler!.ExtractMethod(arguments),
-                    "codemerger_add_parameter" => _refactoringHandler!.AddParameter(arguments),
-                    "codemerger_implement_interface" => _refactoringHandler!.ImplementInterface(arguments),
-                    "codemerger_generate_constructor" => _refactoringHandler!.GenerateConstructor(arguments),
+                // Refactoring tools
+                "codemerger_rename_symbol" => _refactoringHandler!.RenameSymbol(arguments),
+                "codemerger_generate_interface" => _refactoringHandler!.GenerateInterface(arguments),
+                "codemerger_extract_method" => _refactoringHandler!.ExtractMethod(arguments),
+                "codemerger_add_parameter" => _refactoringHandler!.AddParameter(arguments),
+                "codemerger_implement_interface" => _refactoringHandler!.ImplementInterface(arguments),
+                "codemerger_generate_constructor" => _refactoringHandler!.GenerateConstructor(arguments),
 
-                    _ => $"Unknown tool: {toolName}"
-                };
-            }
+                _ => $"Unknown tool: {toolName}"
+            };
         }
 
         // Fallbacks for when handlers aren't initialized

@@ -73,7 +73,7 @@ namespace CodeMerger.Services.Mcp
 
                 if (count == 0)
                 {
-                    return $"Error: String not found in file.\n\n**Looking for:**\n```\n{oldStr}\n```";
+                    return BuildNotFoundDiagnostic(content, oldStr, file.RelativePath);
                 }
 
                 if (count > 1)
@@ -109,6 +109,93 @@ namespace CodeMerger.Services.Mcp
             {
                 return $"Error: {ex.Message}";
             }
+        }
+
+        /// <summary>
+        /// Builds a diagnostic message when the search string is not found.
+        /// Shows whitespace details and tries to find partial matches.
+        /// </summary>
+        private string BuildNotFoundDiagnostic(string content, string oldStr, string filePath)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("# Error: String not found in file");
+            sb.AppendLine();
+            sb.AppendLine($"**File:** `{filePath}`");
+            sb.AppendLine();
+
+            // Show what we were looking for with whitespace visualization
+            var oldStrLines = oldStr.Split('\n');
+            sb.AppendLine($"**Looking for ({oldStrLines.Length} lines, {oldStr.Length} chars):**");
+            sb.AppendLine("```");
+            foreach (var line in oldStrLines.Take(10))
+            {
+                sb.AppendLine(VisualizeWhitespace(line.TrimEnd('\r')));
+            }
+            if (oldStrLines.Length > 10)
+                sb.AppendLine($"... ({oldStrLines.Length - 10} more lines)");
+            sb.AppendLine("```");
+            sb.AppendLine();
+
+            // Try to find partial matches using the first non-empty line
+            var firstLine = oldStrLines.FirstOrDefault(l => l.Trim().Length > 0)?.Trim() ?? "";
+            if (firstLine.Length > 10)
+            {
+                var contentLines = content.Split('\n');
+                var partialMatches = new System.Collections.Generic.List<(int lineNum, string line)>();
+
+                for (int i = 0; i < contentLines.Length; i++)
+                {
+                    // Check if the trimmed content matches (ignoring whitespace differences)
+                    if (contentLines[i].Trim().Contains(firstLine.Substring(0, Math.Min(20, firstLine.Length))))
+                    {
+                        partialMatches.Add((i + 1, contentLines[i]));
+                    }
+                }
+
+                if (partialMatches.Count > 0)
+                {
+                    sb.AppendLine("**Possible matches found (similar content at these lines):**");
+                    sb.AppendLine("```");
+                    foreach (var (lineNum, line) in partialMatches.Take(5))
+                    {
+                        sb.AppendLine($"Line {lineNum}: {VisualizeWhitespace(line.TrimEnd('\r'))}");
+                    }
+                    sb.AppendLine("```");
+                    sb.AppendLine();
+                    sb.AppendLine("**Hint:** Whitespace mismatch? Use `codemerger_get_lines` to see exact file content.");
+                }
+                else
+                {
+                    sb.AppendLine("**No similar content found.** The code may have changed or the search text is incorrect.");
+                }
+            }
+
+            // Show whitespace legend
+            sb.AppendLine();
+            sb.AppendLine("**Whitespace legend:** `→` = tab, space = space");
+
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// Makes leading whitespace visible by showing tabs as → and preserving spaces.
+        /// </summary>
+        private static string VisualizeWhitespace(string line)
+        {
+            if (string.IsNullOrEmpty(line)) return line;
+
+            // Find the end of leading whitespace
+            int i = 0;
+            while (i < line.Length && (line[i] == ' ' || line[i] == '\t'))
+                i++;
+
+            if (i == 0) return line;
+
+            // Visualize leading whitespace: tabs become →, spaces stay as spaces
+            var leading = line.Substring(0, i).Replace("\t", "→");
+            var rest = line.Substring(i);
+
+            return leading + rest;
         }
 
         public string WriteFile(JsonElement arguments)

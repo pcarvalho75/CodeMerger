@@ -397,6 +397,7 @@ namespace CodeMerger.Services
                 "codemerger_get_type_hierarchy" => _readHandler!.GetTypeHierarchy(),
                 "codemerger_grep" => _readHandler!.Grep(arguments),
                 "codemerger_get_context" => _readHandler!.GetContext(arguments),
+                "codemerger_get_lines" => _readHandler!.GetLines(arguments),
 
                 // Semantic tools
                 "codemerger_find_references" => _semanticHandler!.FindReferences(arguments),
