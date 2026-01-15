@@ -18,7 +18,6 @@ namespace CodeMerger
 {
     public partial class MainWindow : Window, INotifyPropertyChanged
     {
-        public ObservableCollection<SelectableItem> InputDirectories { get; set; }
         public ObservableCollection<string> FoundFiles { get; set; }
         public ObservableCollection<ExternalRepository> ExternalRepositories { get; set; }
 
@@ -29,6 +28,7 @@ namespace CodeMerger
         private readonly ClaudeDesktopService _claudeDesktopService = new ClaudeDesktopService();
         private readonly McpConnectionService _mcpConnectionService;
         private readonly FileScannerService _fileScannerService = new FileScannerService();
+        private readonly DirectoryManager _directoryManager = new DirectoryManager();
         
         private Workspace? _currentWorkspace;
         private GitService? _gitService;
@@ -61,13 +61,19 @@ namespace CodeMerger
         {
             InitializeComponent();
             DataContext = this;
-            InputDirectories = new ObservableCollection<SelectableItem>();
             FoundFiles = new ObservableCollection<string>();
             ExternalRepositories = new ObservableCollection<ExternalRepository>();
 
-            inputDirListBox.ItemsSource = InputDirectories;
+            inputDirListBox.ItemsSource = _directoryManager.Directories;
             fileListBox.ItemsSource = FoundFiles;
             gitRepoListBox.ItemsSource = ExternalRepositories;
+
+            // Bind directory count text
+            _directoryManager.PropertyChanged += (s, e) =>
+            {
+                if (e.PropertyName == nameof(DirectoryManager.CountText))
+                    directoryCountText.Text = _directoryManager.CountText;
+            };
 
             _mcpServer.OnLog += OnMcpLog;
 
@@ -346,12 +352,7 @@ namespace CodeMerger
 
             try
             {
-                InputDirectories.Clear();
-                foreach (var dir in workspace.InputDirectories)
-                {
-                    bool isSelected = !workspace.DisabledDirectories.Contains(dir);
-                    InputDirectories.Add(new SelectableItem(dir, isSelected));
-                }
+                _directoryManager.Load(workspace.InputDirectories, workspace.DisabledDirectories);
 
                 ExternalRepositories.Clear();
                 foreach (var repo in workspace.ExternalRepositories)
@@ -374,7 +375,6 @@ namespace CodeMerger
             finally
             {
                 _isLoadingWorkspace = false;
-                UpdateDirectoryCount();
                 await ScanFilesAsync();
             }
         }
@@ -472,13 +472,8 @@ namespace CodeMerger
         {
             if (_currentWorkspace == null || _isLoadingWorkspace) return;
 
-            _currentWorkspace.InputDirectories = InputDirectories.Select(item => item.Path).ToList();
-
-            _currentWorkspace.DisabledDirectories = InputDirectories
-                .Where(item => !item.IsSelected)
-                .Select(item => item.Path)
-                .ToList();
-
+            _currentWorkspace.InputDirectories = _directoryManager.GetAllPaths().ToList();
+            _currentWorkspace.DisabledDirectories = _directoryManager.GetDisabledPaths().ToList();
             _currentWorkspace.Extensions = extensionsTextBox.Text;
             _currentWorkspace.IgnoredDirectories = ignoredDirsTextBox.Text;
             _currentWorkspace.ExternalRepositories = ExternalRepositories.ToList();
@@ -499,11 +494,10 @@ namespace CodeMerger
             if (dialog.ShowDialog() == true)
             {
                 string? folderPath = Path.GetDirectoryName(dialog.FileName);
-                if (!string.IsNullOrEmpty(folderPath) && !InputDirectories.Any(item => item.Path == folderPath))
+                if (!string.IsNullOrEmpty(folderPath))
                 {
-                    InputDirectories.Add(new SelectableItem(folderPath, true));
+                    _directoryManager.Add(folderPath);
                     SaveCurrentWorkspace();
-                    UpdateDirectoryCount();
                     await ScanFilesAsync();
                 }
             }
@@ -511,58 +505,31 @@ namespace CodeMerger
 
         private async void RemoveDirectory_Click(object sender, RoutedEventArgs e)
         {
-            if (inputDirListBox.SelectedItem != null)
+            var selectedItems = inputDirListBox.SelectedItems.Cast<SelectableItem>().ToList();
+            foreach (var item in selectedItems)
             {
-                var selectedItems = inputDirListBox.SelectedItems.Cast<SelectableItem>().ToList();
-                foreach (var item in selectedItems)
-                {
-                    InputDirectories.Remove(item);
-                }
+                _directoryManager.Remove(item);
+            }
+            
+            if (selectedItems.Count > 0)
+            {
                 SaveCurrentWorkspace();
-                UpdateDirectoryCount();
                 await ScanFilesAsync();
             }
         }
 
         private async void SelectAllDirectories_Click(object sender, RoutedEventArgs e)
         {
-            foreach (var item in InputDirectories)
-            {
-                item.IsSelected = true;
-            }
+            _directoryManager.SelectAll();
             SaveCurrentWorkspace();
-            UpdateDirectoryCount();
             await ScanFilesAsync();
         }
 
         private async void DeselectAllDirectories_Click(object sender, RoutedEventArgs e)
         {
-            foreach (var item in InputDirectories)
-            {
-                item.IsSelected = false;
-            }
+            _directoryManager.DeselectAll();
             SaveCurrentWorkspace();
-            UpdateDirectoryCount();
             await ScanFilesAsync();
-        }
-
-        private void UpdateDirectoryCount()
-        {
-            int total = InputDirectories.Count;
-            int active = InputDirectories.Count(item => item.IsSelected);
-
-            if (total == 0)
-            {
-                directoryCountText.Text = "";
-            }
-            else if (active == total)
-            {
-                directoryCountText.Text = $"({total})";
-            }
-            else
-            {
-                directoryCountText.Text = $"({active}/{total} active)";
-            }
         }
 
         #region Git Repository Management
@@ -740,7 +707,7 @@ namespace CodeMerger
             try
             {
                 var fileAnalyses = new List<FileAnalysis>();
-                var selectedDirs = InputDirectories.Where(item => item.IsSelected).Select(item => item.Path).ToList();
+                var selectedDirs = _directoryManager.GetSelectedPaths().ToList();
 
                 var enabledRepos = ExternalRepositories.Where(r => r.IsEnabled).ToList();
                 foreach (var repo in enabledRepos)
@@ -833,11 +800,7 @@ namespace CodeMerger
 
             FoundFiles.Clear();
 
-            var selectedDirs = InputDirectories
-                .Where(item => item.IsSelected)
-                .Select(item => item.Path)
-                .ToList();
-
+            var selectedDirs = _directoryManager.GetSelectedPaths().ToList();
             var enabledRepos = ExternalRepositories.Where(r => r.IsEnabled).ToList();
 
             if (selectedDirs.Count == 0 && enabledRepos.Count == 0)
@@ -890,8 +853,8 @@ namespace CodeMerger
         private async void DirectoryCheckBox_Changed(object sender, RoutedEventArgs e)
         {
             if (!IsLoaded || _isLoadingWorkspace) return;
+            _directoryManager.NotifySelectionChanged();
             SaveCurrentWorkspace();
-            UpdateDirectoryCount();
             await ScanFilesAsync();
         }
 

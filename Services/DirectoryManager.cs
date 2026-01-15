@@ -1,0 +1,131 @@
+using CodeMerger.Models;
+using System;
+using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.Linq;
+
+namespace CodeMerger.Services
+{
+    public class DirectoryManager : INotifyPropertyChanged
+    {
+        public ObservableCollection<SelectableItem> Directories { get; } = new ObservableCollection<SelectableItem>();
+
+        public event Action? OnDirectoriesChanged;
+        public event PropertyChangedEventHandler? PropertyChanged;
+
+        private string _countText = string.Empty;
+        public string CountText
+        {
+            get => _countText;
+            private set
+            {
+                if (_countText != value)
+                {
+                    _countText = value;
+                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CountText)));
+                }
+            }
+        }
+
+        public void Add(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return;
+            if (Directories.Any(item => item.Path == path)) return;
+
+            Directories.Add(new SelectableItem(path, true));
+            UpdateCountText();
+            OnDirectoriesChanged?.Invoke();
+        }
+
+        public void Remove(SelectableItem item)
+        {
+            if (item == null) return;
+            Directories.Remove(item);
+            UpdateCountText();
+            OnDirectoriesChanged?.Invoke();
+        }
+
+        public void SelectAll()
+        {
+            foreach (var item in Directories)
+            {
+                item.IsSelected = true;
+            }
+            UpdateCountText();
+            OnDirectoriesChanged?.Invoke();
+        }
+
+        public void DeselectAll()
+        {
+            foreach (var item in Directories)
+            {
+                item.IsSelected = false;
+            }
+            UpdateCountText();
+            OnDirectoriesChanged?.Invoke();
+        }
+
+        public string[] GetSelectedPaths()
+        {
+            return Directories
+                .Where(item => item.IsSelected)
+                .Select(item => item.Path)
+                .ToArray();
+        }
+
+        public string[] GetAllPaths()
+        {
+            return Directories.Select(item => item.Path).ToArray();
+        }
+
+        public string[] GetDisabledPaths()
+        {
+            return Directories
+                .Where(item => !item.IsSelected)
+                .Select(item => item.Path)
+                .ToArray();
+        }
+
+        public void Load(System.Collections.Generic.List<string> directories, System.Collections.Generic.List<string> disabledDirectories)
+        {
+            Directories.Clear();
+            foreach (var dir in directories)
+            {
+                bool isSelected = !disabledDirectories.Contains(dir);
+                Directories.Add(new SelectableItem(dir, isSelected));
+            }
+            UpdateCountText();
+        }
+
+        public void Clear()
+        {
+            Directories.Clear();
+            UpdateCountText();
+        }
+
+        public void NotifySelectionChanged()
+        {
+            UpdateCountText();
+            OnDirectoriesChanged?.Invoke();
+        }
+
+        private void UpdateCountText()
+        {
+            int total = Directories.Count;
+            int active = Directories.Count(item => item.IsSelected);
+
+            if (total == 0)
+            {
+                CountText = "";
+            }
+            else if (active == total)
+            {
+                CountText = $"({total})";
+            }
+            else
+            {
+                CountText = $"({active}/{total} active)";
+            }
+        }
+    }
+}
