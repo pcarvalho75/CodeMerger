@@ -230,7 +230,11 @@ namespace CodeMerger.Services
                             // Update type hierarchy for types in this file
                             foreach (var type in newAnalysis.Types)
                             {
-                                _workspaceAnalysis.TypeHierarchy[type.Name] = type;
+                                var inheritance = new List<string>();
+                                if (!string.IsNullOrEmpty(type.BaseType))
+                                    inheritance.Add(type.BaseType);
+                                inheritance.AddRange(type.Interfaces);
+                                _workspaceAnalysis.TypeHierarchy[type.Name] = inheritance;
                             }
                         }
 
