@@ -24,17 +24,17 @@ namespace CodeMerger.Services
         private readonly WorkspaceService _workspaceService;
         private CancellationTokenSource? _cancellationTokenSource;
         private Task? _serverTask;
-        
+
         // Thread safety lock for workspace state
         private readonly object _stateLock = new object();
-        
+
         // Workspace state
         private WorkspaceAnalysis? _workspaceAnalysis;
         private RefactoringService? _refactoringService;
         private List<CallSite> _callSites = new();
         private List<string> _inputDirectories = new();
         private string _workspaceName = string.Empty;
-        
+
         // File scanning settings
         private List<string> _extensions = new();
         private HashSet<string> _ignoredDirs = new();
@@ -156,7 +156,7 @@ namespace CodeMerger.Services
             {
                 // Rescan directories to discover new/deleted files
                 var files = ScanFiles();
-                
+
                 // Clear previous call sites
                 _codeAnalyzer.CallSites.Clear();
                 _callSites.Clear();
@@ -186,12 +186,70 @@ namespace CodeMerger.Services
             }
         }
 
+        /// <summary>
+        /// Incrementally updates a single file in the index without full re-indexing.
+        /// Runs in background to avoid blocking MCP responses.
+        /// </summary>
+        private void UpdateSingleFileAsync(string filePath)
+        {
+            Task.Run(() =>
+            {
+                try
+                {
+                    lock (_stateLock)
+                    {
+                        if (_workspaceAnalysis == null) return;
+
+                        var baseDir = _inputDirectories.FirstOrDefault(dir =>
+                            filePath.StartsWith(dir, StringComparison.OrdinalIgnoreCase));
+
+                        if (baseDir == null) return;
+
+                        // Remove old analysis for this file
+                        var existingFile = _workspaceAnalysis.AllFiles
+                            .FirstOrDefault(f => f.FilePath.Equals(filePath, StringComparison.OrdinalIgnoreCase));
+
+                        if (existingFile != null)
+                        {
+                            _workspaceAnalysis.AllFiles.Remove(existingFile);
+
+                            // Remove old call sites from this file
+                            _callSites.RemoveAll(cs => cs.FilePath.Equals(filePath, StringComparison.OrdinalIgnoreCase));
+                        }
+
+                        // Re-analyze the single file
+                        if (File.Exists(filePath))
+                        {
+                            _codeAnalyzer.CallSites.Clear();
+                            var newAnalysis = _codeAnalyzer.AnalyzeFile(filePath, baseDir);
+                            _workspaceAnalysis.AllFiles.Add(newAnalysis);
+
+                            // Add new call sites
+                            _callSites.AddRange(_codeAnalyzer.CallSites);
+
+                            // Update type hierarchy for types in this file
+                            foreach (var type in newAnalysis.Types)
+                            {
+                                _workspaceAnalysis.TypeHierarchy[type.Name] = type;
+                            }
+                        }
+
+                        Log($"Updated index for: {Path.GetFileName(filePath)}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log($"Error updating index: {ex.Message}");
+                }
+            });
+        }
+
         private void InitializeHandlers()
         {
             if (_workspaceAnalysis == null || _refactoringService == null) return;
 
             _readHandler = new McpReadToolHandler(_workspaceAnalysis, SendActivity);
-            _writeHandler = new McpWriteToolHandler(_workspaceAnalysis, _refactoringService, () => PerformIndexing(), SendActivity, Log);
+            _writeHandler = new McpWriteToolHandler(_workspaceAnalysis, _refactoringService, UpdateSingleFileAsync, SendActivity, Log);
             _semanticHandler = new McpSemanticToolHandler(_workspaceAnalysis, _callSites, SendActivity);
             _refactoringHandler = new McpRefactoringToolHandler(_workspaceAnalysis, _refactoringService, _callSites, SendActivity, Log);
             _workspaceHandler = new McpWorkspaceToolHandler(
@@ -431,7 +489,7 @@ namespace CodeMerger.Services
 
         private string DispatchToolCall(string toolName, JsonElement arguments)
         {
-            // Note: No lock here - read operations are safe, write operations 
+            // Note: No lock here - read operations are safe, write operations
             // trigger PerformIndexing() which has its own lock for state mutation
             return toolName switch
             {

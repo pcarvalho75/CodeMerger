@@ -14,20 +14,20 @@ namespace CodeMerger.Services.Mcp
     {
         private readonly WorkspaceAnalysis _workspaceAnalysis;
         private readonly RefactoringService _refactoringService;
-        private readonly Action _refreshIndex;
+        private readonly Action<string> _updateFileIndex;
         private readonly Action<string> _sendActivity;
         private readonly Action<string> _log;
 
         public McpWriteToolHandler(
             WorkspaceAnalysis workspaceAnalysis,
             RefactoringService refactoringService,
-            Action refreshIndex,
+            Action<string> updateFileIndex,
             Action<string> sendActivity,
             Action<string> log)
         {
             _workspaceAnalysis = workspaceAnalysis;
             _refactoringService = refactoringService;
-            _refreshIndex = refreshIndex;
+            _updateFileIndex = updateFileIndex;
             _sendActivity = sendActivity;
             _log = log;
         }
@@ -67,10 +67,10 @@ namespace CodeMerger.Services.Mcp
                 var fileLineEnding = DetectLineEnding(content);
                 var normalizedContent = TrimTrailingWhitespacePerLine(content);
                 normalizedContent = NormalizeLineEndings(normalizedContent, "\n");
-                
+
                 var normalizedOldStr = TrimTrailingWhitespacePerLine(oldStr);
                 normalizedOldStr = NormalizeLineEndings(normalizedOldStr, "\n");
-                
+
                 var normalizedNewStr = TrimTrailingWhitespacePerLine(newStr);
                 normalizedNewStr = NormalizeLineEndings(normalizedNewStr, fileLineEnding);
 
@@ -105,8 +105,8 @@ namespace CodeMerger.Services.Mcp
                 var action = string.IsNullOrEmpty(newStr) ? "deleted" : "replaced";
                 _log($"StrReplace: {path} - {action}");
 
-                // Refresh index to reflect changes
-                _refreshIndex();
+                // Update index for this file in background (non-blocking)
+                _updateFileIndex(file.FilePath);
 
                 var sb = new StringBuilder();
                 sb.AppendLine($"# String Replace Result");
@@ -272,9 +272,9 @@ namespace CodeMerger.Services.Mcp
             var result = _refactoringService.WriteFile(path, content, createBackup);
             _log($"WriteFile: {path} - {(result.Success ? "OK" : "FAILED")}");
 
-            // Refresh index to reflect changes
-            if (result.Success)
-                _refreshIndex();
+            // Update index for this file in background (non-blocking)
+            if (result.Success && !string.IsNullOrEmpty(result.FullPath))
+                _updateFileIndex(result.FullPath);
 
             return result.ToMarkdown();
         }
