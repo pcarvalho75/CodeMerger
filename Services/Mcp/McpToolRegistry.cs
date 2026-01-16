@@ -230,6 +230,22 @@ namespace CodeMerger.Services.Mcp
                         },
                         { "required", new[] { "methodName" } }
                     }
+                },
+                new
+                {
+                    name = "codemerger_get_diagnostics",
+                    description = "Get compilation errors and warnings for the project using Roslyn. Use this after making changes to verify the code compiles correctly.",
+                    inputSchema = new Dictionary<string, object>
+                    {
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>
+                            {
+                                { "path", new Dictionary<string, string> { { "type", "string" }, { "description", "Optional: specific file path to check. If omitted, checks all C# files." } } },
+                                { "errorsOnly", new Dictionary<string, object> { { "type", "boolean" }, { "description", "If true, only show errors (not warnings). Default: false" }, { "default", false } } }
+                            }
+                        },
+                        { "required", Array.Empty<string>() }
+                    }
                 }
             };
         }
@@ -299,6 +315,53 @@ namespace CodeMerger.Services.Mcp
                             }
                         },
                         { "required", new[] { "path", "content" } }
+                    }
+                },
+                new
+                {
+                    name = "codemerger_delete_file",
+                    description = "Delete a file from the project. Creates a .bak backup before deleting so the file can be recovered with codemerger_undo.",
+                    inputSchema = new Dictionary<string, object>
+                    {
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>
+                            {
+                                { "path", new Dictionary<string, string> { { "type", "string" }, { "description", "Relative path to the file to delete" } } }
+                            }
+                        },
+                        { "required", new[] { "path" } }
+                    }
+                },
+                new
+                {
+                    name = "codemerger_undo",
+                    description = "Restore a file from its .bak backup. Use this to undo the last change made by str_replace, write_file, or delete_file.",
+                    inputSchema = new Dictionary<string, object>
+                    {
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>
+                            {
+                                { "path", new Dictionary<string, string> { { "type", "string" }, { "description", "Relative path to the file to restore" } } }
+                            }
+                        },
+                        { "required", new[] { "path" } }
+                    }
+                },
+                new
+                {
+                    name = "codemerger_move_file",
+                    description = "Move or rename a file and update all using statements and references across the project. Creates backups of all modified files.",
+                    inputSchema = new Dictionary<string, object>
+                    {
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>
+                            {
+                                { "oldPath", new Dictionary<string, string> { { "type", "string" }, { "description", "Current relative path of the file" } } },
+                                { "newPath", new Dictionary<string, string> { { "type", "string" }, { "description", "New relative path for the file" } } },
+                                { "preview", new Dictionary<string, object> { { "type", "boolean" }, { "description", "If true, only show what would change without applying (default: true)" }, { "default", true } } }
+                            }
+                        },
+                        { "required", new[] { "oldPath", "newPath" } }
                     }
                 }
             };

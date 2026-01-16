@@ -230,7 +230,11 @@ namespace CodeMerger.Services
                             // Update type hierarchy for types in this file
                             foreach (var type in newAnalysis.Types)
                             {
-                                _workspaceAnalysis.TypeHierarchy[type.Name] = type;
+                                var inheritance = new List<string>();
+                                if (!string.IsNullOrEmpty(type.BaseType))
+                                    inheritance.Add(type.BaseType);
+                                inheritance.AddRange(type.Interfaces);
+                                _workspaceAnalysis.TypeHierarchy[type.Name] = inheritance;
                             }
                         }
 
@@ -509,11 +513,15 @@ namespace CodeMerger.Services
                 "codemerger_find_references" => _semanticHandler!.FindReferences(arguments),
                 "codemerger_get_callers" => _semanticHandler!.GetCallers(arguments),
                 "codemerger_get_callees" => _semanticHandler!.GetCallees(arguments),
+                "codemerger_get_diagnostics" => _semanticHandler!.GetDiagnostics(arguments),
 
                 // Write tools
                 "codemerger_str_replace" => _writeHandler!.StrReplace(arguments),
                 "codemerger_write_file" => _writeHandler!.WriteFile(arguments),
                 "codemerger_preview_write" => _writeHandler!.PreviewWriteFile(arguments),
+                "codemerger_delete_file" => _writeHandler!.DeleteFile(arguments),
+                "codemerger_undo" => _writeHandler!.Undo(arguments),
+                "codemerger_move_file" => _writeHandler!.MoveFile(arguments),
 
                 // Refactoring tools
                 "codemerger_rename_symbol" => _refactoringHandler!.RenameSymbol(arguments),

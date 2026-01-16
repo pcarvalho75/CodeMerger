@@ -253,7 +253,7 @@ namespace CodeMerger.Services
             if (_workspaceAnalysis == null || _refactoringService == null) return;
 
             _readHandler = new McpReadToolHandler(_workspaceAnalysis, SendActivity);
-            _writeHandler = new McpWriteToolHandler(_workspaceAnalysis, _refactoringService, UpdateSingleFileAsync, SendActivity, Log);
+            _writeHandler = new McpWriteToolHandler(_workspaceAnalysis, _refactoringService, _inputDirectories, UpdateSingleFileAsync, SendActivity, Log);
             _semanticHandler = new McpSemanticToolHandler(_workspaceAnalysis, _callSites, SendActivity);
             _refactoringHandler = new McpRefactoringToolHandler(_workspaceAnalysis, _refactoringService, _callSites, SendActivity, Log);
             _workspaceHandler = new McpWorkspaceToolHandler(
@@ -513,11 +513,15 @@ namespace CodeMerger.Services
                 "codemerger_find_references" => _semanticHandler!.FindReferences(arguments),
                 "codemerger_get_callers" => _semanticHandler!.GetCallers(arguments),
                 "codemerger_get_callees" => _semanticHandler!.GetCallees(arguments),
+                "codemerger_get_diagnostics" => _semanticHandler!.GetDiagnostics(arguments),
 
                 // Write tools
                 "codemerger_str_replace" => _writeHandler!.StrReplace(arguments),
                 "codemerger_write_file" => _writeHandler!.WriteFile(arguments),
                 "codemerger_preview_write" => _writeHandler!.PreviewWriteFile(arguments),
+                "codemerger_delete_file" => _writeHandler!.DeleteFile(arguments),
+                "codemerger_undo" => _writeHandler!.Undo(arguments),
+                "codemerger_move_file" => _writeHandler!.MoveFile(arguments),
 
                 // Refactoring tools
                 "codemerger_rename_symbol" => _refactoringHandler!.RenameSymbol(arguments),

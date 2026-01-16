@@ -33,7 +33,7 @@ namespace CodeMerger.Services
 
         public bool IsClaudeDesktopInstalled()
         {
-            return ConfigExists();
+            return File.Exists(GetClaudeDesktopExePath());
         }
 
         public bool ConfigExists()

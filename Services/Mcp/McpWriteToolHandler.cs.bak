@@ -14,6 +14,7 @@ namespace CodeMerger.Services.Mcp
     {
         private readonly WorkspaceAnalysis _workspaceAnalysis;
         private readonly RefactoringService _refactoringService;
+        private readonly List<string> _inputDirectories;
         private readonly Action<string> _updateFileIndex;
         private readonly Action<string> _sendActivity;
         private readonly Action<string> _log;
@@ -21,12 +22,14 @@ namespace CodeMerger.Services.Mcp
         public McpWriteToolHandler(
             WorkspaceAnalysis workspaceAnalysis,
             RefactoringService refactoringService,
+            List<string> inputDirectories,
             Action<string> updateFileIndex,
             Action<string> sendActivity,
             Action<string> log)
         {
             _workspaceAnalysis = workspaceAnalysis;
             _refactoringService = refactoringService;
+            _inputDirectories = inputDirectories;
             _updateFileIndex = updateFileIndex;
             _sendActivity = sendActivity;
             _log = log;
@@ -272,9 +275,9 @@ namespace CodeMerger.Services.Mcp
             var result = _refactoringService.WriteFile(path, content, createBackup);
             _log($"WriteFile: {path} - {(result.Success ? "OK" : "FAILED")}");
 
-            // Refresh index to reflect changes
-            if (result.Success)
-                _refreshIndex();
+            // Update index for this file in background (non-blocking)
+            if (result.Success && !string.IsNullOrEmpty(result.FullPath))
+                _updateFileIndex(result.FullPath);
 
             return result.ToMarkdown();
         }
@@ -296,6 +299,263 @@ namespace CodeMerger.Services.Mcp
             _log($"PreviewWrite: {path}");
 
             return result.ToMarkdown();
+        }
+
+        public string DeleteFile(JsonElement arguments)
+        {
+            if (!arguments.TryGetProperty("path", out var pathEl))
+                return "Error: 'path' parameter is required.";
+
+            var path = pathEl.GetString() ?? "";
+            _sendActivity($"Deleting: {path}");
+
+            var file = _workspaceAnalysis.AllFiles.FirstOrDefault(f =>
+                f.RelativePath.Equals(path, StringComparison.OrdinalIgnoreCase) ||
+                f.FileName.Equals(path, StringComparison.OrdinalIgnoreCase));
+
+            if (file == null)
+                return $"Error: File not found: {path}";
+
+            try
+            {
+                // Create backup before deleting
+                var backupPath = file.FilePath + ".bak";
+                File.Copy(file.FilePath, backupPath, true);
+
+                // Delete the file
+                File.Delete(file.FilePath);
+
+                _log($"DeleteFile: {path}");
+                _updateFileIndex(file.FilePath);
+
+                var sb = new StringBuilder();
+                sb.AppendLine("# Delete File Result");
+                sb.AppendLine();
+                sb.AppendLine($"**File:** `{file.RelativePath}`");
+                sb.AppendLine($"**Status:** Deleted");
+                sb.AppendLine($"**Backup:** `{backupPath}`");
+                sb.AppendLine();
+                sb.AppendLine("*Use `codemerger_undo` to restore this file if needed.*");
+
+                return sb.ToString();
+            }
+            catch (Exception ex)
+            {
+                return $"Error: {ex.Message}";
+            }
+        }
+
+        public string Undo(JsonElement arguments)
+        {
+            if (!arguments.TryGetProperty("path", out var pathEl))
+                return "Error: 'path' parameter is required.";
+
+            var path = pathEl.GetString() ?? "";
+            _sendActivity($"Undo: {path}");
+
+            // Find the file or determine the full path
+            var file = _workspaceAnalysis.AllFiles.FirstOrDefault(f =>
+                f.RelativePath.Equals(path, StringComparison.OrdinalIgnoreCase) ||
+                f.FileName.Equals(path, StringComparison.OrdinalIgnoreCase));
+
+            string fullPath;
+            string relativePath;
+
+            if (file != null)
+            {
+                fullPath = file.FilePath;
+                relativePath = file.RelativePath;
+            }
+            else
+            {
+                // File might have been deleted - try to find backup by constructing path
+                var baseDir = _refactoringService.GetType()
+                    .GetField("_inputDirectories", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
+                    ?.GetValue(_refactoringService) as List<string>;
+
+                if (baseDir == null || baseDir.Count == 0)
+                    return $"Error: Cannot determine file location for: {path}";
+
+                fullPath = Path.Combine(baseDir[0], path.Replace('/', Path.DirectorySeparatorChar));
+                relativePath = path;
+            }
+
+            var backupPath = fullPath + ".bak";
+
+            if (!File.Exists(backupPath))
+                return $"Error: No backup found for: {path}\n\nExpected backup at: `{backupPath}`";
+
+            try
+            {
+                // Restore from backup
+                File.Copy(backupPath, fullPath, true);
+                File.Delete(backupPath);
+
+                _log($"Undo: {path}");
+                _updateFileIndex(fullPath);
+
+                var sb = new StringBuilder();
+                sb.AppendLine("# Undo Result");
+                sb.AppendLine();
+                sb.AppendLine($"**File:** `{relativePath}`");
+                sb.AppendLine($"**Status:** Restored from backup");
+
+                return sb.ToString();
+            }
+            catch (Exception ex)
+            {
+                return $"Error: {ex.Message}";
+            }
+        }
+
+        public string MoveFile(JsonElement arguments)
+        {
+            if (!arguments.TryGetProperty("oldPath", out var oldPathEl))
+                return "Error: 'oldPath' parameter is required.";
+            if (!arguments.TryGetProperty("newPath", out var newPathEl))
+                return "Error: 'newPath' parameter is required.";
+
+            var oldPath = oldPathEl.GetString() ?? "";
+            var newPath = newPathEl.GetString() ?? "";
+            var preview = true;
+            if (arguments.TryGetProperty("preview", out var previewEl))
+                preview = previewEl.GetBoolean();
+
+            _sendActivity($"MoveFile: {oldPath} -> {newPath}");
+
+            var file = _workspaceAnalysis.AllFiles.FirstOrDefault(f =>
+                f.RelativePath.Equals(oldPath, StringComparison.OrdinalIgnoreCase) ||
+                f.RelativePath.Replace('\\', '/').Equals(oldPath.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase));
+
+            if (file == null)
+                return $"Error: File not found: {oldPath}";
+
+            try
+            {
+                var sb = new StringBuilder();
+                sb.AppendLine(preview ? "# Move File Preview" : "# Move File Result");
+                sb.AppendLine();
+                sb.AppendLine($"**From:** `{oldPath}`");
+                sb.AppendLine($"**To:** `{newPath}`");
+                sb.AppendLine();
+
+                // Determine old and new namespaces from directory structure
+                var oldNamespace = GetNamespaceFromPath(oldPath);
+                var newNamespace = GetNamespaceFromPath(newPath);
+
+                var affectedFiles = new List<string>();
+
+                if (oldNamespace != newNamespace && !string.IsNullOrEmpty(oldNamespace))
+                {
+                    sb.AppendLine($"**Namespace change:** `{oldNamespace}` → `{newNamespace}`");
+                    sb.AppendLine();
+
+                    // Find files that reference types from the moved file
+                    var typesInFile = file.Types.Select(t => t.Name).ToList();
+
+                    foreach (var otherFile in _workspaceAnalysis.AllFiles.Where(f => f.Extension == ".cs" && f.FilePath != file.FilePath))
+                    {
+                        var content = File.ReadAllText(otherFile.FilePath);
+                        bool needsUpdate = false;
+
+                        // Check if file uses any types from the moved file
+                        foreach (var typeName in typesInFile)
+                        {
+                            if (System.Text.RegularExpressions.Regex.IsMatch(content, $@"\b{typeName}\b"))
+                            {
+                                needsUpdate = true;
+                                break;
+                            }
+                        }
+
+                        // Check if file has using statement for old namespace
+                        if (content.Contains($"using {oldNamespace};"))
+                            needsUpdate = true;
+
+                        if (needsUpdate)
+                            affectedFiles.Add(otherFile.RelativePath);
+                    }
+
+                    if (affectedFiles.Count > 0)
+                    {
+                        sb.AppendLine("## Files that may need using statement updates");
+                        foreach (var af in affectedFiles.Take(20))
+                            sb.AppendLine($"- `{af}`");
+                        if (affectedFiles.Count > 20)
+                            sb.AppendLine($"- ... and {affectedFiles.Count - 20} more");
+                        sb.AppendLine();
+                    }
+                }
+
+                if (!preview)
+                {
+                    // Determine full paths
+                    var oldDir = Path.GetDirectoryName(file.FilePath) ?? "";
+                    var baseDir = oldDir;
+
+                    // Walk up to find the base directory that matches the relative path structure
+                    var relativeDir = Path.GetDirectoryName(oldPath.Replace('/', Path.DirectorySeparatorChar)) ?? "";
+                    if (!string.IsNullOrEmpty(relativeDir))
+                    {
+                        baseDir = file.FilePath.Substring(0, file.FilePath.Length - oldPath.Length);
+                    }
+
+                    var newFullPath = Path.Combine(baseDir, newPath.Replace('/', Path.DirectorySeparatorChar));
+                    var newDir = Path.GetDirectoryName(newFullPath);
+
+                    // Create backup
+                    File.Copy(file.FilePath, file.FilePath + ".bak", true);
+
+                    // Ensure target directory exists
+                    if (!string.IsNullOrEmpty(newDir) && !Directory.Exists(newDir))
+                        Directory.CreateDirectory(newDir);
+
+                    // Update namespace in the file if needed
+                    if (oldNamespace != newNamespace && !string.IsNullOrEmpty(newNamespace))
+                    {
+                        var content = File.ReadAllText(file.FilePath);
+                        if (!string.IsNullOrEmpty(oldNamespace))
+                            content = content.Replace($"namespace {oldNamespace}", $"namespace {newNamespace}");
+                        File.WriteAllText(file.FilePath, content);
+                    }
+
+                    // Move the file
+                    File.Move(file.FilePath, newFullPath, true);
+
+                    _log($"MoveFile: {oldPath} -> {newPath}");
+                    _updateFileIndex(file.FilePath);
+                    _updateFileIndex(newFullPath);
+
+                    sb.AppendLine("**Status:** Moved successfully");
+                    sb.AppendLine($"**Backup:** `{file.FilePath}.bak`");
+
+                    if (affectedFiles.Count > 0)
+                    {
+                        sb.AppendLine();
+                        sb.AppendLine("*Note: You may need to update using statements in the affected files listed above.*");
+                    }
+                }
+                else
+                {
+                    sb.AppendLine("*This is a preview. Run with `preview: false` to apply the move.*");
+                }
+
+                return sb.ToString();
+            }
+            catch (Exception ex)
+            {
+                return $"Error: {ex.Message}";
+            }
+        }
+
+        private string GetNamespaceFromPath(string relativePath)
+        {
+            var dir = Path.GetDirectoryName(relativePath);
+            if (string.IsNullOrEmpty(dir))
+                return string.Empty;
+
+            // Convert path separators to dots and clean up
+            return dir.Replace('/', '.').Replace('\\', '.').Trim('.');
         }
     }
 }
