@@ -45,6 +45,10 @@ namespace CodeMerger.Services
         private McpSemanticToolHandler? _semanticHandler;
         private McpRefactoringToolHandler? _refactoringHandler;
         private McpWorkspaceToolHandler? _workspaceHandler;
+        private McpLessonToolHandler? _lessonHandler;
+
+        // Services
+        private readonly LessonService _lessonService;
 
         public bool IsRunning => _serverTask != null && !_serverTask.IsCompleted;
         public event Action<string>? OnLog;
@@ -62,6 +66,7 @@ namespace CodeMerger.Services
             _codeAnalyzer = new CodeAnalyzer();
             _indexGenerator = new IndexGenerator();
             _workspaceService = new WorkspaceService();
+            _lessonService = new LessonService();
         }
 
         public void IndexWorkspace(string workspaceName, List<string> inputDirectories, List<string> extensions, HashSet<string> ignoredDirs)
@@ -265,6 +270,7 @@ namespace CodeMerger.Services
                 (name) => SwitchToWorkspace(name), // Switch workspace callback
                 SendActivity,
                 Log);
+            _lessonHandler = new McpLessonToolHandler(_lessonService, SendActivity);
         }
 
         private void RequestShutdown()
@@ -481,6 +487,16 @@ namespace CodeMerger.Services
             if (toolName == "codemerger_refresh")
                 return CreateToolResponse(id, _workspaceHandler?.Refresh() ?? "Error: Handler not initialized");
 
+            // Lesson tools don't require workspace
+            if (toolName == "codemerger_log_lesson")
+                return CreateToolResponse(id, HandleLessonTool("log", arguments));
+
+            if (toolName == "codemerger_get_lessons")
+                return CreateToolResponse(id, HandleLessonTool("get", arguments));
+
+            if (toolName == "codemerger_delete_lesson")
+                return CreateToolResponse(id, HandleLessonTool("delete", arguments));
+
             // All other tools require workspace
             if (_workspaceAnalysis == null)
             {
@@ -560,6 +576,20 @@ namespace CodeMerger.Services
             foreach (var w in workspaces)
                 sb.AppendLine($"- {w.Name}");
             return sb.ToString();
+        }
+
+        private string HandleLessonTool(string action, JsonElement arguments)
+        {
+            // Initialize lesson handler if needed (doesn't require workspace)
+            _lessonHandler ??= new McpLessonToolHandler(_lessonService, SendActivity);
+
+            return action switch
+            {
+                "log" => _lessonHandler.LogLesson(arguments),
+                "get" => _lessonHandler.GetLessons(),
+                "delete" => _lessonHandler.DeleteLesson(arguments),
+                _ => "Error: Unknown lesson action"
+            };
         }
 
         private string CreateToolResponse(int id, string content)
