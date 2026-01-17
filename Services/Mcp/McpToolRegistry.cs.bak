@@ -43,6 +43,11 @@ namespace CodeMerger.Services.Mcp
     ///
     /// SERVER:
     ///   refresh, shutdown, list_projects, switch_project
+    ///
+    /// SELF-IMPROVEMENT:
+    ///   log_lesson - log observation when something could be improved
+    ///   get_lessons - view all logged lessons
+    ///   delete_lesson - clear lessons after applying improvements
     /// </summary>
     public static class McpToolRegistry
     {
