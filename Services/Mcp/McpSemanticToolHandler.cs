@@ -189,18 +189,21 @@ namespace CodeMerger.Services.Mcp
                         return $"Error: File not found: {specificPath}";
                 }
 
-                // MEMORY OPTIMIZATION: Limit files to prevent memory explosion
-                const int MaxFilesForDiagnostics = 50;
+                // MEMORY/TIME OPTIMIZATION: Strict file limit
+                const int MaxFilesForDiagnostics = 15;
                 bool truncated = csFiles.Count > MaxFilesForDiagnostics;
                 if (truncated)
                 {
-                    sb.AppendLine($"⚠️ **Note:** Analyzing first {MaxFilesForDiagnostics} of {csFiles.Count} files to prevent memory issues.");
+                    sb.AppendLine($"⚠️ **Limited analysis:** Checking {MaxFilesForDiagnostics} of {csFiles.Count} files.");
+                    sb.AppendLine($"💡 **Tip:** Use `codemerger_build` for full compilation with all references.");
                     sb.AppendLine();
                     csFiles = csFiles.Take(MaxFilesForDiagnostics).ToList();
                 }
 
-                // Parse all files into syntax trees
+                // Parse files into syntax trees (syntax-only, fast)
                 var syntaxTrees = new List<SyntaxTree>();
+                var parseErrors = new List<string>();
+
                 foreach (var file in csFiles)
                 {
                     try
@@ -208,14 +211,45 @@ namespace CodeMerger.Services.Mcp
                         var content = File.ReadAllText(file.FilePath);
                         var tree = CSharpSyntaxTree.ParseText(content, path: file.RelativePath);
                         syntaxTrees.Add(tree);
+
+                        // Check for syntax errors immediately (fast)
+                        var syntaxDiags = tree.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error).ToList();
+                        foreach (var diag in syntaxDiags.Take(5))
+                        {
+                            var line = diag.Location.GetLineSpan().StartLinePosition.Line + 1;
+                            parseErrors.Add($"- ❌ `{file.RelativePath}` **Line {line}:** {diag.GetMessage()}");
+                        }
                     }
                     catch (Exception ex)
                     {
-                        sb.AppendLine($"**Parse error in `{file.RelativePath}`:** {ex.Message}");
+                        parseErrors.Add($"- ❌ `{file.RelativePath}`: {ex.Message}");
                     }
                 }
 
-                // Create compilation with common references
+                // Report syntax errors first (these are reliable)
+                if (parseErrors.Any())
+                {
+                    sb.AppendLine("## Syntax Errors (reliable)");
+                    sb.AppendLine();
+                    foreach (var err in parseErrors.Take(20))
+                        sb.AppendLine(err);
+                    if (parseErrors.Count > 20)
+                        sb.AppendLine($"- ... and {parseErrors.Count - 20} more");
+                    sb.AppendLine();
+                }
+
+                // Skip semantic analysis if we already have syntax errors
+                if (parseErrors.Any())
+                {
+                    sb.AppendLine("---");
+                    sb.AppendLine("*Skipping semantic analysis due to syntax errors. Fix syntax first.*");
+                    return sb.ToString();
+                }
+
+                // Semantic analysis with timeout protection
+                sb.AppendLine("## Semantic Analysis");
+                sb.AppendLine();
+
                 var references = new List<MetadataReference>
                 {
                     MetadataReference.CreateFromFile(typeof(object).Assembly.Location),
@@ -223,7 +257,6 @@ namespace CodeMerger.Services.Mcp
                     MetadataReference.CreateFromFile(typeof(Enumerable).Assembly.Location),
                 };
 
-                // Try to add System.Runtime
                 var runtimePath = Path.Combine(Path.GetDirectoryName(typeof(object).Assembly.Location)!, "System.Runtime.dll");
                 if (File.Exists(runtimePath))
                     references.Add(MetadataReference.CreateFromFile(runtimePath));
@@ -234,66 +267,47 @@ namespace CodeMerger.Services.Mcp
                     references,
                     new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
 
-                // Get diagnostics
+                // Get diagnostics with a reasonable limit
                 var diagnostics = compilation.GetDiagnostics()
                     .Where(d => d.Location.IsInSource)
                     .Where(d => !errorsOnly || d.Severity == DiagnosticSeverity.Error)
+                    // Filter out common false positives from missing references
+                    .Where(d => d.Id != "CS0246" && d.Id != "CS0234" && d.Id != "CS0012")
                     .OrderByDescending(d => d.Severity)
-                    .ThenBy(d => d.Location.SourceTree?.FilePath)
-                    .ThenBy(d => d.Location.GetLineSpan().StartLinePosition.Line)
+                    .Take(30) // Hard limit on results
                     .ToList();
-
-                var errors = diagnostics.Count(d => d.Severity == DiagnosticSeverity.Error);
-                var warnings = diagnostics.Count(d => d.Severity == DiagnosticSeverity.Warning);
-
-                sb.AppendLine($"**Files analyzed:** {csFiles.Count}");
-                sb.AppendLine($"**Errors:** {errors}");
-                if (!errorsOnly)
-                    sb.AppendLine($"**Warnings:** {warnings}");
-                sb.AppendLine();
 
                 if (diagnostics.Count == 0)
                 {
-                    sb.AppendLine("✓ No issues found!");
+                    sb.AppendLine("✓ No issues found in analyzed files!");
                 }
                 else
                 {
-                    // Group by file
-                    var byFile = diagnostics.GroupBy(d => d.Location.SourceTree?.FilePath ?? "Unknown");
+                    sb.AppendLine($"**Issues found:** {diagnostics.Count}");
+                    sb.AppendLine();
 
-                    foreach (var fileGroup in byFile)
+                    foreach (var diag in diagnostics)
                     {
-                        sb.AppendLine($"## `{fileGroup.Key}`");
-                        sb.AppendLine();
-
-                        foreach (var diag in fileGroup.Take(20))
-                        {
-                            var lineSpan = diag.Location.GetLineSpan();
-                            var line = lineSpan.StartLinePosition.Line + 1;
-                            var severity = diag.Severity == DiagnosticSeverity.Error ? "❌" : "⚠️";
-                            sb.AppendLine($"- {severity} **Line {line}:** [{diag.Id}] {diag.GetMessage()}");
-                        }
-
-                        if (fileGroup.Count() > 20)
-                            sb.AppendLine($"- ... and {fileGroup.Count() - 20} more issues");
-
-                        sb.AppendLine();
+                        var lineSpan = diag.Location.GetLineSpan();
+                        var line = lineSpan.StartLinePosition.Line + 1;
+                        var file = Path.GetFileName(diag.Location.SourceTree?.FilePath ?? "?");
+                        var severity = diag.Severity == DiagnosticSeverity.Error ? "❌" : "⚠️";
+                        sb.AppendLine($"- {severity} `{file}` **Line {line}:** [{diag.Id}] {diag.GetMessage()}");
                     }
                 }
 
-                // Note about limitations
+                sb.AppendLine();
                 sb.AppendLine("---");
-                sb.AppendLine("*Note: This analysis uses basic references. Some errors about missing types may be false positives if they reference NuGet packages or project-specific assemblies.*");
+                sb.AppendLine("*⚠️ This uses basic .NET references only. For accurate results with NuGet/WPF/etc, use `codemerger_build`.*");
 
                 return sb.ToString();
             }
             catch (Exception ex)
             {
-                return $"Error running diagnostics: {ex.Message}";
+                return $"Error running diagnostics: {ex.Message}\n\n💡 **Tip:** Use `codemerger_build` for reliable compilation.";
             }
             finally
             {
-                // Force GC to release Roslyn compilation memory immediately
                 GC.Collect(2, GCCollectionMode.Aggressive, blocking: false);
             }
         }

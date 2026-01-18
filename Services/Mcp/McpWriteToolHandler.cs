@@ -101,34 +101,21 @@ namespace CodeMerger.Services.Mcp
             try
             {
                 var content = File.ReadAllText(file.FilePath);
-
-                // Normalize line endings and trim trailing whitespace for matching
                 var fileLineEnding = DetectLineEnding(content);
-                var normalizedContent = TrimTrailingWhitespacePerLine(content);
-                normalizedContent = NormalizeLineEndings(normalizedContent, "\n");
 
-                var normalizedOldStr = TrimTrailingWhitespacePerLine(oldStr);
-                normalizedOldStr = NormalizeLineEndings(normalizedOldStr, "\n");
+                // Try matching with progressively more lenient normalization
+                var matchResult = TryFindMatch(content, oldStr, fileLineEnding);
 
-                var normalizedNewStr = TrimTrailingWhitespacePerLine(newStr);
-                normalizedNewStr = NormalizeLineEndings(normalizedNewStr, fileLineEnding);
-
-                var count = 0;
-                var index = 0;
-                while ((index = normalizedContent.IndexOf(normalizedOldStr, index, StringComparison.Ordinal)) != -1)
+                if (!matchResult.Found)
                 {
-                    count++;
-                    index += normalizedOldStr.Length;
+                    return BuildNotFoundDiagnostic(content, oldStr, file.RelativePath, matchResult);
                 }
 
-                if (count == 0)
+                if (matchResult.Count > 1)
                 {
-                    return BuildNotFoundDiagnostic(normalizedContent, normalizedOldStr, file.RelativePath);
-                }
-
-                if (count > 1)
-                {
-                    return $"Error: String appears {count} times in file. It must be unique (appear exactly once).\n\n**Looking for:**\n```\n{normalizedOldStr}\n```";
+                    return $"Error: String appears {matchResult.Count} times in file. It must be unique (appear exactly once).\n\n" +
+                           $"**Looking for:**\n```\n{oldStr}\n```\n\n" +
+                           $"**Matched at lines:** {string.Join(", ", matchResult.LineNumbers)}";
                 }
 
                 if (createBackup && File.Exists(file.FilePath))
@@ -136,15 +123,16 @@ namespace CodeMerger.Services.Mcp
                     File.Copy(file.FilePath, file.FilePath + ".bak", true);
                 }
 
-                // Replace in normalized content, then restore file's line endings
-                var newContent = normalizedContent.Replace(normalizedOldStr, normalizedNewStr);
-                newContent = NormalizeLineEndings(newContent, fileLineEnding);
+                // Perform the replacement using the actual matched text
+                var newContent = content.Substring(0, matchResult.StartIndex) +
+                                 PrepareNewStr(newStr, fileLineEnding) +
+                                 content.Substring(matchResult.EndIndex);
+
                 File.WriteAllText(file.FilePath, newContent);
 
                 var action = string.IsNullOrEmpty(newStr) ? "deleted" : "replaced";
                 _log($"StrReplace: {path} - {action}");
 
-                // Update index for this file in background (non-blocking)
                 _updateFileIndex(file.FilePath);
 
                 var sb = new StringBuilder();
@@ -154,6 +142,8 @@ namespace CodeMerger.Services.Mcp
                 sb.AppendLine($"**Status:** Success - string {action}");
                 if (createBackup)
                     sb.AppendLine($"**Backup:** `{file.FilePath}.bak`");
+                if (matchResult.NormalizationUsed != NormalizationLevel.None)
+                    sb.AppendLine($"**Note:** Matched using {matchResult.NormalizationUsed.ToString().ToLower()} normalization");
 
                 return sb.ToString();
             }
@@ -163,11 +153,358 @@ namespace CodeMerger.Services.Mcp
             }
         }
 
+        private enum NormalizationLevel
+        {
+            None,           // Exact match (after line ending normalization)
+            TrailingSpace,  // Trailing whitespace trimmed
+            LeadingSpace,   // Leading whitespace normalized (tabs↔spaces)
+            AllWhitespace   // All whitespace runs collapsed
+        }
+
+        private class MatchResult
+        {
+            public bool Found { get; set; }
+            public int Count { get; set; }
+            public int StartIndex { get; set; }
+            public int EndIndex { get; set; }
+            public List<int> LineNumbers { get; set; } = new();
+            public NormalizationLevel NormalizationUsed { get; set; }
+            public string? ClosestMatch { get; set; }
+            public int ClosestMatchLine { get; set; }
+            public double ClosestMatchScore { get; set; }
+        }
+
+        /// <summary>
+        /// Tries to find the search string with progressively more lenient normalization.
+        /// Returns the match position in the ORIGINAL content.
+        /// </summary>
+        private MatchResult TryFindMatch(string content, string searchStr, string fileLineEnding)
+        {
+            // Level 0: Just normalize line endings
+            var result = TryMatchAtLevel(content, searchStr, NormalizationLevel.None);
+            if (result.Found) return result;
+
+            // Level 1: Trim trailing whitespace per line
+            result = TryMatchAtLevel(content, searchStr, NormalizationLevel.TrailingSpace);
+            if (result.Found) return result;
+
+            // Level 2: Normalize leading whitespace (tabs to spaces based on file's indentation style)
+            result = TryMatchAtLevel(content, searchStr, NormalizationLevel.LeadingSpace);
+            if (result.Found) return result;
+
+            // Level 3: Collapse all whitespace runs (last resort)
+            result = TryMatchAtLevel(content, searchStr, NormalizationLevel.AllWhitespace);
+            if (result.Found) return result;
+
+            // No match found - try to find closest match for diagnostics
+            FindClosestMatch(content, searchStr, result);
+
+            return result;
+        }
+
+        private MatchResult TryMatchAtLevel(string content, string searchStr, NormalizationLevel level)
+        {
+            var result = new MatchResult { NormalizationUsed = level };
+
+            // Normalize both content and search string at this level
+            var normalizedContent = NormalizeAtLevel(content, level);
+            var normalizedSearch = NormalizeAtLevel(searchStr, level);
+
+            // Find all occurrences in normalized content
+            var matches = new List<int>();
+            var index = 0;
+            while ((index = normalizedContent.IndexOf(normalizedSearch, index, StringComparison.Ordinal)) != -1)
+            {
+                matches.Add(index);
+                index += normalizedSearch.Length;
+            }
+
+            result.Count = matches.Count;
+
+            if (matches.Count == 0)
+            {
+                result.Found = false;
+                return result;
+            }
+
+            result.Found = true;
+
+            // Map normalized position back to original position
+            var normalizedMatchStart = matches[0];
+            var normalizedMatchEnd = normalizedMatchStart + normalizedSearch.Length;
+
+            // Find the corresponding position in the original content
+            var (originalStart, originalEnd) = MapNormalizedToOriginal(content, normalizedContent, normalizedMatchStart, normalizedMatchEnd, level);
+
+            result.StartIndex = originalStart;
+            result.EndIndex = originalEnd;
+
+            // Get line numbers for all matches
+            foreach (var matchPos in matches)
+            {
+                var lineNum = normalizedContent.Substring(0, matchPos).Count(c => c == '\n') + 1;
+                result.LineNumbers.Add(lineNum);
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Maps a position in normalized content back to the original content.
+        /// </summary>
+        private (int start, int end) MapNormalizedToOriginal(string original, string normalized, int normStart, int normEnd, NormalizationLevel level)
+        {
+            if (level == NormalizationLevel.None)
+            {
+                return (normStart, normEnd);
+            }
+
+            // For simple trailing whitespace trimming, we can map line by line
+            var originalLines = original.Split('\n');
+            var normalizedLines = normalized.Split('\n');
+
+            int originalPos = 0;
+            int normalizedPos = 0;
+            int resultStart = -1;
+            int resultEnd = -1;
+
+            for (int i = 0; i < normalizedLines.Length; i++)
+            {
+                var normLineLen = normalizedLines[i].Length + 1; // +1 for \n
+                var origLineLen = originalLines[i].Length + 1;
+
+                // Check if match start is in this line
+                if (resultStart == -1 && normalizedPos + normLineLen > normStart)
+                {
+                    var offsetInLine = normStart - normalizedPos;
+                    resultStart = originalPos + MapOffsetInLine(originalLines[i], normalizedLines[i], offsetInLine, level);
+                }
+
+                // Check if match end is in this line
+                if (resultEnd == -1 && normalizedPos + normLineLen >= normEnd)
+                {
+                    var offsetInLine = normEnd - normalizedPos;
+                    resultEnd = originalPos + MapOffsetInLine(originalLines[i], normalizedLines[i], offsetInLine, level);
+                    break;
+                }
+
+                normalizedPos += normLineLen;
+                originalPos += origLineLen;
+            }
+
+            // Fallback if mapping failed
+            if (resultStart == -1) resultStart = 0;
+            if (resultEnd == -1) resultEnd = original.Length;
+
+            return (resultStart, resultEnd);
+        }
+
+        /// <summary>
+        /// Maps an offset within a normalized line back to the original line.
+        /// </summary>
+        private int MapOffsetInLine(string originalLine, string normalizedLine, int normalizedOffset, NormalizationLevel level)
+        {
+            if (normalizedOffset >= normalizedLine.Length)
+                return originalLine.Length;
+
+            if (level == NormalizationLevel.TrailingSpace)
+            {
+                // Trailing space normalization doesn't affect positions within the content
+                return Math.Min(normalizedOffset, originalLine.Length);
+            }
+
+            if (level == NormalizationLevel.LeadingSpace || level == NormalizationLevel.AllWhitespace)
+            {
+                // Walk through both strings character by character
+                int origIdx = 0;
+                int normIdx = 0;
+
+                while (normIdx < normalizedOffset && origIdx < originalLine.Length)
+                {
+                    // Skip through whitespace that may have been normalized
+                    if (level == NormalizationLevel.AllWhitespace && char.IsWhiteSpace(normalizedLine[normIdx]))
+                    {
+                        // In all-whitespace mode, skip all whitespace in original
+                        while (origIdx < originalLine.Length && char.IsWhiteSpace(originalLine[origIdx]))
+                            origIdx++;
+                        // Skip the single space in normalized
+                        normIdx++;
+                    }
+                    else
+                    {
+                        origIdx++;
+                        normIdx++;
+                    }
+                }
+
+                return origIdx;
+            }
+
+            return normalizedOffset;
+        }
+
+        private string NormalizeAtLevel(string text, NormalizationLevel level)
+        {
+            // Always normalize line endings to \n for matching
+            var result = text.Replace("\r\n", "\n").Replace("\r", "\n");
+
+            switch (level)
+            {
+                case NormalizationLevel.None:
+                    return result;
+
+                case NormalizationLevel.TrailingSpace:
+                    return TrimTrailingWhitespacePerLine(result);
+
+                case NormalizationLevel.LeadingSpace:
+                    result = TrimTrailingWhitespacePerLine(result);
+                    result = NormalizeLeadingWhitespace(result);
+                    return result;
+
+                case NormalizationLevel.AllWhitespace:
+                    result = TrimTrailingWhitespacePerLine(result);
+                    result = CollapseWhitespaceRuns(result);
+                    return result;
+
+                default:
+                    return result;
+            }
+        }
+
+        /// <summary>
+        /// Normalizes leading whitespace: converts tabs to 4 spaces.
+        /// </summary>
+        private string NormalizeLeadingWhitespace(string text)
+        {
+            var lines = text.Split('\n');
+            for (int i = 0; i < lines.Length; i++)
+            {
+                var line = lines[i];
+                int leadingEnd = 0;
+                while (leadingEnd < line.Length && (line[leadingEnd] == ' ' || line[leadingEnd] == '\t'))
+                    leadingEnd++;
+
+                if (leadingEnd > 0)
+                {
+                    var leading = line.Substring(0, leadingEnd).Replace("\t", "    ");
+                    lines[i] = leading + line.Substring(leadingEnd);
+                }
+            }
+            return string.Join("\n", lines);
+        }
+
+        /// <summary>
+        /// Collapses runs of whitespace (spaces/tabs) into single spaces.
+        /// Preserves newlines.
+        /// </summary>
+        private string CollapseWhitespaceRuns(string text)
+        {
+            var sb = new StringBuilder(text.Length);
+            bool lastWasSpace = false;
+
+            foreach (var c in text)
+            {
+                if (c == '\n')
+                {
+                    sb.Append(c);
+                    lastWasSpace = false;
+                }
+                else if (c == ' ' || c == '\t')
+                {
+                    if (!lastWasSpace)
+                    {
+                        sb.Append(' ');
+                        lastWasSpace = true;
+                    }
+                }
+                else
+                {
+                    sb.Append(c);
+                    lastWasSpace = false;
+                }
+            }
+
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// Prepares the new string for insertion, normalizing line endings to match the file.
+        /// </summary>
+        private string PrepareNewStr(string newStr, string fileLineEnding)
+        {
+            var result = newStr.Replace("\r\n", "\n").Replace("\r", "\n");
+            if (fileLineEnding != "\n")
+                result = result.Replace("\n", fileLineEnding);
+            return result;
+        }
+
+        /// <summary>
+        /// Finds the closest matching line for diagnostic purposes.
+        /// </summary>
+        private void FindClosestMatch(string content, string searchStr, MatchResult result)
+        {
+            var searchLines = searchStr.Split('\n');
+            var firstSearchLine = searchLines.FirstOrDefault(l => l.Trim().Length > 5)?.Trim() ?? "";
+
+            if (firstSearchLine.Length < 5) return;
+
+            var contentLines = content.Split('\n');
+            var bestScore = 0.0;
+            var bestLine = "";
+            var bestLineNum = 0;
+
+            for (int i = 0; i < contentLines.Length; i++)
+            {
+                var line = contentLines[i].Trim();
+                if (line.Length < 3) continue;
+
+                var score = CalculateSimilarity(line, firstSearchLine);
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    bestLine = contentLines[i];
+                    bestLineNum = i + 1;
+                }
+            }
+
+            if (bestScore > 0.5)
+            {
+                result.ClosestMatch = bestLine;
+                result.ClosestMatchLine = bestLineNum;
+                result.ClosestMatchScore = bestScore;
+            }
+        }
+
+        /// <summary>
+        /// Calculates similarity between two strings (0.0 to 1.0).
+        /// </summary>
+        private double CalculateSimilarity(string a, string b)
+        {
+            if (string.IsNullOrEmpty(a) || string.IsNullOrEmpty(b)) return 0;
+
+            // Simple containment check
+            if (a.Contains(b) || b.Contains(a))
+                return 0.9;
+
+            // Check for common substring ratio
+            var shorter = a.Length < b.Length ? a : b;
+            var longer = a.Length < b.Length ? b : a;
+
+            int commonChars = 0;
+            foreach (var c in shorter)
+            {
+                if (longer.Contains(c))
+                    commonChars++;
+            }
+
+            return (double)commonChars / longer.Length;
+        }
+
         /// <summary>
         /// Builds a diagnostic message when the search string is not found.
-        /// Shows whitespace details and tries to find partial matches.
+        /// Shows whitespace details and closest match if found.
         /// </summary>
-        private string BuildNotFoundDiagnostic(string content, string oldStr, string filePath)
+        private string BuildNotFoundDiagnostic(string content, string oldStr, string filePath, MatchResult matchResult)
         {
             var sb = new StringBuilder();
             sb.AppendLine("# Error: String not found in file");
@@ -188,43 +525,56 @@ namespace CodeMerger.Services.Mcp
             sb.AppendLine("```");
             sb.AppendLine();
 
-            // Try to find partial matches using the first non-empty line
-            var firstLine = oldStrLines.FirstOrDefault(l => l.Trim().Length > 0)?.Trim() ?? "";
-            if (firstLine.Length > 10)
+            // Show closest match if found
+            if (matchResult.ClosestMatchScore > 0.5 && !string.IsNullOrEmpty(matchResult.ClosestMatch))
             {
-                var contentLines = content.Split('\n');
-                var partialMatches = new System.Collections.Generic.List<(int lineNum, string line)>();
+                sb.AppendLine($"**Closest match found ({matchResult.ClosestMatchScore:P0} similar) at line {matchResult.ClosestMatchLine}:**");
+                sb.AppendLine("```");
+                sb.AppendLine(VisualizeWhitespace(matchResult.ClosestMatch.TrimEnd('\r', '\n')));
+                sb.AppendLine("```");
+                sb.AppendLine();
+                sb.AppendLine("💡 **Tip:** Use `codemerger_get_lines` to see exact content around this line.");
+            }
+            else
+            {
+                // Try to find partial matches using the first non-empty line
+                var firstLine = oldStrLines.FirstOrDefault(l => l.Trim().Length > 0)?.Trim() ?? "";
+                if (firstLine.Length > 10)
+                {
+                    var contentLines = content.Split('\n');
+                    var partialMatches = new List<(int lineNum, string line)>();
 
-                for (int i = 0; i < contentLines.Length; i++)
-                {
-                    // Check if the trimmed content matches (ignoring whitespace differences)
-                    if (contentLines[i].Trim().Contains(firstLine.Substring(0, Math.Min(20, firstLine.Length))))
+                    for (int i = 0; i < contentLines.Length; i++)
                     {
-                        partialMatches.Add((i + 1, contentLines[i]));
+                        if (contentLines[i].Trim().Contains(firstLine.Substring(0, Math.Min(20, firstLine.Length))))
+                        {
+                            partialMatches.Add((i + 1, contentLines[i]));
+                        }
                     }
-                }
 
-                if (partialMatches.Count > 0)
-                {
-                    sb.AppendLine("**Possible matches found (similar content at these lines):**");
-                    sb.AppendLine("```");
-                    foreach (var (lineNum, line) in partialMatches.Take(5))
+                    if (partialMatches.Count > 0)
                     {
-                        sb.AppendLine($"Line {lineNum}: {VisualizeWhitespace(line.TrimEnd('\r'))}");
+                        sb.AppendLine("**Possible matches found (similar content at these lines):**");
+                        sb.AppendLine("```");
+                        foreach (var (lineNum, line) in partialMatches.Take(5))
+                        {
+                            sb.AppendLine($"Line {lineNum}: {VisualizeWhitespace(line.TrimEnd('\r'))}");
+                        }
+                        sb.AppendLine("```");
+                        sb.AppendLine();
+                        sb.AppendLine("💡 **Tip:** Use `codemerger_get_lines` to see exact file content.");
                     }
-                    sb.AppendLine("```");
-                    sb.AppendLine();
-                    sb.AppendLine("**Hint:** Whitespace mismatch? Use `codemerger_get_lines` to see exact file content.");
-                }
-                else
-                {
-                    sb.AppendLine("**No similar content found.** The code may have changed or the search text is incorrect.");
+                    else
+                    {
+                        sb.AppendLine("**No similar content found.** The code may have changed or the search text is incorrect.");
+                    }
                 }
             }
 
-            // Show whitespace legend
             sb.AppendLine();
             sb.AppendLine("**Whitespace legend:** `→` = tab, space = space");
+            sb.AppendLine();
+            sb.AppendLine("**Normalization tried:** Line endings → Trailing whitespace → Leading whitespace (tabs↔spaces) → Collapsed whitespace");
 
             return sb.ToString();
         }
@@ -234,26 +584,11 @@ namespace CodeMerger.Services.Mcp
         /// </summary>
         private static string DetectLineEnding(string content)
         {
-            // Check for Windows-style CRLF first
             if (content.Contains("\r\n"))
                 return "\r\n";
-            // Check for old Mac-style CR (rare)
             if (content.Contains("\r"))
                 return "\r";
-            // Default to Unix-style LF
             return "\n";
-        }
-
-        /// <summary>
-        /// Normalizes the search string's line endings to match the file's line endings.
-        /// </summary>
-        private static string NormalizeLineEndings(string searchStr, string targetLineEnding)
-        {
-            // First normalize to LF, then convert to target
-            var normalized = searchStr.Replace("\r\n", "\n").Replace("\r", "\n");
-            if (targetLineEnding != "\n")
-                normalized = normalized.Replace("\n", targetLineEnding);
-            return normalized;
         }
 
         /// <summary>
@@ -264,7 +599,6 @@ namespace CodeMerger.Services.Mcp
             var lines = text.Split('\n');
             for (int i = 0; i < lines.Length; i++)
             {
-                // Remove trailing whitespace but preserve \r if present (will be before the split point)
                 lines[i] = lines[i].TrimEnd(' ', '\t', '\r');
             }
             return string.Join("\n", lines);
