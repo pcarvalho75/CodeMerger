@@ -61,6 +61,7 @@ namespace CodeMerger.Services.Mcp
             tools.AddRange(GetServerControlTools());
             tools.AddRange(GetLessonTools());
             tools.AddRange(GetNotesTools());
+            tools.AddRange(GetGitTools());
             return tools.ToArray();
         }
 
@@ -735,6 +736,77 @@ namespace CodeMerger.Services.Mcp
                             {
                                 { "number", new Dictionary<string, object> { { "type", "integer" }, { "description", "Lesson number to delete (1-10)" } } },
                                 { "all", new Dictionary<string, object> { { "type", "boolean" }, { "description", "Set to true to delete all lessons" } } }
+                            }
+                        },
+                        { "required", Array.Empty<string>() }
+                    }
+                }
+            };
+        }
+
+        private static object[] GetNotesTools()
+        {
+            return new object[]
+            {
+                new
+                {
+                    name = "codemerger_get_notes",
+                    description = "Get the current project notes.\n\n" +
+                        "WHEN TO USE: To see what context has been saved about this project.",
+                    inputSchema = new Dictionary<string, object>
+                    {
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>() },
+                        { "required", Array.Empty<string>() }
+                    }
+                },
+                new
+                {
+                    name = "codemerger_add_note",
+                    description = "Add a timestamped note to the project notes.\n\n" +
+                        "WHEN TO USE: When you notice something important — roadmap items, decisions, context.\n" +
+                        "SECTION: Optionally specify a section to organize notes.",
+                    inputSchema = new Dictionary<string, object>
+                    {
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>
+                            {
+                                { "note", new Dictionary<string, string> { { "type", "string" }, { "description", "The note content to add" } } },
+                                { "section", new Dictionary<string, string> { { "type", "string" }, { "description", "Optional section name (e.g., Roadmap, Decisions, Context)" } } }
+                            }
+                        },
+                        { "required", new[] { "note" } }
+                    }
+                },
+                new
+                {
+                    name = "codemerger_update_note",
+                    description = "Update or replace an entire section in the project notes.\n\n" +
+                        "WHEN TO USE: When a section needs to be rewritten.\n" +
+                        "CREATES: If the section doesn't exist, it will be created.",
+                    inputSchema = new Dictionary<string, object>
+                    {
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>
+                            {
+                                { "section", new Dictionary<string, string> { { "type", "string" }, { "description", "Section name to update" } } },
+                                { "content", new Dictionary<string, string> { { "type", "string" }, { "description", "New content for the section" } } }
+                            }
+                        },
+                        { "required", new[] { "section", "content" } }
+                    }
+                },
+                new
+                {
+                    name = "codemerger_clear_notes",
+                    description = "Clear all notes or a specific section.\n\n" +
+                        "CAUTION: Without a section specified, deletes ALL notes.",
+                    inputSchema = new Dictionary<string, object>
+                    {
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>
+                            {
+                                { "section", new Dictionary<string, string> { { "type", "string" }, { "description", "Optional: specific section to clear" } } }
                             }
                         },
                         { "required", Array.Empty<string>() }

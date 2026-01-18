@@ -53,6 +53,7 @@ namespace CodeMerger.Services
         private McpWorkspaceToolHandler? _workspaceHandler;
         private McpLessonToolHandler? _lessonHandler;
         private McpNotesToolHandler? _notesHandler;
+        private McpGitToolHandler? _gitHandler;
 
         // Services
         private readonly LessonService _lessonService;
@@ -355,6 +356,9 @@ namespace CodeMerger.Services
             
             if (_inputDirectories.Count > 0)
                 _notesHandler = new McpNotesToolHandler(_inputDirectories[0]);
+
+            if (_inputDirectories.Count > 0)
+                _gitHandler = new McpGitToolHandler(_inputDirectories[0], SendActivity);
         }
 
         private void RequestShutdown()
@@ -611,6 +615,16 @@ namespace CodeMerger.Services
             if (toolName == "codemerger_clear_notes")
                 return CreateToolResponse(id, HandleNotesTool("clear", arguments));
 
+            // Git tools
+            if (toolName == "codemerger_git_status")
+                return CreateToolResponse(id, HandleGitTool("status", arguments));
+            if (toolName == "codemerger_git_commit")
+                return CreateToolResponse(id, HandleGitTool("commit", arguments));
+            if (toolName == "codemerger_git_push")
+                return CreateToolResponse(id, HandleGitTool("push", arguments));
+            if (toolName == "codemerger_git_commit_push")
+                return CreateToolResponse(id, HandleGitTool("commit_push", arguments));
+
             // All other tools require workspace
             if (_workspaceAnalysis == null)
             {
@@ -744,6 +758,36 @@ namespace CodeMerger.Services
 
                 default:
                     return "Error: Unknown notes action";
+            }
+        }
+
+        private string HandleGitTool(string action, JsonElement arguments)
+        {
+            if (_gitHandler == null)
+                return "Error: Git handler not initialized. Select a workspace first.";
+
+            switch (action)
+            {
+                case "status":
+                    return _gitHandler.GetStatus();
+
+                case "commit":
+                    var commitMsg = arguments.TryGetProperty("message", out var msgEl) ? msgEl.GetString() : null;
+                    if (string.IsNullOrEmpty(commitMsg))
+                        return "Error: 'message' parameter is required.";
+                    return _gitHandler.Commit(commitMsg);
+
+                case "push":
+                    return _gitHandler.Push();
+
+                case "commit_push":
+                    var msg = arguments.TryGetProperty("message", out var m) ? m.GetString() : null;
+                    if (string.IsNullOrEmpty(msg))
+                        return "Error: 'message' parameter is required.";
+                    return _gitHandler.CommitAndPush(msg);
+
+                default:
+                    return "Error: Unknown git action";
             }
         }
 

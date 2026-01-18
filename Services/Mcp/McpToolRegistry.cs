@@ -61,6 +61,7 @@ namespace CodeMerger.Services.Mcp
             tools.AddRange(GetServerControlTools());
             tools.AddRange(GetLessonTools());
             tools.AddRange(GetNotesTools());
+            tools.AddRange(GetGitTools());
             return tools.ToArray();
         }
 
@@ -809,6 +810,69 @@ namespace CodeMerger.Services.Mcp
                             }
                         },
                         { "required", Array.Empty<string>() }
+                    }
+                }
+            };
+        }
+
+        private static object[] GetGitTools()
+        {
+            return new object[]
+            {
+                new
+                {
+                    name = "codemerger_git_status",
+                    description = "Get the current git status (modified, staged, untracked files).\n\n" +
+                        "WHEN TO USE: Before committing to see what has changed.",
+                    inputSchema = new Dictionary<string, object>
+                    {
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>() },
+                        { "required", Array.Empty<string>() }
+                    }
+                },
+                new
+                {
+                    name = "codemerger_git_commit",
+                    description = "Stage all changes and commit with a message.\n\n" +
+                        "WHEN TO USE: To save changes locally without pushing.",
+                    inputSchema = new Dictionary<string, object>
+                    {
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>
+                            {
+                                { "message", new Dictionary<string, string> { { "type", "string" }, { "description", "Commit message" } } }
+                            }
+                        },
+                        { "required", new[] { "message" } }
+                    }
+                },
+                new
+                {
+                    name = "codemerger_git_push",
+                    description = "Push committed changes to remote.\n\n" +
+                        "WHEN TO USE: After committing to sync with remote repository.",
+                    inputSchema = new Dictionary<string, object>
+                    {
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>() },
+                        { "required", Array.Empty<string>() }
+                    }
+                },
+                new
+                {
+                    name = "codemerger_git_commit_push",
+                    description = "Stage all changes, commit, and push in one operation.\n\n" +
+                        "WHEN TO USE: Quick way to save and sync all changes to remote.",
+                    inputSchema = new Dictionary<string, object>
+                    {
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>
+                            {
+                                { "message", new Dictionary<string, string> { { "type", "string" }, { "description", "Commit message" } } }
+                            }
+                        },
+                        { "required", new[] { "message" } }
                     }
                 }
             };
