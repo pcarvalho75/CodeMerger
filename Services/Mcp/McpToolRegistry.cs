@@ -601,6 +601,25 @@ namespace CodeMerger.Services.Mcp
             {
                 new
                 {
+                    name = "codemerger_build",
+                    description = "Run `dotnet build` on the project and return real compilation results.\n\n" +
+                        "WHEN TO USE: After making changes — verify the code compiles correctly with full NuGet resolution and XAML compilation.\n" +
+                        "BETTER THAN get_diagnostics: Uses actual MSBuild, handles NuGet packages, XAML, all project references.\n" +
+                        "NOTE: Takes 10-30 seconds depending on project size.",
+                    inputSchema = new Dictionary<string, object>
+                    {
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>
+                            {
+                                { "configuration", new Dictionary<string, object> { { "type", "string" }, { "description", "Build configuration: Debug or Release (default: Debug)" }, { "default", "Debug" } } },
+                                { "verbose", new Dictionary<string, object> { { "type", "boolean" }, { "description", "Include full build output (default: false)" }, { "default", false } } }
+                            }
+                        },
+                        { "required", Array.Empty<string>() }
+                    }
+                },
+                new
+                {
                     name = "codemerger_refresh",
                     description = "Refresh the workspace index by re-analyzing all files.\n\n" +
                         "WHEN TO USE: After external changes (user edited files outside of MCP tools) — ensures index is up to date.\n" +

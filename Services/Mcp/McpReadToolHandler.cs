@@ -123,14 +123,38 @@ namespace CodeMerger.Services.Mcp
 
             var fileList = files.ToList();
 
-            var sb = new StringBuilder();
-            sb.AppendLine("| File | Namespace | Classification | Tokens |");
-            sb.AppendLine("|------|-----------|----------------|--------|");
+            // Check if we have multiple root directories
+            var distinctRoots = _workspaceAnalysis.AllFiles
+                .Select(f => f.RootDirectory)
+                .Where(r => !string.IsNullOrEmpty(r))
+                .Distinct()
+                .ToList();
+            var hasMultipleRoots = distinctRoots.Count > 1;
 
-            foreach (var file in fileList.Take(limit))
+            var sb = new StringBuilder();
+
+            if (hasMultipleRoots)
             {
-                var ns = !string.IsNullOrEmpty(file.Namespace) ? file.Namespace : "-";
-                sb.AppendLine($"| {file.RelativePath} | {ns} | {file.Classification} | {file.EstimatedTokens:N0} |");
+                sb.AppendLine("| File | Root | Namespace | Classification | Tokens |");
+                sb.AppendLine("|------|------|-----------|----------------|--------|");
+
+                foreach (var file in fileList.Take(limit))
+                {
+                    var ns = !string.IsNullOrEmpty(file.Namespace) ? file.Namespace : "-";
+                    var rootName = !string.IsNullOrEmpty(file.RootDirectory) ? Path.GetFileName(file.RootDirectory.TrimEnd('\\', '/')) : "-";
+                    sb.AppendLine($"| {file.RelativePath} | {rootName} | {ns} | {file.Classification} | {file.EstimatedTokens:N0} |");
+                }
+            }
+            else
+            {
+                sb.AppendLine("| File | Namespace | Classification | Tokens |");
+                sb.AppendLine("|------|-----------|----------------|--------|");
+
+                foreach (var file in fileList.Take(limit))
+                {
+                    var ns = !string.IsNullOrEmpty(file.Namespace) ? file.Namespace : "-";
+                    sb.AppendLine($"| {file.RelativePath} | {ns} | {file.Classification} | {file.EstimatedTokens:N0} |");
+                }
             }
 
             var total = fileList.Count;

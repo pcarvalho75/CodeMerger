@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using CodeMerger.Models;
@@ -105,7 +107,7 @@ namespace CodeMerger.Services.Mcp
             }
 
             sb.AppendLine();
-            sb.AppendLine("*Use `codemerger_switch_project` to switch to a different workspace.*");
+            sb.AppendLine("*Use `codemerger_switch_project` to switch to a different workspace (hot-swap, no restart needed).*");
 
             return sb.ToString();
         }

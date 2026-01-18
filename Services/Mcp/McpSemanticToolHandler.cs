@@ -189,6 +189,16 @@ namespace CodeMerger.Services.Mcp
                         return $"Error: File not found: {specificPath}";
                 }
 
+                // MEMORY OPTIMIZATION: Limit files to prevent memory explosion
+                const int MaxFilesForDiagnostics = 50;
+                bool truncated = csFiles.Count > MaxFilesForDiagnostics;
+                if (truncated)
+                {
+                    sb.AppendLine($"⚠️ **Note:** Analyzing first {MaxFilesForDiagnostics} of {csFiles.Count} files to prevent memory issues.");
+                    sb.AppendLine();
+                    csFiles = csFiles.Take(MaxFilesForDiagnostics).ToList();
+                }
+
                 // Parse all files into syntax trees
                 var syntaxTrees = new List<SyntaxTree>();
                 foreach (var file in csFiles)
@@ -280,6 +290,11 @@ namespace CodeMerger.Services.Mcp
             catch (Exception ex)
             {
                 return $"Error running diagnostics: {ex.Message}";
+            }
+            finally
+            {
+                // Force GC to release Roslyn compilation memory immediately
+                GC.Collect(2, GCCollectionMode.Aggressive, blocking: false);
             }
         }
     }

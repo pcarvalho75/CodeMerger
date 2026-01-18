@@ -28,6 +28,12 @@ namespace CodeMerger.Services
         // Thread safety lock for workspace state
         private readonly object _stateLock = new object();
 
+        // Background update control - prevents memory explosion from concurrent updates
+        private readonly SemaphoreSlim _updateSemaphore = new SemaphoreSlim(1, 1);
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTime> _pendingUpdates = new();
+        private readonly TimeSpan _debounceDelay = TimeSpan.FromMilliseconds(500);
+        private CodeAnalyzer? _updateAnalyzer; // Reusable analyzer for incremental updates
+
         // Workspace state
         private WorkspaceAnalysis? _workspaceAnalysis;
         private RefactoringService? _refactoringService;
@@ -116,13 +122,32 @@ namespace CodeMerger.Services
             _extensions = extensions;
             _ignoredDirs = ignoredDirNames;
 
+            // Clear update state to free memory
+            _updateAnalyzer = null;
+            _pendingUpdates.Clear();
+
+            // CRITICAL: Null out handlers FIRST to release references to old workspace
+            _readHandler = null;
+            _writeHandler = null;
+            _semanticHandler = null;
+            _refactoringHandler = null;
+            _workspaceHandler = null;
+            _refactoringService = null;
+
+            // Clear old workspace data before creating new
+            _workspaceAnalysis = null;
+            _callSites.Clear();
+
+            // Force GC NOW to release old workspace memory before loading new one
+            GC.Collect(2, GCCollectionMode.Forced, blocking: true);
+
             // Set as active workspace
             _workspaceService.SetActiveWorkspace(workspaceName);
 
             // Re-index with new config
             PerformIndexing();
 
-            Log($"Switched to workspace: {workspaceName} ({_workspaceAnalysis?.TotalFiles ?? 0} files)");
+            LogWithMemory($"Switched to workspace: {workspaceName} ({_workspaceAnalysis?.TotalFiles ?? 0} files)");
             return true;
         }
 
@@ -162,11 +187,15 @@ namespace CodeMerger.Services
                 // Rescan directories to discover new/deleted files
                 var files = ScanFiles();
 
+                Log($"Starting indexing of {files.Count} files...");
+
                 // Clear previous call sites
                 _codeAnalyzer.CallSites.Clear();
                 _callSites.Clear();
 
                 var fileAnalyses = new List<FileAnalysis>();
+                int processed = 0;
+
                 foreach (var file in files)
                 {
                     var baseDir = _inputDirectories.FirstOrDefault(dir => file.StartsWith(dir, StringComparison.OrdinalIgnoreCase));
@@ -174,6 +203,16 @@ namespace CodeMerger.Services
 
                     var analysis = _codeAnalyzer.AnalyzeFile(file, baseDir);
                     fileAnalyses.Add(analysis);
+
+                    processed++;
+
+                    // For large projects, log progress and allow GC periodically
+                    if (processed % 50 == 0)
+                    {
+                        Log($"Indexed {processed}/{files.Count} files...");
+                        // Allow GC to clean up Roslyn syntax trees
+                        GC.Collect(0, GCCollectionMode.Optimized, blocking: false);
+                    }
                 }
 
                 // Store call sites for semantic analysis
@@ -187,63 +226,104 @@ namespace CodeMerger.Services
                 _refactoringService = new RefactoringService(_workspaceAnalysis, _inputDirectories);
                 InitializeHandlers();
 
-                Log($"Indexed {fileAnalyses.Count} files, {_workspaceAnalysis.TypeHierarchy.Count} types, {_callSites.Count} call sites");
+                LogWithMemory($"Indexed {fileAnalyses.Count} files, {_workspaceAnalysis.TypeHierarchy.Count} types, {_callSites.Count} call sites");
             }
         }
 
         /// <summary>
         /// Incrementally updates a single file in the index without full re-indexing.
         /// Runs in background to avoid blocking MCP responses.
+        /// Uses debouncing and a semaphore to prevent memory issues from rapid/concurrent updates.
         /// </summary>
         private void UpdateSingleFileAsync(string filePath)
         {
-            Task.Run(() =>
+            var now = DateTime.UtcNow;
+            _pendingUpdates[filePath] = now;
+
+            // Fire and forget - but controlled by semaphore
+            _ = Task.Run(async () =>
             {
                 try
                 {
-                    lock (_stateLock)
+                    // Wait for debounce period
+                    await Task.Delay(_debounceDelay);
+
+                    // Check if this is still the latest update request for this file
+                    if (_pendingUpdates.TryGetValue(filePath, out var scheduledTime) && scheduledTime != now)
                     {
-                        if (_workspaceAnalysis == null) return;
+                        // A newer update was scheduled, skip this one
+                        return;
+                    }
 
-                        var baseDir = _inputDirectories.FirstOrDefault(dir =>
-                            filePath.StartsWith(dir, StringComparison.OrdinalIgnoreCase));
+                    // Remove from pending
+                    _pendingUpdates.TryRemove(filePath, out _);
 
-                        if (baseDir == null) return;
+                    // Only one update at a time to prevent memory explosion
+                    if (!await _updateSemaphore.WaitAsync(TimeSpan.FromSeconds(5)))
+                    {
+                        Log($"Skipped update for {Path.GetFileName(filePath)} - semaphore timeout");
+                        return;
+                    }
 
-                        // Remove old analysis for this file
-                        var existingFile = _workspaceAnalysis.AllFiles
-                            .FirstOrDefault(f => f.FilePath.Equals(filePath, StringComparison.OrdinalIgnoreCase));
-
-                        if (existingFile != null)
+                    try
+                    {
+                        lock (_stateLock)
                         {
-                            _workspaceAnalysis.AllFiles.Remove(existingFile);
+                            if (_workspaceAnalysis == null) return;
 
-                            // Remove old call sites from this file
-                            _callSites.RemoveAll(cs => cs.FilePath.Equals(filePath, StringComparison.OrdinalIgnoreCase));
-                        }
+                            var baseDir = _inputDirectories.FirstOrDefault(dir =>
+                                filePath.StartsWith(dir, StringComparison.OrdinalIgnoreCase));
 
-                        // Re-analyze the single file
-                        if (File.Exists(filePath))
-                        {
-                            _codeAnalyzer.CallSites.Clear();
-                            var newAnalysis = _codeAnalyzer.AnalyzeFile(filePath, baseDir);
-                            _workspaceAnalysis.AllFiles.Add(newAnalysis);
+                            if (baseDir == null) return;
 
-                            // Add new call sites
-                            _callSites.AddRange(_codeAnalyzer.CallSites);
+                            // Remove old analysis for this file
+                            var existingFile = _workspaceAnalysis.AllFiles
+                                .FirstOrDefault(f => f.FilePath.Equals(filePath, StringComparison.OrdinalIgnoreCase));
 
-                            // Update type hierarchy for types in this file
-                            foreach (var type in newAnalysis.Types)
+                            if (existingFile != null)
                             {
-                                var inheritance = new List<string>();
-                                if (!string.IsNullOrEmpty(type.BaseType))
-                                    inheritance.Add(type.BaseType);
-                                inheritance.AddRange(type.Interfaces);
-                                _workspaceAnalysis.TypeHierarchy[type.Name] = inheritance;
-                            }
-                        }
+                                _workspaceAnalysis.AllFiles.Remove(existingFile);
 
-                        Log($"Updated index for: {Path.GetFileName(filePath)}");
+                                // Remove old call sites from this file
+                                _callSites.RemoveAll(cs => cs.FilePath.Equals(filePath, StringComparison.OrdinalIgnoreCase));
+
+                                // Remove old types from hierarchy
+                                foreach (var type in existingFile.Types)
+                                {
+                                    _workspaceAnalysis.TypeHierarchy.Remove(type.Name);
+                                }
+                            }
+
+                            // Re-analyze the single file
+                            if (File.Exists(filePath))
+                            {
+                                // Reuse analyzer instance to avoid Roslyn memory accumulation
+                                _updateAnalyzer ??= new CodeAnalyzer();
+                                _updateAnalyzer.CallSites.Clear();
+
+                                var newAnalysis = _updateAnalyzer.AnalyzeFile(filePath, baseDir);
+                                _workspaceAnalysis.AllFiles.Add(newAnalysis);
+
+                                // Add new call sites
+                                _callSites.AddRange(_updateAnalyzer.CallSites);
+
+                                // Update type hierarchy for types in this file
+                                foreach (var type in newAnalysis.Types)
+                                {
+                                    var inheritance = new List<string>();
+                                    if (!string.IsNullOrEmpty(type.BaseType))
+                                        inheritance.Add(type.BaseType);
+                                    inheritance.AddRange(type.Interfaces);
+                                    _workspaceAnalysis.TypeHierarchy[type.Name] = inheritance;
+                                }
+                            }
+
+                            Log($"Updated index for: {Path.GetFileName(filePath)}");
+                        }
+                    }
+                    finally
+                    {
+                        _updateSemaphore.Release();
                     }
                 }
                 catch (Exception ex)
@@ -406,6 +486,23 @@ namespace CodeMerger.Services
         {
             SendDisconnect();
             _cancellationTokenSource?.Cancel();
+
+            // Clean up all resources
+            _updateAnalyzer = null;
+            _pendingUpdates.Clear();
+
+            // Release handler references
+            _readHandler = null;
+            _writeHandler = null;
+            _semanticHandler = null;
+            _refactoringHandler = null;
+            _workspaceHandler = null;
+            _refactoringService = null;
+
+            // Release workspace data
+            _workspaceAnalysis = null;
+            _callSites.Clear();
+
             Log("MCP Server stopping...");
         }
 
@@ -486,6 +583,9 @@ namespace CodeMerger.Services
 
             if (toolName == "codemerger_refresh")
                 return CreateToolResponse(id, _workspaceHandler?.Refresh() ?? "Error: Handler not initialized");
+
+            if (toolName == "codemerger_build")
+                return CreateToolResponse(id, _workspaceHandler?.Build(arguments) ?? "Error: Handler not initialized");
 
             // Lesson tools don't require workspace
             if (toolName == "codemerger_log_lesson")
@@ -620,6 +720,12 @@ namespace CodeMerger.Services
         private void Log(string message)
         {
             OnLog?.Invoke($"[MCP] {message}");
+        }
+
+        private void LogWithMemory(string message)
+        {
+            var memMB = GC.GetTotalMemory(false) / 1024 / 1024;
+            OnLog?.Invoke($"[MCP] {message} (Mem: {memMB}MB)");
         }
 
         private void SendActivity(string activity)

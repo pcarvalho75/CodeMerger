@@ -340,6 +340,9 @@ namespace CodeMerger.Services.Mcp
                         "1. Call `get_lines` with line numbers from the error to see exact whitespace\n" +
                         "2. Copy the exact content including whitespace\n" +
                         "3. Never guess — always verify current file state first\n\n" +
+                        "NUGET PACKAGES (.csproj files):\n" +
+                        "Before adding a PackageReference, use `grep` to search for existing references to that package.\n" +
+                        "If found, preserve the existing version unless explicitly asked to change it.\n\n" +
                         "WORKFLOW - Before making ANY file modifications:\n" +
                         "1. Present a roadmap of all planned changes to the user\n" +
                         "2. Ask: 'Proceed with AUTOMATIC editing (I'll make all changes), or STEP-BY-STEP (I'll show each change for your approval)?'\n" +

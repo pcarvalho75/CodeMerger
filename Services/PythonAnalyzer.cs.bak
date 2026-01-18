@@ -28,7 +28,6 @@ namespace CodeMerger.Services
             {
                 FilePath = filePath,
                 RelativePath = relativePath,
-                RootDirectory = basePath,
                 FileName = fileInfo.Name,
                 Extension = ".py",
                 Language = "python",
@@ -154,12 +153,12 @@ namespace CodeMerger.Services
         private List<CodeMemberInfo> ExtractModuleFunctions(string code, string[] lines, string filePath)
         {
             var functions = new List<CodeMemberInfo>();
-
+            
             // Find all functions at indentation level 0
             for (int i = 0; i < lines.Length; i++)
             {
                 string line = lines[i];
-
+                
                 // Check for decorators at column 0
                 var decoratorMatch = DecoratorPattern.Match(line);
                 string decorator = "";
@@ -171,7 +170,7 @@ namespace CodeMerger.Services
                 // Check for def at column 0
                 bool isAsync = line.TrimStart().StartsWith("async def ");
                 var funcMatch = isAsync ? AsyncFunctionPattern.Match(line) : FunctionPattern.Match(line);
-
+                
                 if (funcMatch.Success && string.IsNullOrEmpty(funcMatch.Groups[1].Value))
                 {
                     var memberInfo = CreateMemberInfo(funcMatch, lines, i, isAsync, decorator, filePath, "module");
@@ -193,7 +192,7 @@ namespace CodeMerger.Services
             for (int i = 0; i < classLines.Length; i++)
             {
                 string line = classLines[i];
-
+                
                 // Check for decorators
                 var decoratorMatch = DecoratorPattern.Match(line);
                 string decorator = "";
@@ -249,7 +248,7 @@ namespace CodeMerger.Services
                     .Select(p => p.Trim())
                     .Where(p => !string.IsNullOrEmpty(p))
                     .ToList();
-
+                
                 // Check if it's a class method (has self/cls as first param)
                 if (memberInfo.Parameters.Count > 0)
                 {
@@ -313,13 +312,13 @@ namespace CodeMerger.Services
             if (startLine < 1 || startLine > lines.Length) return "";
 
             string line = lines[startLine - 1].Trim();
-
+            
             // Check for triple-quoted docstring
             if (line.StartsWith("\"\"\"") || line.StartsWith("'''"))
             {
                 string quote = line.Substring(0, 3);
                 var docLines = new List<string>();
-
+                
                 // Single-line docstring
                 if (line.EndsWith(quote) && line.Length > 6)
                 {
@@ -380,7 +379,7 @@ namespace CodeMerger.Services
             var relativePath = analysis.RelativePath.ToLowerInvariant();
 
             // Test files
-            if (fileName.StartsWith("test_") || fileName.EndsWith("_test.py") ||
+            if (fileName.StartsWith("test_") || fileName.EndsWith("_test.py") || 
                 relativePath.Contains("/tests/") || relativePath.Contains("\\tests\\"))
                 return FileClassification.Test;
 

@@ -56,6 +56,7 @@ namespace CodeMerger.Services
             {
                 FilePath = filePath,
                 RelativePath = relativePath,
+                RootDirectory = basePath,
                 FileName = fileInfo.Name,
                 Extension = extension,
                 Language = GetLanguage(extension),
@@ -88,7 +89,7 @@ namespace CodeMerger.Services
                 // Extract namespace
                 var namespaceDecl = root.DescendantNodes().OfType<BaseNamespaceDeclarationSyntax>().FirstOrDefault();
                 var namespaceName = namespaceDecl?.Name.ToString() ?? "";
-                
+
                 // Store the namespace at file level
                 analysis.Namespace = namespaceName;
 
@@ -148,7 +149,7 @@ namespace CodeMerger.Services
                 // Extract root namespace if specified
                 var rootNamespace = root.Descendants()
                     .FirstOrDefault(e => e.Name.LocalName == "RootNamespace")?.Value;
-                
+
                 // Fall back to assembly name or project file name
                 if (string.IsNullOrEmpty(rootNamespace))
                 {
@@ -159,7 +160,7 @@ namespace CodeMerger.Services
                 {
                     rootNamespace = Path.GetFileNameWithoutExtension(analysis.FilePath);
                 }
-                
+
                 analysis.Namespace = rootNamespace ?? "";
 
                 // Create a pseudo-type to represent the project
@@ -173,7 +174,7 @@ namespace CodeMerger.Services
                 // Add target framework as a member
                 var targetFramework = root.Descendants()
                     .FirstOrDefault(e => e.Name.LocalName == "TargetFramework" || e.Name.LocalName == "TargetFrameworks")?.Value;
-                
+
                 if (!string.IsNullOrEmpty(targetFramework))
                 {
                     projectType.Members.Add(new CodeMemberInfo
@@ -187,7 +188,7 @@ namespace CodeMerger.Services
                 // Add output type
                 var outputType = root.Descendants()
                     .FirstOrDefault(e => e.Name.LocalName == "OutputType")?.Value ?? "Library";
-                
+
                 projectType.Members.Add(new CodeMemberInfo
                 {
                     Name = "OutputType",
@@ -305,8 +306,8 @@ namespace CodeMerger.Services
                 var typeName = baseType.Type.ToString();
 
                 // Check if this looks like an interface name (starts with 'I' followed by uppercase letter)
-                bool looksLikeInterface = typeName.Length > 1 && 
-                                          typeName.StartsWith("I") && 
+                bool looksLikeInterface = typeName.Length > 1 &&
+                                          typeName.StartsWith("I") &&
                                           char.IsUpper(typeName[1]);
 
                 // First non-interface type becomes the base class
@@ -355,7 +356,7 @@ namespace CodeMerger.Services
                     info.IsAbstract = method.Modifiers.Any(m => m.IsKind(SyntaxKind.AbstractKeyword));
                     info.Parameters = method.ParameterList.Parameters.Select(p => $"{p.Type} {p.Identifier}").ToList();
                     info.Signature = $"{info.Name}({string.Join(", ", method.ParameterList.Parameters.Select(p => p.Type?.ToString() ?? "var"))})";
-                    
+
                     if (method.Body != null)
                     {
                         info.Body = method.Body.ToString();
@@ -404,7 +405,7 @@ namespace CodeMerger.Services
                     info.IsStatic = ctor.Modifiers.Any(m => m.IsKind(SyntaxKind.StaticKeyword));
                     info.Parameters = ctor.ParameterList.Parameters.Select(p => $"{p.Type} {p.Identifier}").ToList();
                     info.Signature = $"{info.Name}({string.Join(", ", ctor.ParameterList.Parameters.Select(p => p.Type?.ToString() ?? "var"))})";
-                    
+
                     if (ctor.Body != null)
                     {
                         info.Body = ctor.Body.ToString();
@@ -482,7 +483,7 @@ namespace CodeMerger.Services
             var relativePath = analysis.RelativePath.ToLowerInvariant();
 
             // Config files (including .csproj)
-            if (fileName.EndsWith(".csproj") || fileName.EndsWith(".json") || 
+            if (fileName.EndsWith(".csproj") || fileName.EndsWith(".json") ||
                 fileName.EndsWith(".config") || fileName.EndsWith(".xml"))
                 return FileClassification.Config;
 

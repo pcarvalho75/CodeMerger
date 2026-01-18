@@ -6,6 +6,10 @@ namespace CodeMerger.Models
     {
         public string FilePath { get; set; } = string.Empty;
         public string RelativePath { get; set; } = string.Empty;
+        /// <summary>
+        /// The root input directory this file belongs to. Used to disambiguate files when multiple directories are indexed.
+        /// </summary>
+        public string RootDirectory { get; set; } = string.Empty;
         public string FileName { get; set; } = string.Empty;
         public string Extension { get; set; } = string.Empty;
         public string Language { get; set; } = string.Empty;
@@ -16,7 +20,7 @@ namespace CodeMerger.Models
         public List<CodeTypeInfo> Types { get; set; } = new List<CodeTypeInfo>();
         public List<string> Usings { get; set; } = new List<string>();
         public List<string> Dependencies { get; set; } = new List<string>();
-        
+
         /// <summary>
         /// Primary namespace declared in this file (first namespace found)
         /// </summary>
@@ -31,11 +35,11 @@ namespace CodeMerger.Models
         public string BaseType { get; set; } = string.Empty;
         public List<string> Interfaces { get; set; } = new List<string>();
         public List<CodeMemberInfo> Members { get; set; } = new List<CodeMemberInfo>();
-        
+
         // Location info
         public int StartLine { get; set; }
         public int EndLine { get; set; }
-        
+
         // Documentation
         public string XmlDoc { get; set; } = string.Empty;
     }
@@ -47,7 +51,7 @@ namespace CodeMerger.Models
         public string ReturnType { get; set; } = string.Empty;
         public string Signature { get; set; } = string.Empty;
         public string AccessModifier { get; set; } = "private";
-        
+
         // Extended info
         public int StartLine { get; set; }
         public int EndLine { get; set; }
