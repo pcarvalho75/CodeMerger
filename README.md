@@ -55,7 +55,7 @@ CodeMerger solves this. It runs `dotnet build` to catch real errors, understands
 
 - Windows 10/11
 - .NET 8.0 Runtime
-- Claude Desktop
+- [Claude Desktop](https://claude.ai/download) — CodeMerger runs as an MCP server that Claude Desktop connects to
 
 ### Setup
 
