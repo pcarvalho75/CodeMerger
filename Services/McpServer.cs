@@ -52,6 +52,7 @@ namespace CodeMerger.Services
         private McpRefactoringToolHandler? _refactoringHandler;
         private McpWorkspaceToolHandler? _workspaceHandler;
         private McpLessonToolHandler? _lessonHandler;
+        private McpNotesToolHandler? _notesHandler;
 
         // Services
         private readonly LessonService _lessonService;
@@ -351,6 +352,9 @@ namespace CodeMerger.Services
                 SendActivity,
                 Log);
             _lessonHandler = new McpLessonToolHandler(_lessonService, SendActivity);
+            
+            if (_inputDirectories.Count > 0)
+                _notesHandler = new McpNotesToolHandler(_inputDirectories[0]);
         }
 
         private void RequestShutdown()
@@ -597,6 +601,16 @@ namespace CodeMerger.Services
             if (toolName == "codemerger_delete_lesson")
                 return CreateToolResponse(id, HandleLessonTool("delete", arguments));
 
+            // Notes tools
+            if (toolName == "codemerger_get_notes")
+                return CreateToolResponse(id, HandleNotesTool("get", arguments));
+            if (toolName == "codemerger_add_note")
+                return CreateToolResponse(id, HandleNotesTool("add", arguments));
+            if (toolName == "codemerger_update_note")
+                return CreateToolResponse(id, HandleNotesTool("update", arguments));
+            if (toolName == "codemerger_clear_notes")
+                return CreateToolResponse(id, HandleNotesTool("clear", arguments));
+
             // All other tools require workspace
             if (_workspaceAnalysis == null)
             {
@@ -690,6 +704,47 @@ namespace CodeMerger.Services
                 "delete" => _lessonHandler.DeleteLesson(arguments),
                 _ => "Error: Unknown lesson action"
             };
+        }
+
+        private string HandleNotesTool(string action, JsonElement arguments)
+        {
+            if (_notesHandler == null)
+                return "Error: Notes handler not initialized. Select a workspace first.";
+
+            switch (action)
+            {
+                case "get":
+                    SendActivity("Reading project notes...");
+                    return _notesHandler.GetNotes();
+
+                case "add":
+                    var note = arguments.TryGetProperty("note", out var noteEl) ? noteEl.GetString() : null;
+                    if (string.IsNullOrEmpty(note))
+                        return "Error: 'note' parameter is required.";
+                    var section = arguments.TryGetProperty("section", out var sectionEl) ? sectionEl.GetString() : null;
+                    var (success, message, summary) = _notesHandler.AddNote(note, section);
+                    if (success && !string.IsNullOrEmpty(summary))
+                        SendActivity($"Note added: {summary}");
+                    return message;
+
+                case "update":
+                    var updateSection = arguments.TryGetProperty("section", out var updateSectionEl) ? updateSectionEl.GetString() : null;
+                    var content = arguments.TryGetProperty("content", out var contentEl) ? contentEl.GetString() : null;
+                    if (string.IsNullOrEmpty(updateSection))
+                        return "Error: 'section' parameter is required.";
+                    if (string.IsNullOrEmpty(content))
+                        return "Error: 'content' parameter is required.";
+                    SendActivity($"Updating section: {updateSection}");
+                    return _notesHandler.UpdateNote(updateSection, content).message;
+
+                case "clear":
+                    var clearSection = arguments.TryGetProperty("section", out var clearSectionEl) ? clearSectionEl.GetString() : null;
+                    SendActivity(string.IsNullOrEmpty(clearSection) ? "Clearing all notes..." : $"Clearing: {clearSection}");
+                    return _notesHandler.ClearNotes(clearSection).message;
+
+                default:
+                    return "Error: Unknown notes action";
+            }
         }
 
         private string CreateToolResponse(int id, string content)

@@ -52,6 +52,7 @@ namespace CodeMerger.Services
         private McpRefactoringToolHandler? _refactoringHandler;
         private McpWorkspaceToolHandler? _workspaceHandler;
         private McpLessonToolHandler? _lessonHandler;
+        private McpNotesToolHandler? _notesHandler;
 
         // Services
         private readonly LessonService _lessonService;
@@ -351,6 +352,9 @@ namespace CodeMerger.Services
                 SendActivity,
                 Log);
             _lessonHandler = new McpLessonToolHandler(_lessonService, SendActivity);
+            
+            if (_inputDirectories.Count > 0)
+                _notesHandler = new McpNotesToolHandler(_inputDirectories[0]);
         }
 
         private void RequestShutdown()
@@ -487,9 +491,21 @@ namespace CodeMerger.Services
             SendDisconnect();
             _cancellationTokenSource?.Cancel();
 
-            // Clean up update resources
+            // Clean up all resources
             _updateAnalyzer = null;
             _pendingUpdates.Clear();
+
+            // Release handler references
+            _readHandler = null;
+            _writeHandler = null;
+            _semanticHandler = null;
+            _refactoringHandler = null;
+            _workspaceHandler = null;
+            _refactoringService = null;
+
+            // Release workspace data
+            _workspaceAnalysis = null;
+            _callSites.Clear();
 
             Log("MCP Server stopping...");
         }
@@ -584,6 +600,16 @@ namespace CodeMerger.Services
 
             if (toolName == "codemerger_delete_lesson")
                 return CreateToolResponse(id, HandleLessonTool("delete", arguments));
+
+            // Notes tools
+            if (toolName == "codemerger_get_notes")
+                return CreateToolResponse(id, HandleNotesTool("get", arguments));
+            if (toolName == "codemerger_add_note")
+                return CreateToolResponse(id, HandleNotesTool("add", arguments));
+            if (toolName == "codemerger_update_note")
+                return CreateToolResponse(id, HandleNotesTool("update", arguments));
+            if (toolName == "codemerger_clear_notes")
+                return CreateToolResponse(id, HandleNotesTool("clear", arguments));
 
             // All other tools require workspace
             if (_workspaceAnalysis == null)

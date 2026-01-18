@@ -10,6 +10,7 @@ namespace CodeMerger.Services.Mcp
 {
     /// <summary>
     /// Handles file write MCP tools.
+    /// Fixed: Simplified StrReplace to avoid position mapping bugs.
     /// </summary>
     public class McpWriteToolHandler
     {
@@ -101,32 +102,62 @@ namespace CodeMerger.Services.Mcp
             try
             {
                 var content = File.ReadAllText(file.FilePath);
-                var fileLineEnding = DetectLineEnding(content);
 
-                // Try matching with progressively more lenient normalization
-                var matchResult = TryFindMatch(content, oldStr, fileLineEnding);
+                // Normalize line endings in search string to match file
+                var searchStr = oldStr;
+                var replaceStr = newStr;
 
-                if (!matchResult.Found)
+                // Detect file's line ending style
+                string fileLineEnding = "\n";
+                if (content.Contains("\r\n"))
+                    fileLineEnding = "\r\n";
+                else if (content.Contains("\r"))
+                    fileLineEnding = "\r";
+
+                // Normalize search string line endings to match file
+                searchStr = searchStr.Replace("\r\n", "\n").Replace("\r", "\n");
+                if (fileLineEnding != "\n")
+                    searchStr = searchStr.Replace("\n", fileLineEnding);
+
+                // Normalize replacement string line endings to match file
+                replaceStr = replaceStr.Replace("\r\n", "\n").Replace("\r", "\n");
+                if (fileLineEnding != "\n")
+                    replaceStr = replaceStr.Replace("\n", fileLineEnding);
+
+                // Find exact match
+                int index = content.IndexOf(searchStr, StringComparison.Ordinal);
+
+                if (index == -1)
                 {
-                    return BuildNotFoundDiagnostic(content, oldStr, file.RelativePath, matchResult);
+                    // Not found - provide diagnostics
+                    return BuildNotFoundError(content, oldStr, file.RelativePath);
                 }
 
-                if (matchResult.Count > 1)
+                // Check for multiple matches
+                int secondIndex = content.IndexOf(searchStr, index + 1, StringComparison.Ordinal);
+                if (secondIndex != -1)
                 {
-                    return $"Error: String appears {matchResult.Count} times in file. It must be unique (appear exactly once).\n\n" +
-                           $"**Looking for:**\n```\n{oldStr}\n```\n\n" +
-                           $"**Matched at lines:** {string.Join(", ", matchResult.LineNumbers)}";
+                    // Count all occurrences
+                    int count = 2;
+                    int searchPos = secondIndex + 1;
+                    while ((searchPos = content.IndexOf(searchStr, searchPos, StringComparison.Ordinal)) != -1)
+                    {
+                        count++;
+                        searchPos++;
+                    }
+
+                    return $"Error: String appears {count} times in file. It must be unique (appear exactly once).\n\n" +
+                           $"💡 **Tip:** Include more surrounding context to make the match unique.";
                 }
 
+                // Create backup
                 if (createBackup && File.Exists(file.FilePath))
                 {
                     File.Copy(file.FilePath, file.FilePath + ".bak", true);
                 }
 
-                // Perform the replacement using the actual matched text
-                var newContent = content.Substring(0, matchResult.StartIndex) +
-                                 PrepareNewStr(newStr, fileLineEnding) +
-                                 content.Substring(matchResult.EndIndex);
+                // Perform the replacement
+                var newContent = content.Substring(0, index) + replaceStr + content.Substring(index + searchStr.Length);
 
                 File.WriteAllText(file.FilePath, newContent);
 
@@ -142,8 +173,6 @@ namespace CodeMerger.Services.Mcp
                 sb.AppendLine($"**Status:** Success - string {action}");
                 if (createBackup)
                     sb.AppendLine($"**Backup:** `{file.FilePath}.bak`");
-                if (matchResult.NormalizationUsed != NormalizationLevel.None)
-                    sb.AppendLine($"**Note:** Matched using {matchResult.NormalizationUsed.ToString().ToLower()} normalization");
 
                 return sb.ToString();
             }
@@ -151,6 +180,54 @@ namespace CodeMerger.Services.Mcp
             {
                 return $"Error: {ex.Message}";
             }
+        }
+
+        private string BuildNotFoundError(string content, string searchStr, string filePath)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("# Error: String not found in file");
+            sb.AppendLine();
+            sb.AppendLine($"**File:** `{filePath}`");
+            sb.AppendLine();
+
+            // Show what we were looking for
+            var lines = searchStr.Split('\n');
+            sb.AppendLine($"**Looking for ({lines.Length} lines):**");
+            sb.AppendLine("```");
+            foreach (var line in lines.Take(10))
+            {
+                sb.AppendLine(line.TrimEnd('\r'));
+            }
+            if (lines.Length > 10)
+                sb.AppendLine($"... ({lines.Length - 10} more lines)");
+            sb.AppendLine("```");
+            sb.AppendLine();
+
+            // Try to find first line in file for hints
+            var firstLine = lines.FirstOrDefault(l => l.Trim().Length > 5)?.Trim();
+            if (!string.IsNullOrEmpty(firstLine))
+            {
+                var contentLines = content.Split('\n');
+                for (int i = 0; i < contentLines.Length; i++)
+                {
+                    if (contentLines[i].Contains(firstLine.Substring(0, Math.Min(20, firstLine.Length))))
+                    {
+                        sb.AppendLine($"**Possible match at line {i + 1}:**");
+                        sb.AppendLine("```");
+                        sb.AppendLine(contentLines[i].TrimEnd('\r'));
+                        sb.AppendLine("```");
+                        sb.AppendLine();
+                        break;
+                    }
+                }
+            }
+
+            sb.AppendLine("💡 **Tips:**");
+            sb.AppendLine("- Use `codemerger_get_lines` to see exact file content");
+            sb.AppendLine("- Check for whitespace differences (tabs vs spaces)");
+            sb.AppendLine("- Copy the exact text from `get_lines` output");
+
+            return sb.ToString();
         }
 
         private enum NormalizationLevel
@@ -584,26 +661,11 @@ namespace CodeMerger.Services.Mcp
         /// </summary>
         private static string DetectLineEnding(string content)
         {
-            // Check for Windows-style CRLF first
             if (content.Contains("\r\n"))
                 return "\r\n";
-            // Check for old Mac-style CR (rare)
             if (content.Contains("\r"))
                 return "\r";
-            // Default to Unix-style LF
             return "\n";
-        }
-
-        /// <summary>
-        /// Normalizes the search string's line endings to match the file's line endings.
-        /// </summary>
-        private static string NormalizeLineEndings(string searchStr, string targetLineEnding)
-        {
-            // First normalize to LF, then convert to target
-            var normalized = searchStr.Replace("\r\n", "\n").Replace("\r", "\n");
-            if (targetLineEnding != "\n")
-                normalized = normalized.Replace("\n", targetLineEnding);
-            return normalized;
         }
 
         /// <summary>
@@ -614,7 +676,6 @@ namespace CodeMerger.Services.Mcp
             var lines = text.Split('\n');
             for (int i = 0; i < lines.Length; i++)
             {
-                // Remove trailing whitespace but preserve \r if present (will be before the split point)
                 lines[i] = lines[i].TrimEnd(' ', '\t', '\r');
             }
             return string.Join("\n", lines);

@@ -1,0 +1,188 @@
+using System;
+using System.IO;
+using System.Text;
+using System.Text.RegularExpressions;
+
+namespace CodeMerger.Services.Mcp
+{
+    /// <summary>
+    /// Handles project notes tools for persistent context across sessions.
+    /// Notes are stored in CODEMERGER_NOTES.md in the project root.
+    /// </summary>
+    public class McpNotesToolHandler
+    {
+        private const string NotesFileName = "CODEMERGER_NOTES.md";
+        private const int MaxFileSizeBytes = 20 * 1024; // ~20KB ≈ 5000 tokens
+        private const int WarnThresholdBytes = 16 * 1024; // Warn at ~80% capacity
+
+        private readonly string _workspacePath;
+
+        public McpNotesToolHandler(string workspacePath)
+        {
+            _workspacePath = workspacePath;
+        }
+
+        private string NotesFilePath => Path.Combine(_workspacePath, NotesFileName);
+
+        public string GetNotes()
+        {
+            if (!File.Exists(NotesFilePath))
+            {
+                return "# Project Notes\n\nNo notes yet. Use `add_note` to start taking notes.";
+            }
+
+            var content = File.ReadAllText(NotesFilePath);
+            var sizeInfo = GetSizeInfo(content);
+
+            return $"{content}\n\n---\n{sizeInfo}";
+        }
+
+        public string? GetNotesRaw()
+        {
+            if (!File.Exists(NotesFilePath))
+                return null;
+
+            return File.ReadAllText(NotesFilePath);
+        }
+
+        public (bool success, string message, string? noteSummary) AddNote(string note, string? section = null)
+        {
+            var currentContent = File.Exists(NotesFilePath) 
+                ? File.ReadAllText(NotesFilePath) 
+                : "# Project Notes\n";
+
+            var timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm");
+            var formattedNote = $"- [{timestamp}] {note}";
+
+            string newContent;
+
+            if (!string.IsNullOrEmpty(section))
+            {
+                newContent = AddNoteToSection(currentContent, section, formattedNote);
+            }
+            else
+            {
+                newContent = currentContent.TrimEnd() + "\n\n" + formattedNote + "\n";
+            }
+
+            var newSizeBytes = Encoding.UTF8.GetByteCount(newContent);
+            if (newSizeBytes > MaxFileSizeBytes)
+            {
+                return (false, $"Cannot add note: would exceed limit ({newSizeBytes / 1024}KB > 20KB). Consider clearing old notes.", null);
+            }
+
+            File.WriteAllText(NotesFilePath, newContent);
+
+            var warning = newSizeBytes > WarnThresholdBytes 
+                ? $" ⚠️ Notes at {newSizeBytes * 100 / MaxFileSizeBytes}% capacity." 
+                : "";
+
+            var summary = note.Length > 60 ? note.Substring(0, 57) + "..." : note;
+
+            return (true, $"Note added.{warning}", summary);
+        }
+
+        public (bool success, string message) UpdateNote(string section, string newContent)
+        {
+            if (!File.Exists(NotesFilePath))
+            {
+                var content = $"# Project Notes\n\n## {section}\n\n{newContent}\n";
+                File.WriteAllText(NotesFilePath, content);
+                return (true, $"Created notes with section '{section}'.");
+            }
+
+            var currentContent = File.ReadAllText(NotesFilePath);
+            var updatedContent = ReplaceSectionContent(currentContent, section, newContent);
+
+            var newSizeBytes = Encoding.UTF8.GetByteCount(updatedContent);
+            if (newSizeBytes > MaxFileSizeBytes)
+            {
+                return (false, $"Cannot update: would exceed limit ({newSizeBytes / 1024}KB > 20KB).");
+            }
+
+            File.WriteAllText(NotesFilePath, updatedContent);
+
+            var warning = newSizeBytes > WarnThresholdBytes
+                ? $" ⚠️ Notes at {newSizeBytes * 100 / MaxFileSizeBytes}% capacity."
+                : "";
+
+            return (true, $"Section '{section}' updated.{warning}");
+        }
+
+        public (bool success, string message) ClearNotes(string? section = null)
+        {
+            if (!File.Exists(NotesFilePath))
+            {
+                return (true, "Notes already empty.");
+            }
+
+            if (string.IsNullOrEmpty(section))
+            {
+                File.Delete(NotesFilePath);
+                return (true, "All notes cleared.");
+            }
+
+            var currentContent = File.ReadAllText(NotesFilePath);
+            var updatedContent = RemoveSection(currentContent, section);
+            File.WriteAllText(NotesFilePath, updatedContent);
+
+            return (true, $"Section '{section}' cleared.");
+        }
+
+        private string AddNoteToSection(string content, string section, string note)
+        {
+            var pattern = $@"(^|\n)(#{1,2}\s*{Regex.Escape(section)}\s*\n)";
+            var match = Regex.Match(content, pattern, RegexOptions.IgnoreCase);
+
+            if (match.Success)
+            {
+                var sectionStart = match.Index + match.Length;
+                var nextHeaderMatch = Regex.Match(content.Substring(sectionStart), @"\n#{1,2}\s+\w");
+
+                int insertPosition = nextHeaderMatch.Success 
+                    ? sectionStart + nextHeaderMatch.Index 
+                    : content.Length;
+
+                return content.Substring(0, insertPosition).TrimEnd() + "\n" + note + "\n" + content.Substring(insertPosition);
+            }
+
+            return content.TrimEnd() + $"\n\n## {section}\n\n{note}\n";
+        }
+
+        private string ReplaceSectionContent(string content, string section, string newSectionContent)
+        {
+            var pattern = $@"(^|\n)(#{1,2}\s*{Regex.Escape(section)}\s*\n)";
+            var match = Regex.Match(content, pattern, RegexOptions.IgnoreCase);
+
+            if (match.Success)
+            {
+                var sectionHeaderEnd = match.Index + match.Length;
+                var nextHeaderMatch = Regex.Match(content.Substring(sectionHeaderEnd), @"\n#{1,2}\s+\w");
+
+                string before = content.Substring(0, sectionHeaderEnd);
+                string after = nextHeaderMatch.Success 
+                    ? content.Substring(sectionHeaderEnd + nextHeaderMatch.Index) 
+                    : "";
+
+                return before + newSectionContent.Trim() + "\n" + after;
+            }
+
+            return content.TrimEnd() + $"\n\n## {section}\n\n{newSectionContent.Trim()}\n";
+        }
+
+        private string RemoveSection(string content, string section)
+        {
+            var pattern = $@"(\n?#{1,2}\s*{Regex.Escape(section)}\s*\n)[\s\S]*?(?=\n#{1,2}\s+\w|$)";
+            return Regex.Replace(content, pattern, "", RegexOptions.IgnoreCase).Trim() + "\n";
+        }
+
+        private string GetSizeInfo(string content)
+        {
+            var bytes = Encoding.UTF8.GetByteCount(content);
+            var percent = bytes * 100 / MaxFileSizeBytes;
+            var estimatedTokens = bytes / 4;
+
+            return $"*Notes: ~{estimatedTokens} tokens ({percent}% of limit)*";
+        }
+    }
+}
