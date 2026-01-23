@@ -183,9 +183,9 @@
             </Setter>
         </Style>
 
-        <!-- ComboBoxItem Style -->
+        <!-- ComboBoxItem Style - uses solid dark background to prevent white bleed-through in dropdowns -->
         <Style TargetType="ComboBoxItem">
-            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Background" Value="{StaticResource BackgroundCard}"/>
             <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
             <Setter Property="Padding" Value="10,8"/>
             <Setter Property="Template">

@@ -256,9 +256,9 @@
                           SelectionChanged="ProjectComboBox_SelectionChanged" Style="{StaticResource ModernComboBox}"/>
                 
                 <StackPanel Grid.Column="3" Orientation="Horizontal" Margin="12,0,0,0">
-                    <Button Content="＋ New" Click="NewProject_Click" Style="{StaticResource ModernButton}" Margin="0,0,6,0"/>
-                    <Button Content="✎ Rename" Click="RenameProject_Click" Style="{StaticResource ModernButton}" Margin="0,0,6,0"/>
-                    <Button Content="🗑 Delete" Click="DeleteProject_Click" Style="{StaticResource ModernButton}"/>
+                    <Button Content="＋ New" Click="NewWorkspace_Click" Style="{StaticResource ModernButton}" Margin="0,0,6,0"/>
+                    <Button Content="✎ Rename" Click="RenameWorkspace_Click" Style="{StaticResource ModernButton}" Margin="0,0,6,0"/>
+                    <Button Content="🗑 Delete" Click="DeleteWorkspace_Click" Style="{StaticResource ModernButton}"/>
                 </StackPanel>
 
                 <!-- Connection Status -->
