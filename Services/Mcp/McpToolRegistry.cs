@@ -359,7 +359,8 @@ namespace CodeMerger.Services.Mcp
                                 { "path", new Dictionary<string, string> { { "type", "string" }, { "description", "Relative path to the file" } } },
                                 { "oldStr", new Dictionary<string, string> { { "type", "string" }, { "description", "String to find and replace (must be unique in file)" } } },
                                 { "newStr", new Dictionary<string, string> { { "type", "string" }, { "description", "Replacement string (empty to delete)" } } },
-                                { "createBackup", new Dictionary<string, object> { { "type", "boolean" }, { "description", "Create .bak backup before modifying (default: true)" }, { "default", true } } }
+                                { "createBackup", new Dictionary<string, object> { { "type", "boolean" }, { "description", "Create .bak backup before modifying (default: true)" }, { "default", true } } },
+                            { "normalizeIndent", new Dictionary<string, object> { { "type", "boolean" }, { "description", "Ignore leading whitespace differences when matching (default: false). Use when exact indentation match fails." }, { "default", false } } }
                             }
                         },
                         { "required", new[] { "path", "oldStr" } }
