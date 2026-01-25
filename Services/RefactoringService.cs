@@ -87,6 +87,19 @@ namespace CodeMerger.Services
                     f.RelativePath.Equals(relativePath, StringComparison.OrdinalIgnoreCase) ||
                     f.RelativePath.Replace('\\', '/').Equals(relativePath.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase));
 
+                // SAFETY CHECK: If creating a NEW file with multiple roots and no explicit root prefix,
+                // require explicit project specification to avoid accidentally creating in wrong location
+                if (existingFile == null && matchedRoot == null && _inputDirectories.Count > 1)
+                {
+                    var rootNames = _inputDirectories.Select(d => Path.GetFileName(d.TrimEnd('\\', '/'))).ToList();
+                    result.Success = false;
+                    result.Error = $"Ambiguous target: This workspace has multiple project roots and the path '{relativePath}' doesn't specify which one.\n\n" +
+                                $"**Available roots:** {string.Join(", ", rootNames)}\n\n" +
+                                $"**Please prefix your path with the target project**, e.g.:\n" +
+                                string.Join("\n", rootNames.Take(3).Select(r => $"- `{r}/{relativePath}`"));
+                    return result;
+                }
+
                 if (existingFile != null)
                 {
                     fullPath = existingFile.FilePath;
