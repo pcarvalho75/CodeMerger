@@ -372,7 +372,7 @@
                                 <RowDefinition Height="Auto"/>
                             </Grid.RowDefinitions>
                             <TextBlock Text="Extensions" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource TextSecondary}"/>
-                            <TextBox x:Name="extensionsTextBox" Grid.Row="1" Text=".cs, .xaml, .py" Margin="0,6,0,12" 
+                            <TextBox x:Name="extensionsTextBox" Grid.Row="1" Text=".cs, .xaml, .py, .csproj, .sln, " Margin="0,6,0,12" 
                                      TextChanged="Filters_Changed" Style="{StaticResource ModernTextBox}"/>
                             <TextBlock Grid.Row="2" Text="Ignored Directories" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource TextSecondary}"/>
                             <TextBox x:Name="ignoredDirsTextBox" Grid.Row="3" Text="bin, obj, .vs, Properties" Margin="0,6,0,0" 

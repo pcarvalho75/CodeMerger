@@ -39,16 +39,31 @@ namespace CodeMerger.Services.Mcp
 
         /// <summary>
         /// Finds a file by path with disambiguation when multiple files match.
+        /// Supports ../ paths to access sibling projects within the workspace.
         /// Returns (file, null) on success, (null, errorMessage) on failure.
         /// </summary>
         private (FileAnalysis? file, string? error) FindFile(string path)
         {
             var normalizedPath = path.Replace('\\', '/');
 
+            // First, try matching by relative path or filename
             var matches = _workspaceAnalysis.AllFiles.Where(f =>
                 f.RelativePath.Equals(path, StringComparison.OrdinalIgnoreCase) ||
                 f.RelativePath.Replace('\\', '/').Equals(normalizedPath, StringComparison.OrdinalIgnoreCase) ||
                 f.FileName.Equals(path, StringComparison.OrdinalIgnoreCase)).ToList();
+
+            // If no matches and path contains ../, try resolving the full path
+            if (matches.Count == 0 && (path.Contains("..") || path.Contains("/")))
+            {
+                var baseDir = _inputDirectories.FirstOrDefault();
+                if (!string.IsNullOrEmpty(baseDir))
+                {
+                    var resolvedPath = Path.GetFullPath(Path.Combine(baseDir, path.Replace('/', Path.DirectorySeparatorChar)));
+                    
+                    matches = _workspaceAnalysis.AllFiles.Where(f =>
+                        f.FilePath.Equals(resolvedPath, StringComparison.OrdinalIgnoreCase)).ToList();
+                }
+            }
 
             if (matches.Count == 0)
             {

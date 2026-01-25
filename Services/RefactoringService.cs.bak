@@ -27,6 +27,7 @@ namespace CodeMerger.Services
 
         /// <summary>
         /// Write content to a file (create or overwrite).
+        /// Supports ../ paths to write to sibling projects within the workspace.
         /// </summary>
         public WriteFileResult WriteFile(string relativePath, string content, bool createBackup = true)
         {
@@ -34,20 +35,35 @@ namespace CodeMerger.Services
 
             try
             {
-                // Security: Validate path doesn't escape workspace
+                // Security: Validate path has no dangerous characters
                 if (!IsPathSafe(relativePath))
                 {
                     result.Success = false;
-                    result.Error = "Invalid path: path traversal not allowed";
+                    result.Error = "Invalid path: contains invalid characters";
                     return result;
                 }
 
-                // Find the file or determine where to create it
-                var existingFile = _workspaceAnalysis.AllFiles
-                    .FirstOrDefault(f => f.RelativePath.Equals(relativePath, StringComparison.OrdinalIgnoreCase) ||
-                                        f.RelativePath.Replace('\\', '/').Equals(relativePath.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase));
-
                 string fullPath;
+                FileAnalysis? existingFile = null;
+
+                // Resolve the full path first (handles ../ paths)
+                var baseDir = _inputDirectories.FirstOrDefault() ?? Directory.GetCurrentDirectory();
+                fullPath = Path.GetFullPath(Path.Combine(baseDir, relativePath.Replace('/', Path.DirectorySeparatorChar)));
+
+                // Security: Verify resolved path is within workspace
+                if (!IsPathWithinWorkspace(fullPath))
+                {
+                    result.Success = false;
+                    result.Error = $"Invalid path: resolved path escapes workspace. Valid roots: {string.Join(", ", _inputDirectories.Select(d => Path.GetFileName(d.TrimEnd('\\', '/'))))}";
+                    return result;
+                }
+
+                // Check if file exists - match by full path OR relative path
+                existingFile = _workspaceAnalysis.AllFiles.FirstOrDefault(f =>
+                    f.FilePath.Equals(fullPath, StringComparison.OrdinalIgnoreCase) ||
+                    f.RelativePath.Equals(relativePath, StringComparison.OrdinalIgnoreCase) ||
+                    f.RelativePath.Replace('\\', '/').Equals(relativePath.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase));
+
                 if (existingFile != null)
                 {
                     fullPath = existingFile.FilePath;
@@ -63,22 +79,10 @@ namespace CodeMerger.Services
 
                     // Generate diff
                     var oldContent = File.ReadAllText(fullPath);
-                    result.Diff = GenerateDiff(oldContent, content, relativePath);
+                    result.Diff = GenerateDiff(oldContent, content, existingFile.RelativePath);
                 }
                 else
                 {
-                    // New file - use first input directory
-                    var baseDir = _inputDirectories.FirstOrDefault() ?? Directory.GetCurrentDirectory();
-                    fullPath = Path.GetFullPath(Path.Combine(baseDir, relativePath.Replace('/', Path.DirectorySeparatorChar)));
-                    
-                    // Security: Verify resolved path is still within workspace
-                    if (!IsPathWithinWorkspace(fullPath))
-                    {
-                        result.Success = false;
-                        result.Error = "Invalid path: resolved path escapes workspace directory";
-                        return result;
-                    }
-                    
                     result.IsNewFile = true;
 
                     // Ensure directory exists

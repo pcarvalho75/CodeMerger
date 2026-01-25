@@ -46,9 +46,32 @@ namespace CodeMerger.Services
                 string fullPath;
                 FileAnalysis? existingFile = null;
 
-                // Resolve the full path first (handles ../ paths)
-                var baseDir = _inputDirectories.FirstOrDefault() ?? Directory.GetCurrentDirectory();
-                fullPath = Path.GetFullPath(Path.Combine(baseDir, relativePath.Replace('/', Path.DirectorySeparatorChar)));
+                // Try to match path prefix to a known project root
+                string baseDir;
+                string effectivePath = relativePath;
+                
+                var matchedRoot = _inputDirectories.FirstOrDefault(dir =>
+                {
+                    var rootName = Path.GetFileName(dir.TrimEnd('\\', '/'));
+                    return relativePath.StartsWith(rootName + "/", StringComparison.OrdinalIgnoreCase) ||
+                           relativePath.StartsWith(rootName + "\\", StringComparison.OrdinalIgnoreCase);
+                });
+
+                if (matchedRoot != null)
+                {
+                    // Path starts with a root name like "Vortex/Engines/file.cs"
+                    // Use that root and strip the prefix
+                    baseDir = matchedRoot;
+                    var rootName = Path.GetFileName(matchedRoot.TrimEnd('\\', '/'));
+                    effectivePath = relativePath.Substring(rootName.Length + 1); // +1 for the separator
+                }
+                else
+                {
+                    // No root prefix - use first directory (original behavior)
+                    baseDir = _inputDirectories.FirstOrDefault() ?? Directory.GetCurrentDirectory();
+                }
+
+                fullPath = Path.GetFullPath(Path.Combine(baseDir, effectivePath.Replace('/', Path.DirectorySeparatorChar)));
 
                 // Security: Verify resolved path is within workspace
                 if (!IsPathWithinWorkspace(fullPath))

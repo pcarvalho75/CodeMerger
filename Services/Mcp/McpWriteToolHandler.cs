@@ -55,10 +55,32 @@ namespace CodeMerger.Services.Mcp
             // If no matches and path contains ../, try resolving the full path
             if (matches.Count == 0 && (path.Contains("..") || path.Contains("/")))
             {
-                var baseDir = _inputDirectories.FirstOrDefault();
+                // Try to match path prefix to a known project root
+                var matchedRoot = _inputDirectories.FirstOrDefault(dir =>
+                {
+                    var rootName = Path.GetFileName(dir.TrimEnd('\\', '/'));
+                    return path.StartsWith(rootName + "/", StringComparison.OrdinalIgnoreCase) ||
+                           path.StartsWith(rootName + "\\", StringComparison.OrdinalIgnoreCase);
+                });
+
+                string baseDir;
+                string effectivePath;
+                
+                if (matchedRoot != null)
+                {
+                    baseDir = matchedRoot;
+                    var rootName = Path.GetFileName(matchedRoot.TrimEnd('\\', '/'));
+                    effectivePath = path.Substring(rootName.Length + 1);
+                }
+                else
+                {
+                    baseDir = _inputDirectories.FirstOrDefault() ?? "";
+                    effectivePath = path;
+                }
+
                 if (!string.IsNullOrEmpty(baseDir))
                 {
-                    var resolvedPath = Path.GetFullPath(Path.Combine(baseDir, path.Replace('/', Path.DirectorySeparatorChar)));
+                    var resolvedPath = Path.GetFullPath(Path.Combine(baseDir, effectivePath.Replace('/', Path.DirectorySeparatorChar)));
                     
                     matches = _workspaceAnalysis.AllFiles.Where(f =>
                         f.FilePath.Equals(resolvedPath, StringComparison.OrdinalIgnoreCase)).ToList();
