@@ -677,8 +677,12 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_list_projects",
-                    description = "List all available CodeMerger projects.\n\n" +
-                        "SHOWS: Project names and which one is currently active/loaded.\n" +
+                    description = "List all available CodeMerger projects and detect shared directories between them.\n\n" +
+                        "SHOWS:\n" +
+                        "- All workspaces with directory count and load status\n" +
+                        "- Shared Directories: folders used by multiple workspaces (changes affect all)\n\n" +
+                        "IMPORTANT: When working with multiple projects, check this first to identify shared code.\n" +
+                        "If a directory like 'CryptoTraderCore' appears in both Sequoia and SmartMoney, they reference the SAME physical folder.\n\n" +
                         "NEXT STEP: Use `switch_project` to change to a different project.",
                     inputSchema = new Dictionary<string, object>
                     {

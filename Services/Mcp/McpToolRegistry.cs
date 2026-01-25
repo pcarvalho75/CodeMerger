@@ -696,6 +696,8 @@ namespace CodeMerger.Services.Mcp
                     name = "codemerger_switch_project",
                     description = "Switch to a different CodeMerger project.\n\n" +
                         "HOT-SWAP: Server re-indexes the new workspace without restarting — no reconnection needed.\n" +
+                        "COMBINE WORKSPACES: Pass comma-separated names (e.g., 'Sequoia, SmartMoney') to merge multiple workspaces into one virtual workspace.\n" +
+                        "Shared directories are deduplicated. Each file tracks its source workspace.\n\n" +
                         "FIRST: Use `list_projects` to see available projects.",
                     inputSchema = new Dictionary<string, object>
                     {

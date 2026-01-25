@@ -163,6 +163,51 @@ namespace CodeMerger.Services.Mcp
                 return "Error: Workspace name cannot be empty.";
             }
 
+            // Check for merged workspace request (comma-separated names)
+            if (workspaceName.Contains(','))
+            {
+                var names = workspaceName
+                    .Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Select(n => n.Trim())
+                    .Where(n => !string.IsNullOrEmpty(n))
+                    .ToArray();
+
+                if (names.Length > 1)
+                {
+                    // Validate each workspace exists
+                    var missing = new List<string>();
+                    foreach (var name in names)
+                    {
+                        if (_workspaceService.LoadWorkspace(name) == null)
+                            missing.Add(name);
+                    }
+
+                    if (missing.Count > 0)
+                    {
+                        var available = _workspaceService.LoadAllWorkspaces();
+                        return $"Error: Workspace(s) not found: {string.Join(", ", missing)}\n\nAvailable workspaces:\n" +
+                               string.Join("\n", available.Select(w => $"- {w.Name}"));
+                    }
+
+                    _log($"Merging workspaces: {string.Join(", ", names)}");
+                    _sendActivity($"Merging: {string.Join(", ", names)}");
+
+                    var mergeSuccess = _requestSwitchWorkspace(workspaceName);
+
+                    if (mergeSuccess)
+                    {
+                        _workspaceName = $"Merged: {string.Join(", ", names)}";
+                        return $"# Workspaces Merged\n\n" +
+                               $"Successfully merged **{names.Length}** workspaces: {string.Join(", ", names)}.\n\n" +
+                               $"Shared directories are deduplicated. Each file tracks its source workspace.";
+                    }
+                    else
+                    {
+                        return $"# Merge Failed\n\nFailed to merge workspaces. Check server logs for details.";
+                    }
+                }
+            }
+
             var workspace = _workspaceService.LoadWorkspace(workspaceName);
             if (workspace == null)
             {
