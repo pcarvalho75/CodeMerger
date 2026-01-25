@@ -101,6 +101,31 @@ namespace CodeMerger.Services.Mcp
                 sb.AppendLine($"- {file.RelativePath}{ns}");
             }
 
+            // Project References section
+            if (_workspaceAnalysis.ProjectReferences.Count > 0)
+            {
+                sb.AppendLine();
+                sb.AppendLine("## Project References");
+
+                // Group by resolved path to show unique external projects
+                var groupedRefs = _workspaceAnalysis.ProjectReferences
+                    .GroupBy(r => r.ResolvedPath)
+                    .OrderBy(g => g.First().Name);
+
+                foreach (var group in groupedRefs)
+                {
+                    var first = group.First();
+                    var referencedBy = string.Join(", ", group.Select(r => r.SourceProject).Distinct());
+                    var isExternal = !_workspaceAnalysis.AllFiles.Any(f => 
+                        f.FilePath.Equals(first.ResolvedPath, StringComparison.OrdinalIgnoreCase));
+                    
+                    var location = isExternal ? "external" : "in workspace";
+                    sb.AppendLine($"- **{first.Name}** ({location})");
+                    sb.AppendLine($"  - Path: `{first.ResolvedPath}`");
+                    sb.AppendLine($"  - Referenced by: {referencedBy}");
+                }
+            }
+
             return sb.ToString();
         }
 

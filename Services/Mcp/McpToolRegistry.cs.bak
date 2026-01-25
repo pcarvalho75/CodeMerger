@@ -78,8 +78,14 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_get_project_overview",
-                    description = "Get high-level project information including framework, structure, namespaces, total files, and entry points.\n\n" +
+                    description = "Get high-level project information including framework, structure, namespaces, total files, entry points, and project references.\n\n" +
                         "WHEN TO USE: Call this first when starting work on a project to understand its structure.\n\n" +
+                        "SHOWS:\n" +
+                        "- Framework, file count, token count, type count\n" +
+                        "- Namespaces found (warns if multiple root namespaces)\n" +
+                        "- File breakdown by classification\n" +
+                        "- Key entry points (Program.cs, App.xaml, etc.)\n" +
+                        "- Project References with resolved paths (external vs in-workspace)\n\n" +
                         "EXPLORATION PATHS:\n" +
                         "- For general exploration: get_project_overview → list_files → get_type/get_file\n" +
                         "- For task-based work: get_context (uses call-graph analysis to find relevant files)\n\n" +
@@ -295,7 +301,8 @@ namespace CodeMerger.Services.Mcp
                     name = "codemerger_get_callers",
                     description = "Get all methods that call a specific method.\n\n" +
                         "WHEN TO USE: Before modifying a method's signature or behavior — see what code depends on it.\n" +
-                        "PART OF: Call graph analysis. Pair with `get_callees` for full picture.",
+                        "PART OF: Call graph analysis. Pair with `get_callees` for full picture.\n" +
+                        "NOTE: `get_context` uses this data automatically to include related files.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -313,7 +320,8 @@ namespace CodeMerger.Services.Mcp
                     name = "codemerger_get_callees",
                     description = "Get all methods that a specific method calls.\n\n" +
                         "WHEN TO USE: Understanding what a method depends on — useful for understanding complex methods.\n" +
-                        "PART OF: Call graph analysis. Pair with `get_callers` for full picture.",
+                        "PART OF: Call graph analysis. Pair with `get_callers` for full picture.\n" +
+                        "NOTE: `get_context` uses this data automatically to include related files.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },

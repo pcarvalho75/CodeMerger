@@ -78,8 +78,14 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_get_project_overview",
-                    description = "Get high-level project information including framework, structure, namespaces, total files, and entry points.\n\n" +
+                    description = "Get high-level project information including framework, structure, namespaces, total files, entry points, and project references.\n\n" +
                         "WHEN TO USE: Call this first when starting work on a project to understand its structure.\n\n" +
+                        "SHOWS:\n" +
+                        "- Framework, file count, token count, type count\n" +
+                        "- Namespaces found (warns if multiple root namespaces)\n" +
+                        "- File breakdown by classification\n" +
+                        "- Key entry points (Program.cs, App.xaml, etc.)\n" +
+                        "- Project References with resolved paths (external vs in-workspace)\n\n" +
                         "EXPLORATION PATHS:\n" +
                         "- For general exploration: get_project_overview → list_files → get_type/get_file\n" +
                         "- For task-based work: get_context (uses call-graph analysis to find relevant files)\n\n" +
@@ -671,8 +677,12 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_list_projects",
-                    description = "List all available CodeMerger projects.\n\n" +
-                        "SHOWS: Project names and which one is currently active/loaded.\n" +
+                    description = "List all available CodeMerger projects and detect shared directories between them.\n\n" +
+                        "SHOWS:\n" +
+                        "- All workspaces with directory count and load status\n" +
+                        "- Shared Directories: folders used by multiple workspaces (changes affect all)\n\n" +
+                        "IMPORTANT: When working with multiple projects, check this first to identify shared code.\n" +
+                        "If a directory like 'CryptoTraderCore' appears in both Sequoia and SmartMoney, they reference the SAME physical folder.\n\n" +
                         "NEXT STEP: Use `switch_project` to change to a different project.",
                     inputSchema = new Dictionary<string, object>
                     {

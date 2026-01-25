@@ -90,6 +90,25 @@ namespace CodeMerger.Services.Mcp
                 return "# Available Workspaces\n\nNo workspaces found. Please create a workspace in the CodeMerger GUI first.";
             }
 
+            // Build map of directory -> workspaces that use it
+            var directoryToWorkspaces = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var workspace in workspaces)
+            {
+                if (workspace.InputDirectories == null) continue;
+                foreach (var dir in workspace.InputDirectories)
+                {
+                    var normalizedDir = Path.GetFullPath(dir);
+                    if (!directoryToWorkspaces.ContainsKey(normalizedDir))
+                        directoryToWorkspaces[normalizedDir] = new List<string>();
+                    directoryToWorkspaces[normalizedDir].Add(workspace.Name);
+                }
+            }
+
+            // Find shared directories (used by more than one workspace)
+            var sharedDirs = directoryToWorkspaces
+                .Where(kvp => kvp.Value.Count > 1)
+                .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+
             var sb = new StringBuilder();
             sb.AppendLine("# Available Workspaces");
             sb.AppendLine();
@@ -104,6 +123,24 @@ namespace CodeMerger.Services.Mcp
                 var status = workspace.Name == _workspaceName ? "✓ Loaded" :
                              workspace.Name == activeWorkspace ? "Active" : "";
                 sb.AppendLine($"| {workspace.Name} | {dirCount} | {status} |");
+            }
+
+            // Show shared directories section if any exist
+            if (sharedDirs.Count > 0)
+            {
+                sb.AppendLine();
+                sb.AppendLine("## Shared Directories");
+                sb.AppendLine();
+                sb.AppendLine("*These directories are used by multiple workspaces - changes affect all listed workspaces.*");
+                sb.AppendLine();
+
+                foreach (var kvp in sharedDirs.OrderBy(k => k.Key))
+                {
+                    var dirName = Path.GetFileName(kvp.Key.TrimEnd('\\', '/'));
+                    var workspaceList = string.Join(", ", kvp.Value.OrderBy(w => w));
+                    sb.AppendLine($"- **{dirName}** → {workspaceList}");
+                    sb.AppendLine($"  - `{kvp.Key}`");
+                }
             }
 
             sb.AppendLine();

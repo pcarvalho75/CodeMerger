@@ -157,5 +157,210 @@ namespace CodeMerger.Services.Mcp
                 return $"# Switch Failed\n\nFailed to switch to workspace '{workspaceName}'. Check server logs for details.";
             }
         }
+
+        /// <summary>
+        /// Runs dotnet build on the project and returns real compilation results.
+        /// </summary>
+        public string Build(JsonElement arguments)
+        {
+            string configuration = "Debug";
+            if (arguments.TryGetProperty("configuration", out var configEl))
+                configuration = configEl.GetString() ?? "Debug";
+
+            bool verboseOutput = false;
+            if (arguments.TryGetProperty("verbose", out var verboseEl))
+                verboseOutput = verboseEl.GetBoolean();
+
+            _sendActivity($"Building ({configuration})...");
+
+            var sb = new StringBuilder();
+            sb.AppendLine("# Build Results");
+            sb.AppendLine();
+
+            try
+            {
+                // Find project or solution file
+                var (projectFile, projectType) = FindProjectFile();
+
+                if (projectFile == null)
+                {
+                    return "Error: No .csproj or .sln file found in the workspace directories.";
+                }
+
+                sb.AppendLine($"**Project:** `{Path.GetFileName(projectFile)}`");
+                sb.AppendLine($"**Configuration:** {configuration}");
+                sb.AppendLine();
+
+                // Run dotnet build
+                var startInfo = new ProcessStartInfo
+                {
+                    FileName = "dotnet",
+                    Arguments = $"build \"{projectFile}\" --configuration {configuration} --no-incremental",
+                    WorkingDirectory = Path.GetDirectoryName(projectFile),
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+
+                _log($"Running: dotnet {startInfo.Arguments}");
+
+                using var process = new Process { StartInfo = startInfo };
+                var output = new StringBuilder();
+                var errorOutput = new StringBuilder();
+
+                process.OutputDataReceived += (s, e) => { if (e.Data != null) output.AppendLine(e.Data); };
+                process.ErrorDataReceived += (s, e) => { if (e.Data != null) errorOutput.AppendLine(e.Data); };
+
+                process.Start();
+                process.BeginOutputReadLine();
+                process.BeginErrorReadLine();
+
+                // Wait with timeout (2 minutes)
+                bool completed = process.WaitForExit(120000);
+
+                if (!completed)
+                {
+                    process.Kill();
+                    return "Error: Build timed out after 2 minutes.";
+                }
+
+                var fullOutput = output.ToString() + errorOutput.ToString();
+
+                // Parse build results
+                var (errors, warnings) = ParseBuildOutput(fullOutput);
+
+                if (process.ExitCode == 0)
+                {
+                    sb.AppendLine("## ✅ Build Succeeded");
+                }
+                else
+                {
+                    sb.AppendLine("## ❌ Build Failed");
+                }
+                sb.AppendLine();
+
+                sb.AppendLine($"**Errors:** {errors.Count}");
+                sb.AppendLine($"**Warnings:** {warnings.Count}");
+                sb.AppendLine();
+
+                if (errors.Count > 0)
+                {
+                    sb.AppendLine("## Errors");
+                    foreach (var error in errors.Take(50))
+                    {
+                        sb.AppendLine($"- ❌ {error}");
+                    }
+                    if (errors.Count > 50)
+                        sb.AppendLine($"- ... and {errors.Count - 50} more errors");
+                    sb.AppendLine();
+                }
+
+                if (warnings.Count > 0)
+                {
+                    sb.AppendLine("## Warnings");
+                    foreach (var warning in warnings.Take(30))
+                    {
+                        sb.AppendLine($"- ⚠️ {warning}");
+                    }
+                    if (warnings.Count > 30)
+                        sb.AppendLine($"- ... and {warnings.Count - 30} more warnings");
+                    sb.AppendLine();
+                }
+
+                if (verboseOutput)
+                {
+                    sb.AppendLine("## Full Output");
+                    sb.AppendLine("```");
+                    sb.AppendLine(fullOutput.Length > 10000 ? fullOutput.Substring(0, 10000) + "\n... (truncated)" : fullOutput);
+                    sb.AppendLine("```");
+                }
+
+                return sb.ToString();
+            }
+            catch (Exception ex)
+            {
+                return $"Error running build: {ex.Message}\n\nMake sure `dotnet` is installed and available in PATH.";
+            }
+        }
+
+        private (string? path, string type) FindProjectFile()
+        {
+            // First look for .sln files
+            foreach (var dir in _inputDirectories)
+            {
+                if (!Directory.Exists(dir)) continue;
+                var slnFiles = Directory.GetFiles(dir, "*.sln", SearchOption.TopDirectoryOnly);
+                if (slnFiles.Length > 0)
+                    return (slnFiles[0], "solution");
+            }
+
+            // Then look for .csproj files in root
+            foreach (var dir in _inputDirectories)
+            {
+                if (!Directory.Exists(dir)) continue;
+                var csprojFiles = Directory.GetFiles(dir, "*.csproj", SearchOption.TopDirectoryOnly);
+                if (csprojFiles.Length > 0)
+                    return (csprojFiles[0], "project");
+            }
+
+            // Search one level deep
+            foreach (var dir in _inputDirectories)
+            {
+                if (!Directory.Exists(dir)) continue;
+                try
+                {
+                    var csprojFiles = Directory.GetFiles(dir, "*.csproj", SearchOption.AllDirectories);
+                    if (csprojFiles.Length > 0)
+                        return (csprojFiles[0], "project");
+                }
+                catch { }
+            }
+
+            return (null, "none");
+        }
+
+        private (List<string> errors, List<string> warnings) ParseBuildOutput(string output)
+        {
+            var errors = new List<string>();
+            var warnings = new List<string>();
+
+            // MSBuild/dotnet build output patterns:
+            // file.cs(line,col): error CS1234: message
+            // file.cs(line,col): warning CS1234: message
+            var errorPattern = new Regex(@"^(.+?)\((\d+),(\d+)\):\s*error\s+(\w+):\s*(.+)$", RegexOptions.Multiline);
+            var warningPattern = new Regex(@"^(.+?)\((\d+),(\d+)\):\s*warning\s+(\w+):\s*(.+)$", RegexOptions.Multiline);
+
+            foreach (Match match in errorPattern.Matches(output))
+            {
+                var file = Path.GetFileName(match.Groups[1].Value);
+                var line = match.Groups[2].Value;
+                var code = match.Groups[4].Value;
+                var message = match.Groups[5].Value;
+                errors.Add($"`{file}:{line}` [{code}] {message}");
+            }
+
+            foreach (Match match in warningPattern.Matches(output))
+            {
+                var file = Path.GetFileName(match.Groups[1].Value);
+                var line = match.Groups[2].Value;
+                var code = match.Groups[4].Value;
+                var message = match.Groups[5].Value;
+                warnings.Add($"`{file}:{line}` [{code}] {message}");
+            }
+
+            // Also catch general error lines (like MSBuild errors)
+            var generalErrorPattern = new Regex(@"^\s*error\s+(\w+):\s*(.+)$", RegexOptions.Multiline | RegexOptions.IgnoreCase);
+            foreach (Match match in generalErrorPattern.Matches(output))
+            {
+                var code = match.Groups[1].Value;
+                var message = match.Groups[2].Value;
+                var errorText = $"[{code}] {message}";
+                if (!errors.Any(e => e.Contains(message)))
+                    errors.Add(errorText);
+            }
+
+            return (errors, warnings);
+        }
     }
 }

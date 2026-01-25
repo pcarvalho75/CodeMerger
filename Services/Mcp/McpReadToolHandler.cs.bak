@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -16,10 +17,10 @@ namespace CodeMerger.Services.Mcp
         private readonly ContextAnalyzer _contextAnalyzer;
         private readonly Action<string> _sendActivity;
 
-        public McpReadToolHandler(WorkspaceAnalysis workspaceAnalysis, Action<string> sendActivity)
+        public McpReadToolHandler(WorkspaceAnalysis workspaceAnalysis, List<CallSite> callSites, Action<string> sendActivity)
         {
             _workspaceAnalysis = workspaceAnalysis;
-            _contextAnalyzer = new ContextAnalyzer(workspaceAnalysis);
+            _contextAnalyzer = new ContextAnalyzer(workspaceAnalysis, callSites);
             _sendActivity = sendActivity;
         }
 
