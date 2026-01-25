@@ -16,6 +16,7 @@ namespace CodeMerger.Services.Mcp
     {
         private readonly WorkspaceAnalysis _workspaceAnalysis;
         private readonly RefactoringService _refactoringService;
+        private readonly FilePathResolver _pathResolver;
         private readonly List<string> _inputDirectories;
         private readonly Action<string> _updateFileIndex;
         private readonly Action<string> _sendActivity;
@@ -31,63 +32,11 @@ namespace CodeMerger.Services.Mcp
         {
             _workspaceAnalysis = workspaceAnalysis;
             _refactoringService = refactoringService;
+            _pathResolver = new FilePathResolver(workspaceAnalysis, inputDirectories);
             _inputDirectories = inputDirectories;
             _updateFileIndex = updateFileIndex;
             _sendActivity = sendActivity;
             _log = log;
-        }
-
-        /// <summary>
-        /// Finds a file by path with disambiguation when multiple files match.
-        /// Supports ../ paths to access sibling projects within the workspace.
-        /// Returns (file, null) on success, (null, errorMessage) on failure.
-        /// </summary>
-        private (FileAnalysis? file, string? error) FindFile(string path)
-        {
-            var normalizedPath = path.Replace('\\', '/');
-
-            // First, try matching by relative path or filename
-            var matches = _workspaceAnalysis.AllFiles.Where(f =>
-                f.RelativePath.Equals(path, StringComparison.OrdinalIgnoreCase) ||
-                f.RelativePath.Replace('\\', '/').Equals(normalizedPath, StringComparison.OrdinalIgnoreCase) ||
-                f.FileName.Equals(path, StringComparison.OrdinalIgnoreCase)).ToList();
-
-            // If no matches and path contains ../, try resolving the full path
-            if (matches.Count == 0 && (path.Contains("..") || path.Contains("/")))
-            {
-                var baseDir = _inputDirectories.FirstOrDefault();
-                if (!string.IsNullOrEmpty(baseDir))
-                {
-                    var resolvedPath = Path.GetFullPath(Path.Combine(baseDir, path.Replace('/', Path.DirectorySeparatorChar)));
-                    
-                    matches = _workspaceAnalysis.AllFiles.Where(f =>
-                        f.FilePath.Equals(resolvedPath, StringComparison.OrdinalIgnoreCase)).ToList();
-                }
-            }
-
-            if (matches.Count == 0)
-            {
-                return (null, $"Error: File not found: {path}");
-            }
-
-            if (matches.Count > 1)
-            {
-                var sb = new StringBuilder();
-                sb.AppendLine($"Error: Ambiguous path '{path}' matches {matches.Count} files:");
-                sb.AppendLine();
-                foreach (var m in matches)
-                {
-                    var rootName = !string.IsNullOrEmpty(m.RootDirectory)
-                        ? Path.GetFileName(m.RootDirectory.TrimEnd('\\', '/'))
-                        : "unknown";
-                    sb.AppendLine($"- `{m.RelativePath}` in root **{rootName}** (`{m.RootDirectory}`)");
-                }
-                sb.AppendLine();
-                sb.AppendLine("Please use the full relative path to disambiguate.");
-                return (null, sb.ToString());
-            }
-
-            return (matches[0], null);
         }
 
         public string StrReplace(JsonElement arguments)
@@ -112,7 +61,7 @@ namespace CodeMerger.Services.Mcp
 
             _sendActivity($"StrReplace: {path}");
 
-            var (file, findError) = FindFile(path);
+            var (file, findError) = _pathResolver.FindFile(path);
             if (file == null)
             {
                 return findError!;
@@ -490,7 +439,7 @@ namespace CodeMerger.Services.Mcp
             var path = pathEl.GetString() ?? "";
             _sendActivity($"Deleting: {path}");
 
-            var (file, findError) = FindFile(path);
+            var (file, findError) = _pathResolver.FindFile(path);
             if (file == null)
                 return findError!;
 
@@ -532,7 +481,7 @@ namespace CodeMerger.Services.Mcp
             _sendActivity($"Undo: {path}");
 
             // Find the file or determine the full path
-            var (file, findError) = FindFile(path);
+            var (file, findError) = _pathResolver.FindFile(path);
 
             string fullPath;
             string relativePath;

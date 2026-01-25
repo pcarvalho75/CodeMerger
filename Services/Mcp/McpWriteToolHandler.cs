@@ -16,6 +16,7 @@ namespace CodeMerger.Services.Mcp
     {
         private readonly WorkspaceAnalysis _workspaceAnalysis;
         private readonly RefactoringService _refactoringService;
+        private readonly FilePathResolver _pathResolver;
         private readonly List<string> _inputDirectories;
         private readonly Action<string> _updateFileIndex;
         private readonly Action<string> _sendActivity;
@@ -31,85 +32,11 @@ namespace CodeMerger.Services.Mcp
         {
             _workspaceAnalysis = workspaceAnalysis;
             _refactoringService = refactoringService;
+            _pathResolver = new FilePathResolver(workspaceAnalysis, inputDirectories);
             _inputDirectories = inputDirectories;
             _updateFileIndex = updateFileIndex;
             _sendActivity = sendActivity;
             _log = log;
-        }
-
-        /// <summary>
-        /// Finds a file by path with disambiguation when multiple files match.
-        /// Supports ../ paths to access sibling projects within the workspace.
-        /// Returns (file, null) on success, (null, errorMessage) on failure.
-        /// </summary>
-        private (FileAnalysis? file, string? error) FindFile(string path)
-        {
-            var normalizedPath = path.Replace('\\', '/');
-
-            // First, try matching by relative path or filename
-            var matches = _workspaceAnalysis.AllFiles.Where(f =>
-                f.RelativePath.Equals(path, StringComparison.OrdinalIgnoreCase) ||
-                f.RelativePath.Replace('\\', '/').Equals(normalizedPath, StringComparison.OrdinalIgnoreCase) ||
-                f.FileName.Equals(path, StringComparison.OrdinalIgnoreCase)).ToList();
-
-            // If no matches and path contains ../, try resolving the full path
-            if (matches.Count == 0 && (path.Contains("..") || path.Contains("/")))
-            {
-                // Try to match path prefix to a known project root
-                var matchedRoot = _inputDirectories.FirstOrDefault(dir =>
-                {
-                    var rootName = Path.GetFileName(dir.TrimEnd('\\', '/'));
-                    return path.StartsWith(rootName + "/", StringComparison.OrdinalIgnoreCase) ||
-                           path.StartsWith(rootName + "\\", StringComparison.OrdinalIgnoreCase);
-                });
-
-                string baseDir;
-                string effectivePath;
-                
-                if (matchedRoot != null)
-                {
-                    baseDir = matchedRoot;
-                    var rootName = Path.GetFileName(matchedRoot.TrimEnd('\\', '/'));
-                    effectivePath = path.Substring(rootName.Length + 1);
-                }
-                else
-                {
-                    baseDir = _inputDirectories.FirstOrDefault() ?? "";
-                    effectivePath = path;
-                }
-
-                if (!string.IsNullOrEmpty(baseDir))
-                {
-                    var resolvedPath = Path.GetFullPath(Path.Combine(baseDir, effectivePath.Replace('/', Path.DirectorySeparatorChar)));
-                    
-                    matches = _workspaceAnalysis.AllFiles.Where(f =>
-                        f.FilePath.Equals(resolvedPath, StringComparison.OrdinalIgnoreCase)).ToList();
-                }
-            }
-
-            if (matches.Count == 0)
-            {
-                return (null, $"Error: File not found: {path}");
-            }
-
-            if (matches.Count > 1)
-            {
-                var sb = new StringBuilder();
-                sb.AppendLine($"Error: Ambiguous path '{path}' matches {matches.Count} files:");
-                sb.AppendLine();
-                foreach (var m in matches)
-                {
-                    var rootName = !string.IsNullOrEmpty(m.RootDirectory)
-                        ? Path.GetFileName(m.RootDirectory.TrimEnd('\\', '/'))
-                        : "unknown";
-                    sb.AppendLine($"- `{m.RelativePath}` in root **{rootName}** (`{m.RootDirectory}`)");
-                }
-                sb.AppendLine();
-                sb.AppendLine("Please use the full relative path to disambiguate.");
-                return (null, sb.ToString());
-            }
-
-            return (matches[0], null);
         }
 
         public string StrReplace(JsonElement arguments)
@@ -134,7 +61,7 @@ namespace CodeMerger.Services.Mcp
 
             _sendActivity($"StrReplace: {path}");
 
-            var (file, findError) = FindFile(path);
+            var (file, findError) = _pathResolver.FindFile(path);
             if (file == null)
             {
                 return findError!;
@@ -512,7 +439,7 @@ namespace CodeMerger.Services.Mcp
             var path = pathEl.GetString() ?? "";
             _sendActivity($"Deleting: {path}");
 
-            var (file, findError) = FindFile(path);
+            var (file, findError) = _pathResolver.FindFile(path);
             if (file == null)
                 return findError!;
 
@@ -554,7 +481,7 @@ namespace CodeMerger.Services.Mcp
             _sendActivity($"Undo: {path}");
 
             // Find the file or determine the full path
-            var (file, findError) = FindFile(path);
+            var (file, findError) = _pathResolver.FindFile(path);
 
             string fullPath;
             string relativePath;
@@ -622,7 +549,7 @@ namespace CodeMerger.Services.Mcp
 
             _sendActivity($"MoveFile: {oldPath} -> {newPath}");
 
-            var (file, findError) = FindFile(oldPath);
+            var (file, findError) = _pathResolver.FindFile(oldPath);
             if (file == null)
                 return findError!;
 

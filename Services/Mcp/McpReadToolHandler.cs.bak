@@ -15,12 +15,14 @@ namespace CodeMerger.Services.Mcp
     {
         private readonly WorkspaceAnalysis _workspaceAnalysis;
         private readonly ContextAnalyzer _contextAnalyzer;
+        private readonly FilePathResolver _pathResolver;
         private readonly Action<string> _sendActivity;
 
-        public McpReadToolHandler(WorkspaceAnalysis workspaceAnalysis, List<CallSite> callSites, Action<string> sendActivity)
+        public McpReadToolHandler(WorkspaceAnalysis workspaceAnalysis, List<CallSite> callSites, List<string> inputDirectories, Action<string> sendActivity)
         {
             _workspaceAnalysis = workspaceAnalysis;
             _contextAnalyzer = new ContextAnalyzer(workspaceAnalysis, callSites);
+            _pathResolver = new FilePathResolver(workspaceAnalysis, inputDirectories);
             _sendActivity = sendActivity;
         }
 
@@ -99,6 +101,31 @@ namespace CodeMerger.Services.Mcp
             {
                 var ns = !string.IsNullOrEmpty(file.Namespace) ? $" [{file.Namespace}]" : "";
                 sb.AppendLine($"- {file.RelativePath}{ns}");
+            }
+
+            // Project References section
+            if (_workspaceAnalysis.ProjectReferences.Count > 0)
+            {
+                sb.AppendLine();
+                sb.AppendLine("## Project References");
+
+                // Group by resolved path to show unique external projects
+                var groupedRefs = _workspaceAnalysis.ProjectReferences
+                    .GroupBy(r => r.ResolvedPath)
+                    .OrderBy(g => g.First().Name);
+
+                foreach (var group in groupedRefs)
+                {
+                    var first = group.First();
+                    var referencedBy = string.Join(", ", group.Select(r => r.SourceProject).Distinct());
+                    var isExternal = !_workspaceAnalysis.AllFiles.Any(f => 
+                        f.FilePath.Equals(first.ResolvedPath, StringComparison.OrdinalIgnoreCase));
+                    
+                    var location = isExternal ? "external" : "in workspace";
+                    sb.AppendLine($"- **{first.Name}** ({location})");
+                    sb.AppendLine($"  - Path: `{first.ResolvedPath}`");
+                    sb.AppendLine($"  - Referenced by: {referencedBy}");
+                }
             }
 
             return sb.ToString();
@@ -205,17 +232,13 @@ namespace CodeMerger.Services.Mcp
                 return "Error: 'path' parameter is required.";
             }
 
-            var path = pathEl.GetString();
+            var path = pathEl.GetString() ?? "";
             _sendActivity($"Reading: {path}");
 
-            var file = _workspaceAnalysis.AllFiles.FirstOrDefault(f =>
-                f.RelativePath.Equals(path, StringComparison.OrdinalIgnoreCase) ||
-                f.FileName.Equals(path, StringComparison.OrdinalIgnoreCase));
-
+            var (file, error) = _pathResolver.FindFile(path);
             if (file == null)
             {
-                return $"File not found: {path}\n\nAvailable files:\n" +
-                       string.Join("\n", _workspaceAnalysis.AllFiles.Take(10).Select(f => $"- {f.RelativePath}"));
+                return error!;
             }
 
             try

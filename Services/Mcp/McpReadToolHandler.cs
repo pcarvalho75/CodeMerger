@@ -15,12 +15,14 @@ namespace CodeMerger.Services.Mcp
     {
         private readonly WorkspaceAnalysis _workspaceAnalysis;
         private readonly ContextAnalyzer _contextAnalyzer;
+        private readonly FilePathResolver _pathResolver;
         private readonly Action<string> _sendActivity;
 
-        public McpReadToolHandler(WorkspaceAnalysis workspaceAnalysis, List<CallSite> callSites, Action<string> sendActivity)
+        public McpReadToolHandler(WorkspaceAnalysis workspaceAnalysis, List<CallSite> callSites, List<string> inputDirectories, Action<string> sendActivity)
         {
             _workspaceAnalysis = workspaceAnalysis;
             _contextAnalyzer = new ContextAnalyzer(workspaceAnalysis, callSites);
+            _pathResolver = new FilePathResolver(workspaceAnalysis, inputDirectories);
             _sendActivity = sendActivity;
         }
 
@@ -230,17 +232,13 @@ namespace CodeMerger.Services.Mcp
                 return "Error: 'path' parameter is required.";
             }
 
-            var path = pathEl.GetString();
+            var path = pathEl.GetString() ?? "";
             _sendActivity($"Reading: {path}");
 
-            var file = _workspaceAnalysis.AllFiles.FirstOrDefault(f =>
-                f.RelativePath.Equals(path, StringComparison.OrdinalIgnoreCase) ||
-                f.FileName.Equals(path, StringComparison.OrdinalIgnoreCase));
-
+            var (file, error) = _pathResolver.FindFile(path);
             if (file == null)
             {
-                return $"File not found: {path}\n\nAvailable files:\n" +
-                       string.Join("\n", _workspaceAnalysis.AllFiles.Take(10).Select(f => $"- {f.RelativePath}"));
+                return error!;
             }
 
             try
@@ -561,14 +559,10 @@ namespace CodeMerger.Services.Mcp
 
             _sendActivity($"GetLines: {path} [{startLine}-{endLine}]");
 
-            var file = _workspaceAnalysis.AllFiles.FirstOrDefault(f =>
-                f.RelativePath.Equals(path, StringComparison.OrdinalIgnoreCase) ||
-                f.FileName.Equals(path, StringComparison.OrdinalIgnoreCase));
-
+            var (file, error) = _pathResolver.FindFile(path);
             if (file == null)
             {
-                return $"Error: File not found: {path}\n\nAvailable files:\n" +
-                       string.Join("\n", _workspaceAnalysis.AllFiles.Take(10).Select(f => $"- {f.RelativePath}"));
+                return $"Error: {error}";
             }
 
             try

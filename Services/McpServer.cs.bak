@@ -478,7 +478,7 @@ namespace CodeMerger.Services
         {
             if (_workspaceAnalysis == null || _refactoringService == null) return;
 
-            _readHandler = new McpReadToolHandler(_workspaceAnalysis, SendActivity);
+            _readHandler = new McpReadToolHandler(_workspaceAnalysis, _callSites, SendActivity);
             _writeHandler = new McpWriteToolHandler(_workspaceAnalysis, _refactoringService, _inputDirectories, UpdateSingleFileAsync, SendActivity, Log);
             _semanticHandler = new McpSemanticToolHandler(_workspaceAnalysis, _callSites, SendActivity);
             _refactoringHandler = new McpRefactoringToolHandler(_workspaceAnalysis, _refactoringService, _callSites, SendActivity, Log);
