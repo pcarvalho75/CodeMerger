@@ -614,6 +614,8 @@ namespace CodeMerger.Services
                 return CreateToolResponse(id, HandleNotesTool("update", arguments));
             if (toolName == "codemerger_clear_notes")
                 return CreateToolResponse(id, HandleNotesTool("clear", arguments));
+            if (toolName == "codemerger_delete_note")
+                return CreateToolResponse(id, HandleNotesTool("delete", arguments));
 
             // Git tools
             if (toolName == "codemerger_git_status")
@@ -758,6 +760,36 @@ namespace CodeMerger.Services
 
                 default:
                     return "Error: Unknown notes action";
+            }
+        }
+
+        private string HandleGitTool(string action, JsonElement arguments)
+        {
+            if (_gitHandler == null)
+                return "Error: Git handler not initialized. Select a workspace first.";
+
+            switch (action)
+            {
+                case "status":
+                    return _gitHandler.GetStatus();
+
+                case "commit":
+                    var commitMsg = arguments.TryGetProperty("message", out var msgEl) ? msgEl.GetString() : null;
+                    if (string.IsNullOrEmpty(commitMsg))
+                        return "Error: 'message' parameter is required.";
+                    return _gitHandler.Commit(commitMsg);
+
+                case "push":
+                    return _gitHandler.Push();
+
+                case "commit_push":
+                    var msg = arguments.TryGetProperty("message", out var m) ? m.GetString() : null;
+                    if (string.IsNullOrEmpty(msg))
+                        return "Error: 'message' parameter is required.";
+                    return _gitHandler.CommitAndPush(msg);
+
+                default:
+                    return "Error: Unknown git action";
             }
         }
 

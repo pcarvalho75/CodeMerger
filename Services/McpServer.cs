@@ -614,6 +614,8 @@ namespace CodeMerger.Services
                 return CreateToolResponse(id, HandleNotesTool("update", arguments));
             if (toolName == "codemerger_clear_notes")
                 return CreateToolResponse(id, HandleNotesTool("clear", arguments));
+            if (toolName == "codemerger_delete_note")
+                return CreateToolResponse(id, HandleNotesTool("delete", arguments));
 
             // Git tools
             if (toolName == "codemerger_git_status")
@@ -755,6 +757,15 @@ namespace CodeMerger.Services
                     var clearSection = arguments.TryGetProperty("section", out var clearSectionEl) ? clearSectionEl.GetString() : null;
                     SendActivity(string.IsNullOrEmpty(clearSection) ? "Clearing all notes..." : $"Clearing: {clearSection}");
                     return _notesHandler.ClearNotes(clearSection).message;
+
+                case "delete":
+                    if (!arguments.TryGetProperty("lineNumber", out var lineNumEl) || lineNumEl.ValueKind != System.Text.Json.JsonValueKind.Number)
+                        return "Error: 'lineNumber' parameter is required and must be a number.";
+                    var lineNumber = lineNumEl.GetInt32();
+                    var (deleteSuccess, deleteMessage, deletedNote) = _notesHandler.DeleteNote(lineNumber);
+                    if (deleteSuccess)
+                        SendActivity($"Deleted: {deletedNote}");
+                    return deleteMessage;
 
                 default:
                     return "Error: Unknown notes action";
