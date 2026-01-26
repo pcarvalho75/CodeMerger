@@ -63,6 +63,10 @@ namespace CodeMerger.Services
         // Services
         private readonly LessonService _lessonService;
 
+        // Memory management
+        private int _toolCallsSinceGC = 0;
+        private const int GC_INTERVAL = 50; // Force GC every 50 tool calls
+
         public bool IsRunning => _serverTask != null && !_serverTask.IsCompleted;
         public event Action<string>? OnLog;
 
@@ -317,7 +321,7 @@ namespace CodeMerger.Services
                 Log($"Starting indexing of {files.Count} files...");
 
                 // Clear previous call sites
-                _codeAnalyzer.CallSites.Clear();
+                _codeAnalyzer.Reset();
                 _callSites.Clear();
 
                 var fileAnalyses = new List<FileAnalysis>();
@@ -719,6 +723,14 @@ namespace CodeMerger.Services
 
             Log($"Tool call: {toolName}");
             SendActivity($"Tool: {toolName}");
+
+            // Periodic memory cleanup
+            _toolCallsSinceGC++;
+            if (_toolCallsSinceGC >= GC_INTERVAL)
+            {
+                _toolCallsSinceGC = 0;
+                GC.Collect(1, GCCollectionMode.Optimized, blocking: false);
+            }
 
             // Server control tools don't require workspace
             if (toolName == "codemerger_shutdown")

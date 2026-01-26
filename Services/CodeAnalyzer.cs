@@ -33,6 +33,14 @@ namespace CodeMerger.Services
         // Store call sites during analysis
         public List<CallSite> CallSites { get; private set; } = new();
 
+        /// <summary>
+        /// Clears all accumulated state. Call between full re-indexing operations.
+        /// </summary>
+        public void Reset()
+        {
+            CallSites.Clear();
+        }
+
         // Python analyzer for .py files
         private readonly PythonAnalyzer _pythonAnalyzer = new();
 
