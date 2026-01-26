@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Xml.Linq;
 using CodeMerger.Models;
 
 namespace CodeMerger.Services
@@ -25,6 +26,7 @@ namespace CodeMerger.Services
 
             analysis.TypeHierarchy = BuildTypeHierarchy(files);
             analysis.DependencyMap = BuildDependencyMap(files);
+            analysis.ProjectReferences = ExtractProjectReferences(files);
 
             return analysis;
         }
@@ -250,6 +252,50 @@ namespace CodeMerger.Services
 
             var result = string.Join(", ", members);
             return result.Length > 50 ? result.Substring(0, 47) + "..." : result;
+        }
+
+        private List<ProjectReference> ExtractProjectReferences(List<FileAnalysis> files)
+        {
+            var references = new List<ProjectReference>();
+
+            var csprojFiles = files.Where(f => f.Extension == ".csproj").ToList();
+
+            foreach (var csproj in csprojFiles)
+            {
+                try
+                {
+                    var doc = XDocument.Load(csproj.FilePath);
+                    var root = doc.Root;
+                    if (root == null) continue;
+
+                    var projectRefs = root.Descendants()
+                        .Where(e => e.Name.LocalName == "ProjectReference")
+                        .Select(e => e.Attribute("Include")?.Value)
+                        .Where(v => !string.IsNullOrEmpty(v));
+
+                    var csprojDir = Path.GetDirectoryName(csproj.FilePath) ?? "";
+
+                    foreach (var relativePath in projectRefs)
+                    {
+                        if (string.IsNullOrEmpty(relativePath)) continue;
+
+                        var resolvedPath = Path.GetFullPath(Path.Combine(csprojDir, relativePath));
+
+                        references.Add(new ProjectReference
+                        {
+                            SourceProject = csproj.FileName,
+                            RelativePath = relativePath,
+                            ResolvedPath = resolvedPath
+                        });
+                    }
+                }
+                catch
+                {
+                    // Skip files that can't be parsed
+                }
+            }
+
+            return references;
         }
     }
 }

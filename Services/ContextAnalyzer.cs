@@ -11,18 +11,46 @@ namespace CodeMerger.Services
     /// <summary>
     /// Provides intelligent context analysis for task-based code retrieval.
     /// Analyzes task descriptions and returns relevant files ranked by relevance.
+    /// Uses call graph and dependency analysis for smarter context selection.
     /// </summary>
     public class ContextAnalyzer
     {
         private readonly WorkspaceAnalysis _workspaceAnalysis;
+        private readonly List<CallSite> _callSites;
 
-        public ContextAnalyzer(WorkspaceAnalysis workspaceAnalysis)
+        // Cached call graph for quick lookups
+        private readonly Dictionary<string, HashSet<string>> _callers = new();
+        private readonly Dictionary<string, HashSet<string>> _callees = new();
+
+        public ContextAnalyzer(WorkspaceAnalysis workspaceAnalysis, List<CallSite>? callSites = null)
         {
             _workspaceAnalysis = workspaceAnalysis;
+            _callSites = callSites ?? new List<CallSite>();
+            BuildCallGraph();
+        }
+
+        private void BuildCallGraph()
+        {
+            foreach (var site in _callSites)
+            {
+                var callerKey = $"{site.CallerType}.{site.CallerMethod}";
+                var calleeKey = $"{site.CalledType}.{site.CalledMethod}";
+
+                // Track who calls whom
+                if (!_callers.ContainsKey(calleeKey))
+                    _callers[calleeKey] = new HashSet<string>();
+                _callers[calleeKey].Add(callerKey);
+
+                // Track whom each method calls
+                if (!_callees.ContainsKey(callerKey))
+                    _callees[callerKey] = new HashSet<string>();
+                _callees[callerKey].Add(calleeKey);
+            }
         }
 
         /// <summary>
         /// Analyzes a task description and returns relevant files with context.
+        /// Uses call graph analysis to include related files (callers/callees).
         /// </summary>
         public TaskContextResult GetContextForTask(string taskDescription, int maxFiles = 10, int maxTokens = 50000)
         {
@@ -58,24 +86,36 @@ namespace CodeMerger.Services
                 .OrderByDescending(f => f.Score)
                 .ToList();
 
-            // Apply token budget
+            // Apply token budget for initial selection (reserve some for call graph expansion)
+            int initialTokenBudget = (int)(maxTokens * 0.7); // 70% for direct matches
             int currentTokens = 0;
             var selectedFiles = new List<ScoredFile>();
+            int initialMaxFiles = Math.Max(3, maxFiles / 2); // At least 3, at most half
 
             foreach (var scoredFile in rankedFiles)
             {
-                if (selectedFiles.Count >= maxFiles)
+                if (selectedFiles.Count >= initialMaxFiles)
                     break;
 
-                if (currentTokens + scoredFile.File.EstimatedTokens > maxTokens && selectedFiles.Count > 0)
+                if (currentTokens + scoredFile.File.EstimatedTokens > initialTokenBudget && selectedFiles.Count > 0)
                     continue; // Skip large files if we already have some
 
                 selectedFiles.Add(scoredFile);
                 currentTokens += scoredFile.File.EstimatedTokens;
             }
 
+            // Expand with call graph related files (use remaining budget)
+            int remainingTokens = maxTokens - currentTokens;
+            int remainingFileSlots = maxFiles - selectedFiles.Count;
+            
+            if (remainingFileSlots > 0 && remainingTokens > 0)
+            {
+                selectedFiles = ExpandWithCallGraph(selectedFiles, remainingFileSlots, remainingTokens);
+            }
+
+            // Recalculate total tokens after expansion
+            result.TotalTokens = selectedFiles.Sum(f => f.File.EstimatedTokens);
             result.RelevantFiles = selectedFiles;
-            result.TotalTokens = currentTokens;
 
             // Generate suggestions based on task type
             result.Suggestions = GenerateSuggestions(taskDescription, selectedFiles);
@@ -256,6 +296,13 @@ namespace CodeMerger.Services
                         if (memberLower.Contains(keyword.ToLowerInvariant()))
                             score += 3;
                     }
+
+                    // Call graph scoring: methods that are called by many others are important
+                    var methodKey = $"{type.Name}.{member.Name}";
+                    if (_callers.TryGetValue(methodKey, out var callerSet))
+                    {
+                        score += Math.Min(callerSet.Count * 0.5, 5); // Up to +5 for heavily called methods
+                    }
                 }
             }
 
@@ -302,6 +349,104 @@ namespace CodeMerger.Services
             return score;
         }
 
+        /// <summary>
+        /// Expands file selection by including files containing callers/callees of methods in selected files.
+        /// This ensures related code paths are included for complete context.
+        /// </summary>
+        private List<ScoredFile> ExpandWithCallGraph(List<ScoredFile> selectedFiles, int maxAdditionalFiles, int remainingTokens)
+        {
+            if (_callSites.Count == 0)
+                return selectedFiles;
+
+            var selectedPaths = selectedFiles.Select(f => f.File.RelativePath).ToHashSet();
+            var additionalFiles = new List<ScoredFile>();
+
+            // Build type-to-file lookup
+            var typeToFile = new Dictionary<string, FileAnalysis>();
+            foreach (var file in _workspaceAnalysis.AllFiles)
+            {
+                foreach (var type in file.Types)
+                {
+                    typeToFile[type.Name] = file;
+                }
+            }
+
+            // For each selected file, find callers and callees
+            foreach (var scoredFile in selectedFiles)
+            {
+                foreach (var type in scoredFile.File.Types)
+                {
+                    foreach (var member in type.Members.Where(m => m.Kind == CodeMemberKind.Method))
+                    {
+                        var methodKey = $"{type.Name}.{member.Name}";
+
+                        // Add files containing callers of this method
+                        if (_callers.TryGetValue(methodKey, out var callerSet))
+                        {
+                            foreach (var callerKey in callerSet.Take(3)) // Limit to avoid explosion
+                            {
+                                var callerType = callerKey.Split('.').FirstOrDefault();
+                                if (callerType != null && typeToFile.TryGetValue(callerType, out var callerFile))
+                                {
+                                    if (!selectedPaths.Contains(callerFile.RelativePath) &&
+                                        !additionalFiles.Any(f => f.File.RelativePath == callerFile.RelativePath))
+                                    {
+                                        additionalFiles.Add(new ScoredFile
+                                        {
+                                            File = callerFile,
+                                            Score = scoredFile.Score * 0.6, // Lower score than original
+                                            MatchReasons = new List<string> { $"Calls {type.Name}.{member.Name}" }
+                                        });
+                                    }
+                                }
+                            }
+                        }
+
+                        // Add files containing callees of this method
+                        if (_callees.TryGetValue(methodKey, out var calleeSet))
+                        {
+                            foreach (var calleeKey in calleeSet.Take(3)) // Limit to avoid explosion
+                            {
+                                var calleeType = calleeKey.Split('.').FirstOrDefault();
+                                if (calleeType != null && typeToFile.TryGetValue(calleeType, out var calleeFile))
+                                {
+                                    if (!selectedPaths.Contains(calleeFile.RelativePath) &&
+                                        !additionalFiles.Any(f => f.File.RelativePath == calleeFile.RelativePath))
+                                    {
+                                        additionalFiles.Add(new ScoredFile
+                                        {
+                                            File = calleeFile,
+                                            Score = scoredFile.Score * 0.5, // Lower score than callers
+                                            MatchReasons = new List<string> { $"Called by {type.Name}.{member.Name}" }
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Sort additional files by score and add within budget
+            var sortedAdditional = additionalFiles
+                .OrderByDescending(f => f.Score)
+                .Take(maxAdditionalFiles);
+
+            int addedTokens = 0;
+            var result = new List<ScoredFile>(selectedFiles);
+
+            foreach (var file in sortedAdditional)
+            {
+                if (addedTokens + file.File.EstimatedTokens > remainingTokens)
+                    continue;
+
+                result.Add(file);
+                addedTokens += file.File.EstimatedTokens;
+            }
+
+            return result;
+        }
+
         private List<string> GetMatchReasons(FileAnalysis file, List<string> keywords, string taskDescription)
         {
             var reasons = new List<string>();
@@ -314,6 +459,17 @@ namespace CodeMerger.Services
                     if (type.Name.ToLowerInvariant().Contains(keyword.ToLowerInvariant()))
                     {
                         reasons.Add($"Type '{type.Name}' matches keyword '{keyword}'");
+                    }
+                }
+
+                // Add call graph information
+                foreach (var member in type.Members.Where(m => m.Kind == CodeMemberKind.Method))
+                {
+                    var methodKey = $"{type.Name}.{member.Name}";
+                    
+                    if (_callers.TryGetValue(methodKey, out var callerSet) && callerSet.Count > 2)
+                    {
+                        reasons.Add($"{type.Name}.{member.Name} called by {callerSet.Count} methods");
                     }
                 }
             }
@@ -471,6 +627,16 @@ namespace CodeMerger.Services
 
             sb.AppendLine("## Relevant Files (by relevance)");
             sb.AppendLine();
+            
+            // Count files from call graph expansion
+            int directMatches = RelevantFiles.Count(f => !f.MatchReasons.Any(r => r.StartsWith("Calls ") || r.StartsWith("Called by ")));
+            int callGraphExpanded = RelevantFiles.Count - directMatches;
+            if (callGraphExpanded > 0)
+            {
+                sb.AppendLine($"*{directMatches} direct matches + {callGraphExpanded} from call graph analysis*");
+                sb.AppendLine();
+            }
+
             sb.AppendLine("| # | File | Score | Tokens | Reasons |");
             sb.AppendLine("|---|------|-------|--------|---------|");
 

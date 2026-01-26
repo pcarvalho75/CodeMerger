@@ -27,6 +27,7 @@ namespace CodeMerger.Services
 
         /// <summary>
         /// Write content to a file (create or overwrite).
+        /// Supports ../ paths to write to sibling projects within the workspace.
         /// </summary>
         public WriteFileResult WriteFile(string relativePath, string content, bool createBackup = true)
         {
@@ -34,20 +35,71 @@ namespace CodeMerger.Services
 
             try
             {
-                // Security: Validate path doesn't escape workspace
+                // Security: Validate path has no dangerous characters
                 if (!IsPathSafe(relativePath))
                 {
                     result.Success = false;
-                    result.Error = "Invalid path: path traversal not allowed";
+                    result.Error = "Invalid path: contains invalid characters";
                     return result;
                 }
 
-                // Find the file or determine where to create it
-                var existingFile = _workspaceAnalysis.AllFiles
-                    .FirstOrDefault(f => f.RelativePath.Equals(relativePath, StringComparison.OrdinalIgnoreCase) ||
-                                        f.RelativePath.Replace('\\', '/').Equals(relativePath.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase));
-
                 string fullPath;
+                FileAnalysis? existingFile = null;
+
+                // Try to match path prefix to a known project root
+                string baseDir;
+                string effectivePath = relativePath;
+                
+                var matchedRoot = _inputDirectories.FirstOrDefault(dir =>
+                {
+                    var rootName = Path.GetFileName(dir.TrimEnd('\\', '/'));
+                    return relativePath.StartsWith(rootName + "/", StringComparison.OrdinalIgnoreCase) ||
+                           relativePath.StartsWith(rootName + "\\", StringComparison.OrdinalIgnoreCase);
+                });
+
+                if (matchedRoot != null)
+                {
+                    // Path starts with a root name like "Vortex/Engines/file.cs"
+                    // Use that root and strip the prefix
+                    baseDir = matchedRoot;
+                    var rootName = Path.GetFileName(matchedRoot.TrimEnd('\\', '/'));
+                    effectivePath = relativePath.Substring(rootName.Length + 1); // +1 for the separator
+                }
+                else
+                {
+                    // No root prefix - use first directory (original behavior)
+                    baseDir = _inputDirectories.FirstOrDefault() ?? Directory.GetCurrentDirectory();
+                }
+
+                fullPath = Path.GetFullPath(Path.Combine(baseDir, effectivePath.Replace('/', Path.DirectorySeparatorChar)));
+
+                // Security: Verify resolved path is within workspace
+                if (!IsPathWithinWorkspace(fullPath))
+                {
+                    result.Success = false;
+                    result.Error = $"Invalid path: resolved path escapes workspace. Valid roots: {string.Join(", ", _inputDirectories.Select(d => Path.GetFileName(d.TrimEnd('\\', '/'))))}";
+                    return result;
+                }
+
+                // Check if file exists - match by full path OR relative path
+                existingFile = _workspaceAnalysis.AllFiles.FirstOrDefault(f =>
+                    f.FilePath.Equals(fullPath, StringComparison.OrdinalIgnoreCase) ||
+                    f.RelativePath.Equals(relativePath, StringComparison.OrdinalIgnoreCase) ||
+                    f.RelativePath.Replace('\\', '/').Equals(relativePath.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase));
+
+                // SAFETY CHECK: If creating a NEW file with multiple roots and no explicit root prefix,
+                // require explicit project specification to avoid accidentally creating in wrong location
+                if (existingFile == null && matchedRoot == null && _inputDirectories.Count > 1)
+                {
+                    var rootNames = _inputDirectories.Select(d => Path.GetFileName(d.TrimEnd('\\', '/'))).ToList();
+                    result.Success = false;
+                    result.Error = $"Ambiguous target: This workspace has multiple project roots and the path '{relativePath}' doesn't specify which one.\n\n" +
+                                $"**Available roots:** {string.Join(", ", rootNames)}\n\n" +
+                                $"**Please prefix your path with the target project**, e.g.:\n" +
+                                string.Join("\n", rootNames.Take(3).Select(r => $"- `{r}/{relativePath}`"));
+                    return result;
+                }
+
                 if (existingFile != null)
                 {
                     fullPath = existingFile.FilePath;
@@ -63,22 +115,10 @@ namespace CodeMerger.Services
 
                     // Generate diff
                     var oldContent = File.ReadAllText(fullPath);
-                    result.Diff = GenerateDiff(oldContent, content, relativePath);
+                    result.Diff = GenerateDiff(oldContent, content, existingFile.RelativePath);
                 }
                 else
                 {
-                    // New file - use first input directory
-                    var baseDir = _inputDirectories.FirstOrDefault() ?? Directory.GetCurrentDirectory();
-                    fullPath = Path.GetFullPath(Path.Combine(baseDir, relativePath.Replace('/', Path.DirectorySeparatorChar)));
-                    
-                    // Security: Verify resolved path is still within workspace
-                    if (!IsPathWithinWorkspace(fullPath))
-                    {
-                        result.Success = false;
-                        result.Error = "Invalid path: resolved path escapes workspace directory";
-                        return result;
-                    }
-                    
                     result.IsNewFile = true;
 
                     // Ensure directory exists
@@ -105,7 +145,8 @@ namespace CodeMerger.Services
         }
 
         /// <summary>
-        /// Check if a relative path is safe (no traversal attempts).
+        /// Check if a relative path is safe (no dangerous characters).
+        /// Note: Path traversal (..) is allowed - security is enforced by IsPathWithinWorkspace().
         /// </summary>
         private bool IsPathSafe(string relativePath)
         {
@@ -115,15 +156,6 @@ namespace CodeMerger.Services
             // Reject absolute paths
             if (Path.IsPathRooted(relativePath))
                 return false;
-
-            // Reject paths with .. components
-            var normalized = relativePath.Replace('\\', '/');
-            var parts = normalized.Split('/');
-            foreach (var part in parts)
-            {
-                if (part == ".." || part == ".")
-                    return false;
-            }
 
             // Reject paths with null bytes or other dangerous characters
             if (relativePath.Contains('\0'))

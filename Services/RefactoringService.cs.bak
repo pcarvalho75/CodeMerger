@@ -27,6 +27,7 @@ namespace CodeMerger.Services
 
         /// <summary>
         /// Write content to a file (create or overwrite).
+        /// Supports ../ paths to write to sibling projects within the workspace.
         /// </summary>
         public WriteFileResult WriteFile(string relativePath, string content, bool createBackup = true)
         {
@@ -34,20 +35,58 @@ namespace CodeMerger.Services
 
             try
             {
-                // Security: Validate path doesn't escape workspace
+                // Security: Validate path has no dangerous characters
                 if (!IsPathSafe(relativePath))
                 {
                     result.Success = false;
-                    result.Error = "Invalid path: path traversal not allowed";
+                    result.Error = "Invalid path: contains invalid characters";
                     return result;
                 }
 
-                // Find the file or determine where to create it
-                var existingFile = _workspaceAnalysis.AllFiles
-                    .FirstOrDefault(f => f.RelativePath.Equals(relativePath, StringComparison.OrdinalIgnoreCase) ||
-                                        f.RelativePath.Replace('\\', '/').Equals(relativePath.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase));
-
                 string fullPath;
+                FileAnalysis? existingFile = null;
+
+                // Try to match path prefix to a known project root
+                string baseDir;
+                string effectivePath = relativePath;
+                
+                var matchedRoot = _inputDirectories.FirstOrDefault(dir =>
+                {
+                    var rootName = Path.GetFileName(dir.TrimEnd('\\', '/'));
+                    return relativePath.StartsWith(rootName + "/", StringComparison.OrdinalIgnoreCase) ||
+                           relativePath.StartsWith(rootName + "\\", StringComparison.OrdinalIgnoreCase);
+                });
+
+                if (matchedRoot != null)
+                {
+                    // Path starts with a root name like "Vortex/Engines/file.cs"
+                    // Use that root and strip the prefix
+                    baseDir = matchedRoot;
+                    var rootName = Path.GetFileName(matchedRoot.TrimEnd('\\', '/'));
+                    effectivePath = relativePath.Substring(rootName.Length + 1); // +1 for the separator
+                }
+                else
+                {
+                    // No root prefix - use first directory (original behavior)
+                    baseDir = _inputDirectories.FirstOrDefault() ?? Directory.GetCurrentDirectory();
+                }
+
+                fullPath = Path.GetFullPath(Path.Combine(baseDir, effectivePath.Replace('/', Path.DirectorySeparatorChar)));
+
+                // Security: Verify resolved path is within workspace
+                if (!IsPathWithinWorkspace(fullPath))
+                {
+                    result.Success = false;
+                    result.Error = $"Invalid path: resolved path escapes workspace. Valid roots: {string.Join(", ", _inputDirectories.Select(d => Path.GetFileName(d.TrimEnd('\\', '/'))))}";
+                    return result;
+                }
+
+                // Check if file exists - match by full path OR relative path
+                existingFile = _workspaceAnalysis.AllFiles.FirstOrDefault(f =>
+                    f.FilePath.Equals(fullPath, StringComparison.OrdinalIgnoreCase) ||
+                    f.RelativePath.Equals(relativePath, StringComparison.OrdinalIgnoreCase) ||
+                    f.RelativePath.Replace('\\', '/').Equals(relativePath.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase));
+
                 if (existingFile != null)
                 {
                     fullPath = existingFile.FilePath;
@@ -63,22 +102,10 @@ namespace CodeMerger.Services
 
                     // Generate diff
                     var oldContent = File.ReadAllText(fullPath);
-                    result.Diff = GenerateDiff(oldContent, content, relativePath);
+                    result.Diff = GenerateDiff(oldContent, content, existingFile.RelativePath);
                 }
                 else
                 {
-                    // New file - use first input directory
-                    var baseDir = _inputDirectories.FirstOrDefault() ?? Directory.GetCurrentDirectory();
-                    fullPath = Path.GetFullPath(Path.Combine(baseDir, relativePath.Replace('/', Path.DirectorySeparatorChar)));
-                    
-                    // Security: Verify resolved path is still within workspace
-                    if (!IsPathWithinWorkspace(fullPath))
-                    {
-                        result.Success = false;
-                        result.Error = "Invalid path: resolved path escapes workspace directory";
-                        return result;
-                    }
-                    
                     result.IsNewFile = true;
 
                     // Ensure directory exists
@@ -105,7 +132,8 @@ namespace CodeMerger.Services
         }
 
         /// <summary>
-        /// Check if a relative path is safe (no traversal attempts).
+        /// Check if a relative path is safe (no dangerous characters).
+        /// Note: Path traversal (..) is allowed - security is enforced by IsPathWithinWorkspace().
         /// </summary>
         private bool IsPathSafe(string relativePath)
         {
@@ -115,15 +143,6 @@ namespace CodeMerger.Services
             // Reject absolute paths
             if (Path.IsPathRooted(relativePath))
                 return false;
-
-            // Reject paths with .. components
-            var normalized = relativePath.Replace('\\', '/');
-            var parts = normalized.Split('/');
-            foreach (var part in parts)
-            {
-                if (part == ".." || part == ".")
-                    return false;
-            }
 
             // Reject paths with null bytes or other dangerous characters
             if (relativePath.Contains('\0'))
@@ -433,48 +452,184 @@ namespace CodeMerger.Services
         }
 
         /// <summary>
-        /// Generate a simple unified diff.
+        /// Generate a proper unified diff with context and hunks.
         /// </summary>
         private string GenerateDiff(string oldContent, string newContent, string fileName)
         {
-            var oldLines = oldContent.Split('\n');
-            var newLines = newContent.Split('\n');
+            var oldLines = oldContent.Split('\n').Select(l => l.TrimEnd('\r')).ToArray();
+            var newLines = newContent.Split('\n').Select(l => l.TrimEnd('\r')).ToArray();
 
             var sb = new StringBuilder();
             sb.AppendLine($"--- a/{fileName}");
             sb.AppendLine($"+++ b/{fileName}");
 
-            int oldIdx = 0, newIdx = 0;
+            // Find all differences using LCS-based approach
+            var hunks = ComputeHunks(oldLines, newLines, contextLines: 3);
 
-            while (oldIdx < oldLines.Length || newIdx < newLines.Length)
+            foreach (var hunk in hunks)
             {
-                if (oldIdx >= oldLines.Length)
+                sb.AppendLine($"@@ -{hunk.OldStart},{hunk.OldCount} +{hunk.NewStart},{hunk.NewCount} @@");
+                foreach (var line in hunk.Lines)
                 {
-                    sb.AppendLine($"+{newLines[newIdx]}");
-                    newIdx++;
-                }
-                else if (newIdx >= newLines.Length)
-                {
-                    sb.AppendLine($"-{oldLines[oldIdx]}");
-                    oldIdx++;
-                }
-                else if (oldLines[oldIdx].TrimEnd() == newLines[newIdx].TrimEnd())
-                {
-                    // Same line - skip in diff output for brevity
-                    oldIdx++;
-                    newIdx++;
-                }
-                else
-                {
-                    sb.AppendLine($"-{oldLines[oldIdx]}");
-                    sb.AppendLine($"+{newLines[newIdx]}");
-                    oldIdx++;
-                    newIdx++;
+                    sb.AppendLine(line);
                 }
             }
 
             return sb.ToString();
         }
+
+        private List<DiffHunk> ComputeHunks(string[] oldLines, string[] newLines, int contextLines)
+        {
+            var hunks = new List<DiffHunk>();
+            var changes = ComputeChanges(oldLines, newLines);
+
+            if (changes.Count == 0)
+                return hunks;
+
+            // Group changes into hunks with context
+            int i = 0;
+            while (i < changes.Count)
+            {
+                var hunk = new DiffHunk();
+                var hunkLines = new List<string>();
+
+                // Find the start of this change group
+                int changeStart = changes[i].OldIndex;
+                int hunkOldStart = Math.Max(0, changeStart - contextLines);
+                int hunkNewStart = Math.Max(0, changes[i].NewIndex - contextLines);
+
+                // Add leading context
+                for (int c = hunkOldStart; c < changeStart && c < oldLines.Length; c++)
+                {
+                    hunkLines.Add(" " + oldLines[c]);
+                }
+
+                // Process changes until we hit a gap larger than 2*contextLines
+                while (i < changes.Count)
+                {
+                    var change = changes[i];
+
+                    // Check if there's a gap to the next change
+                    if (i > 0)
+                    {
+                        var prevChange = changes[i - 1];
+                        int gap = change.OldIndex - (prevChange.OldIndex + (prevChange.Type == ChangeType.Delete ? 1 : 0));
+                        
+                        if (gap > contextLines * 2)
+                        {
+                            // Add trailing context for previous group and start new hunk
+                            break;
+                        }
+
+                        // Add context between changes
+                        int contextStart = prevChange.OldIndex + (prevChange.Type == ChangeType.Delete ? 1 : 0);
+                        for (int c = contextStart; c < change.OldIndex && c < oldLines.Length; c++)
+                        {
+                            hunkLines.Add(" " + oldLines[c]);
+                        }
+                    }
+
+                    // Add the change itself
+                    if (change.Type == ChangeType.Delete)
+                    {
+                        hunkLines.Add("-" + oldLines[change.OldIndex]);
+                    }
+                    else if (change.Type == ChangeType.Insert)
+                    {
+                        hunkLines.Add("+" + newLines[change.NewIndex]);
+                    }
+
+                    i++;
+                }
+
+                // Add trailing context
+                int lastChangeOldIdx = i > 0 ? changes[i - 1].OldIndex : 0;
+                int trailingStart = lastChangeOldIdx + 1;
+                int trailingEnd = Math.Min(oldLines.Length, trailingStart + contextLines);
+                for (int c = trailingStart; c < trailingEnd; c++)
+                {
+                    hunkLines.Add(" " + oldLines[c]);
+                }
+
+                // Calculate hunk header numbers
+                int oldCount = hunkLines.Count(l => l.StartsWith(" ") || l.StartsWith("-"));
+                int newCount = hunkLines.Count(l => l.StartsWith(" ") || l.StartsWith("+"));
+
+                hunk.OldStart = hunkOldStart + 1; // 1-indexed
+                hunk.OldCount = oldCount;
+                hunk.NewStart = hunkNewStart + 1;
+                hunk.NewCount = newCount;
+                hunk.Lines = hunkLines;
+
+                hunks.Add(hunk);
+            }
+
+            return hunks;
+        }
+
+        private List<Change> ComputeChanges(string[] oldLines, string[] newLines)
+        {
+            var changes = new List<Change>();
+
+            // Simple LCS-based diff
+            int[,] lcs = new int[oldLines.Length + 1, newLines.Length + 1];
+
+            for (int i = 1; i <= oldLines.Length; i++)
+            {
+                for (int j = 1; j <= newLines.Length; j++)
+                {
+                    if (oldLines[i - 1] == newLines[j - 1])
+                        lcs[i, j] = lcs[i - 1, j - 1] + 1;
+                    else
+                        lcs[i, j] = Math.Max(lcs[i - 1, j], lcs[i, j - 1]);
+                }
+            }
+
+            // Backtrack to find changes
+            int oi = oldLines.Length;
+            int ni = newLines.Length;
+            var tempChanges = new List<Change>();
+
+            while (oi > 0 || ni > 0)
+            {
+                if (oi > 0 && ni > 0 && oldLines[oi - 1] == newLines[ni - 1])
+                {
+                    oi--;
+                    ni--;
+                }
+                else if (ni > 0 && (oi == 0 || lcs[oi, ni - 1] >= lcs[oi - 1, ni]))
+                {
+                    tempChanges.Add(new Change { Type = ChangeType.Insert, OldIndex = oi, NewIndex = ni - 1 });
+                    ni--;
+                }
+                else if (oi > 0)
+                {
+                    tempChanges.Add(new Change { Type = ChangeType.Delete, OldIndex = oi - 1, NewIndex = ni });
+                    oi--;
+                }
+            }
+
+            tempChanges.Reverse();
+            return tempChanges;
+        }
+
+        private class DiffHunk
+        {
+            public int OldStart { get; set; }
+            public int OldCount { get; set; }
+            public int NewStart { get; set; }
+            public int NewCount { get; set; }
+            public List<string> Lines { get; set; } = new();
+        }
+
+        private class Change
+        {
+            public ChangeType Type { get; set; }
+            public int OldIndex { get; set; }
+            public int NewIndex { get; set; }
+        }
+
+        private enum ChangeType { Delete, Insert }
     }
 
     #region Result Models

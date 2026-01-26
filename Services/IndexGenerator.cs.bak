@@ -3,17 +3,18 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Xml.Linq;
 using CodeMerger.Models;
 
 namespace CodeMerger.Services
 {
     public class IndexGenerator
     {
-        public ProjectAnalysis BuildProjectAnalysis(string projectName, List<FileAnalysis> files, List<Chunk> chunks)
+        public WorkspaceAnalysis BuildWorkspaceAnalysis(string workspaceName, List<FileAnalysis> files, List<Chunk> chunks)
         {
-            var analysis = new ProjectAnalysis
+            var analysis = new WorkspaceAnalysis
             {
-                ProjectName = projectName,
+                WorkspaceName = workspaceName,
                 GeneratedDate = DateTime.Now.ToString("yyyy-MM-dd HH:mm"),
                 TotalFiles = files.Count,
                 TotalChunks = chunks.Count,
@@ -25,16 +26,17 @@ namespace CodeMerger.Services
 
             analysis.TypeHierarchy = BuildTypeHierarchy(files);
             analysis.DependencyMap = BuildDependencyMap(files);
+            analysis.ProjectReferences = ExtractProjectReferences(files);
 
             return analysis;
         }
 
-        public string GenerateMasterIndex(ProjectAnalysis analysis)
+        public string GenerateMasterIndex(WorkspaceAnalysis analysis)
         {
             var sb = new StringBuilder();
 
-            // Project Overview
-            sb.AppendLine($"=== PROJECT: {analysis.ProjectName} ===");
+            // Workspace Overview
+            sb.AppendLine($"=== WORKSPACE: {analysis.WorkspaceName} ===");
             sb.AppendLine($"Generated: {analysis.GeneratedDate}");
             sb.AppendLine($"Total Files: {analysis.TotalFiles}");
             sb.AppendLine($"Total Chunks: {analysis.TotalChunks}");

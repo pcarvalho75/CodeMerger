@@ -10,7 +10,7 @@ namespace CodeMerger.Services.Mcp
     ///
     /// EXPLORATION (start here):
     ///   get_project_overview → list_files → get_type / get_file
-    ///   get_context (AI-ranked files for a task)
+    ///   get_context (AI-ranked files for a task, with call-graph expansion)
     ///
     /// SEARCHING:
     ///   search_code - semantic (type/method names)
@@ -36,13 +36,18 @@ namespace CodeMerger.Services.Mcp
     ///   extract_method, generate_interface, generate_constructor, implement_interface
     ///
     /// VALIDATION:
-    ///   get_diagnostics - check for compile errors
+    ///   get_diagnostics - Roslyn analysis for compile errors
+    ///   build - full dotnet build with NuGet/XAML
     ///
     /// RECOVERY:
     ///   undo - restore from .bak
     ///
     /// SERVER:
     ///   refresh, shutdown, list_projects, switch_project
+    ///
+    /// MAINTENANCE:
+    ///   clean_backups - delete all .bak files (preview first, then confirm)
+    ///   find_duplicates - find duplicate code for refactoring opportunities
     ///
     /// SELF-IMPROVEMENT:
     ///   log_lesson - log observation when something could be improved
@@ -59,6 +64,7 @@ namespace CodeMerger.Services.Mcp
             tools.AddRange(GetRefactoringTools());
             tools.AddRange(GetSemanticTools());
             tools.AddRange(GetServerControlTools());
+            tools.AddRange(GetMaintenanceTools());
             tools.AddRange(GetLessonTools());
             tools.AddRange(GetNotesTools());
             tools.AddRange(GetGitTools());
@@ -72,8 +78,18 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_get_project_overview",
-                    description = "Get high-level project information including framework, structure, namespaces, total files, and entry points.\n\n" +
-                        "WHEN TO USE: Call this first when starting work on a project to understand its structure. Follow up with `list_files` filtered by namespace to explore specific areas.",
+                    description = "Get high-level project information including framework, structure, namespaces, total files, entry points, and project references.\n\n" +
+                        "WHEN TO USE: Call this first when starting work on a project to understand its structure.\n\n" +
+                        "SHOWS:\n" +
+                        "- Framework, file count, token count, type count\n" +
+                        "- Namespaces found (warns if multiple root namespaces)\n" +
+                        "- File breakdown by classification\n" +
+                        "- Key entry points (Program.cs, App.xaml, etc.)\n" +
+                        "- Project References with resolved paths (external vs in-workspace)\n\n" +
+                        "EXPLORATION PATHS:\n" +
+                        "- For general exploration: get_project_overview → list_files → get_type/get_file\n" +
+                        "- For task-based work: get_context (uses call-graph analysis to find relevant files)\n\n" +
+                        "Follow up with `list_files` filtered by namespace to explore specific areas.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -208,17 +224,26 @@ namespace CodeMerger.Services.Mcp
                 {
                     name = "codemerger_get_context",
                     description = "Intelligently analyze a task description and return relevant files ranked by relevance.\n\n" +
-                        "START HERE: For new tasks, describe what you want to do in natural language. Returns files most likely to be relevant, optimized for token budget.\n" +
-                        "MORE EFFICIENT: Than manually searching with `search_code` or `grep` when you don't know where to look.\n" +
-                        "EXAMPLES: 'add a new MCP tool', 'fix the file parsing logic', 'implement caching for the workspace'.",
+                        "START HERE: For new tasks, describe what you want to do in natural language.\n\n" +
+                        "SMART FEATURES:\n" +
+                        "- Keyword extraction from task description\n" +
+                        "- Type/method name matching\n" +
+                        "- Classification-aware scoring (Service, Model, View)\n" +
+                        "- **Call graph expansion**: Automatically includes files containing callers/callees of matched code\n" +
+                        "- Token budget optimization\n\n" +
+                        "WHEN TO USE:\n" +
+                        "- Starting a new task and don't know which files to look at\n" +
+                        "- Need complete context including related code paths\n" +
+                        "- More efficient than manual `search_code` + `grep` combinations\n\n" +
+                        "EXAMPLES: 'add a new MCP tool', 'fix the grid trading logic', 'implement caching for the workspace'.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
                         { "properties", new Dictionary<string, object>
                             {
                                 { "task", new Dictionary<string, string> { { "type", "string" }, { "description", "Natural language description of what you want to do (e.g., 'add validation to user input', 'implement new MCP tool')" } } },
-                                { "maxFiles", new Dictionary<string, object> { { "type", "integer" }, { "description", "Maximum files to return (default: 10)" }, { "default", 10 } } },
-                                { "maxTokens", new Dictionary<string, object> { { "type", "integer" }, { "description", "Maximum total tokens (default: 50000)" }, { "default", 50000 } } }
+                                { "maxFiles", new Dictionary<string, object> { { "type", "integer" }, { "description", "Maximum files to return (default: 10). Increase for complex tasks that touch many files." }, { "default", 10 } } },
+                                { "maxTokens", new Dictionary<string, object> { { "type", "integer" }, { "description", "Maximum total tokens (default: 50000). The tool reserves 30% of budget for call-graph expanded files." }, { "default", 50000 } } }
                             }
                         },
                         { "required", new[] { "task" } }
@@ -276,7 +301,8 @@ namespace CodeMerger.Services.Mcp
                     name = "codemerger_get_callers",
                     description = "Get all methods that call a specific method.\n\n" +
                         "WHEN TO USE: Before modifying a method's signature or behavior — see what code depends on it.\n" +
-                        "PART OF: Call graph analysis. Pair with `get_callees` for full picture.",
+                        "PART OF: Call graph analysis. Pair with `get_callees` for full picture.\n" +
+                        "NOTE: `get_context` uses this data automatically to include related files.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -294,7 +320,8 @@ namespace CodeMerger.Services.Mcp
                     name = "codemerger_get_callees",
                     description = "Get all methods that a specific method calls.\n\n" +
                         "WHEN TO USE: Understanding what a method depends on — useful for understanding complex methods.\n" +
-                        "PART OF: Call graph analysis. Pair with `get_callers` for full picture.",
+                        "PART OF: Call graph analysis. Pair with `get_callers` for full picture.\n" +
+                        "NOTE: `get_context` uses this data automatically to include related files.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -359,7 +386,8 @@ namespace CodeMerger.Services.Mcp
                                 { "path", new Dictionary<string, string> { { "type", "string" }, { "description", "Relative path to the file" } } },
                                 { "oldStr", new Dictionary<string, string> { { "type", "string" }, { "description", "String to find and replace (must be unique in file)" } } },
                                 { "newStr", new Dictionary<string, string> { { "type", "string" }, { "description", "Replacement string (empty to delete)" } } },
-                                { "createBackup", new Dictionary<string, object> { { "type", "boolean" }, { "description", "Create .bak backup before modifying (default: true)" }, { "default", true } } }
+                                { "createBackup", new Dictionary<string, object> { { "type", "boolean" }, { "description", "Create .bak backup before modifying (default: true)" }, { "default", true } } },
+                            { "normalizeIndent", new Dictionary<string, object> { { "type", "boolean" }, { "description", "Ignore leading whitespace differences when matching (default: false). Use when exact indentation match fails." }, { "default", false } } }
                             }
                         },
                         { "required", new[] { "path", "oldStr" } }
@@ -649,8 +677,12 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_list_projects",
-                    description = "List all available CodeMerger projects.\n\n" +
-                        "SHOWS: Project names and which one is currently active/loaded.\n" +
+                    description = "List all available CodeMerger projects and detect shared directories between them.\n\n" +
+                        "SHOWS:\n" +
+                        "- All workspaces with directory count and load status\n" +
+                        "- Shared Directories: folders used by multiple workspaces (changes affect all)\n\n" +
+                        "IMPORTANT: When working with multiple projects, check this first to identify shared code.\n" +
+                        "If a directory like 'CryptoTraderCore' appears in both Sequoia and SmartMoney, they reference the SAME physical folder.\n\n" +
                         "NEXT STEP: Use `switch_project` to change to a different project.",
                     inputSchema = new Dictionary<string, object>
                     {
@@ -674,6 +706,62 @@ namespace CodeMerger.Services.Mcp
                             }
                         },
                         { "required", new[] { "projectName" } }
+                    }
+                }
+            };
+        }
+
+        private static object[] GetMaintenanceTools()
+        {
+            return new object[]
+            {
+                new
+                {
+                    name = "codemerger_clean_backups",
+                    description = "Delete all .bak backup files from the workspace.\n\n" +
+                        "WHEN TO USE: Only when user explicitly asks to clean up backup files, free disk space, or mentions '.bak' files.\n" +
+                        "WORKFLOW:\n" +
+                        "1. First call WITHOUT confirm parameter to preview what would be deleted\n" +
+                        "2. Show user the count, size, and folder breakdown\n" +
+                        "3. Only call with `confirm: true` AFTER user approves\n\n" +
+                        "NEVER auto-confirm - always preview first and wait for user approval.",
+                    inputSchema = new Dictionary<string, object>
+                    {
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>
+                            {
+                                { "confirm", new Dictionary<string, object> { { "type", "boolean" }, { "description", "Must be true to actually delete. If false or omitted, only shows what would be deleted." } } }
+                            }
+                        },
+                        { "required", Array.Empty<string>() }
+                    }
+                },
+                new
+                {
+                    name = "codemerger_find_duplicates",
+                    description = "Find duplicate or highly similar code blocks across the codebase.\n\n" +
+                        "WHEN TO USE:\n" +
+                        "- User asks about code quality, technical debt, or refactoring opportunities\n" +
+                        "- User wants to reduce code duplication\n" +
+                        "- Before major refactoring to identify consolidation targets\n" +
+                        "- User asks 'what can be improved' or 'find repeated code'\n\n" +
+                        "RETURNS: Clusters ranked by impact (most duplicated first), with:\n" +
+                        "- Similarity percentage\n" +
+                        "- File locations and line numbers\n" +
+                        "- Code snippet preview\n" +
+                        "- Potential lines saved if refactored\n\n" +
+                        "FOLLOW-UP: Use `extract_method` to refactor the highest-impact duplicates.",
+                    inputSchema = new Dictionary<string, object>
+                    {
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>
+                            {
+                                { "minLines", new Dictionary<string, object> { { "type", "integer" }, { "description", "Minimum lines for a code block to be considered (default: 5)" }, { "default", 5 } } },
+                                { "minSimilarity", new Dictionary<string, object> { { "type", "integer" }, { "description", "Minimum similarity percentage 0-100 (default: 80). Use 90+ for near-exact matches, 70 for loose similarity." }, { "default", 80 } } },
+                                { "maxResults", new Dictionary<string, object> { { "type", "integer" }, { "description", "Maximum duplicate clusters to return (default: 20)" }, { "default", 20 } } }
+                            }
+                        },
+                        { "required", Array.Empty<string>() }
                     }
                 }
             };

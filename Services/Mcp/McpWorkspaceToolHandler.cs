@@ -90,6 +90,25 @@ namespace CodeMerger.Services.Mcp
                 return "# Available Workspaces\n\nNo workspaces found. Please create a workspace in the CodeMerger GUI first.";
             }
 
+            // Build map of directory -> workspaces that use it
+            var directoryToWorkspaces = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var workspace in workspaces)
+            {
+                if (workspace.InputDirectories == null) continue;
+                foreach (var dir in workspace.InputDirectories)
+                {
+                    var normalizedDir = Path.GetFullPath(dir);
+                    if (!directoryToWorkspaces.ContainsKey(normalizedDir))
+                        directoryToWorkspaces[normalizedDir] = new List<string>();
+                    directoryToWorkspaces[normalizedDir].Add(workspace.Name);
+                }
+            }
+
+            // Find shared directories (used by more than one workspace)
+            var sharedDirs = directoryToWorkspaces
+                .Where(kvp => kvp.Value.Count > 1)
+                .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+
             var sb = new StringBuilder();
             sb.AppendLine("# Available Workspaces");
             sb.AppendLine();
@@ -104,6 +123,24 @@ namespace CodeMerger.Services.Mcp
                 var status = workspace.Name == _workspaceName ? "✓ Loaded" :
                              workspace.Name == activeWorkspace ? "Active" : "";
                 sb.AppendLine($"| {workspace.Name} | {dirCount} | {status} |");
+            }
+
+            // Show shared directories section if any exist
+            if (sharedDirs.Count > 0)
+            {
+                sb.AppendLine();
+                sb.AppendLine("## Shared Directories");
+                sb.AppendLine();
+                sb.AppendLine("*These directories are used by multiple workspaces - changes affect all listed workspaces.*");
+                sb.AppendLine();
+
+                foreach (var kvp in sharedDirs.OrderBy(k => k.Key))
+                {
+                    var dirName = Path.GetFileName(kvp.Key.TrimEnd('\\', '/'));
+                    var workspaceList = string.Join(", ", kvp.Value.OrderBy(w => w));
+                    sb.AppendLine($"- **{dirName}** → {workspaceList}");
+                    sb.AppendLine($"  - `{kvp.Key}`");
+                }
             }
 
             sb.AppendLine();
@@ -124,6 +161,51 @@ namespace CodeMerger.Services.Mcp
             if (string.IsNullOrWhiteSpace(workspaceName))
             {
                 return "Error: Workspace name cannot be empty.";
+            }
+
+            // Check for merged workspace request (comma-separated names)
+            if (workspaceName.Contains(','))
+            {
+                var names = workspaceName
+                    .Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Select(n => n.Trim())
+                    .Where(n => !string.IsNullOrEmpty(n))
+                    .ToArray();
+
+                if (names.Length > 1)
+                {
+                    // Validate each workspace exists
+                    var missing = new List<string>();
+                    foreach (var name in names)
+                    {
+                        if (_workspaceService.LoadWorkspace(name) == null)
+                            missing.Add(name);
+                    }
+
+                    if (missing.Count > 0)
+                    {
+                        var available = _workspaceService.LoadAllWorkspaces();
+                        return $"Error: Workspace(s) not found: {string.Join(", ", missing)}\n\nAvailable workspaces:\n" +
+                               string.Join("\n", available.Select(w => $"- {w.Name}"));
+                    }
+
+                    _log($"Merging workspaces: {string.Join(", ", names)}");
+                    _sendActivity($"Merging: {string.Join(", ", names)}");
+
+                    var mergeSuccess = _requestSwitchWorkspace(workspaceName);
+
+                    if (mergeSuccess)
+                    {
+                        _workspaceName = $"Merged: {string.Join(", ", names)}";
+                        return $"# Workspaces Merged\n\n" +
+                               $"Successfully merged **{names.Length}** workspaces: {string.Join(", ", names)}.\n\n" +
+                               $"Shared directories are deduplicated. Each file tracks its source workspace.";
+                    }
+                    else
+                    {
+                        return $"# Merge Failed\n\nFailed to merge workspaces. Check server logs for details.";
+                    }
+                }
             }
 
             var workspace = _workspaceService.LoadWorkspace(workspaceName);

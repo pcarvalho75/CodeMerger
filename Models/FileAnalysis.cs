@@ -10,6 +10,11 @@ namespace CodeMerger.Models
         /// The root input directory this file belongs to. Used to disambiguate files when multiple directories are indexed.
         /// </summary>
         public string RootDirectory { get; set; } = string.Empty;
+        
+        /// <summary>
+        /// The workspace name this file was indexed from. Used in merged workspace mode to track file origins.
+        /// </summary>
+        public string SourceWorkspace { get; set; } = string.Empty;
         public string FileName { get; set; } = string.Empty;
         public string Extension { get; set; } = string.Empty;
         public string Language { get; set; } = string.Empty;

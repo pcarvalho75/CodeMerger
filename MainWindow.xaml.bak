@@ -183,9 +183,9 @@
             </Setter>
         </Style>
 
-        <!-- ComboBoxItem Style -->
+        <!-- ComboBoxItem Style - uses solid dark background to prevent white bleed-through in dropdowns -->
         <Style TargetType="ComboBoxItem">
-            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Background" Value="{StaticResource BackgroundCard}"/>
             <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
             <Setter Property="Padding" Value="10,8"/>
             <Setter Property="Template">
@@ -256,9 +256,9 @@
                           SelectionChanged="ProjectComboBox_SelectionChanged" Style="{StaticResource ModernComboBox}"/>
                 
                 <StackPanel Grid.Column="3" Orientation="Horizontal" Margin="12,0,0,0">
-                    <Button Content="＋ New" Click="NewProject_Click" Style="{StaticResource ModernButton}" Margin="0,0,6,0"/>
-                    <Button Content="✎ Rename" Click="RenameProject_Click" Style="{StaticResource ModernButton}" Margin="0,0,6,0"/>
-                    <Button Content="🗑 Delete" Click="DeleteProject_Click" Style="{StaticResource ModernButton}"/>
+                    <Button Content="＋ New" Click="NewWorkspace_Click" Style="{StaticResource ModernButton}" Margin="0,0,6,0"/>
+                    <Button Content="✎ Rename" Click="RenameWorkspace_Click" Style="{StaticResource ModernButton}" Margin="0,0,6,0"/>
+                    <Button Content="🗑 Delete" Click="DeleteWorkspace_Click" Style="{StaticResource ModernButton}"/>
                 </StackPanel>
 
                 <!-- Connection Status -->
@@ -372,7 +372,7 @@
                                 <RowDefinition Height="Auto"/>
                             </Grid.RowDefinitions>
                             <TextBlock Text="Extensions" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource TextSecondary}"/>
-                            <TextBox x:Name="extensionsTextBox" Grid.Row="1" Text=".cs, .xaml, .py" Margin="0,6,0,12" 
+                            <TextBox x:Name="extensionsTextBox" Grid.Row="1" Text=".cs, .xaml, .py, .csproj, .sln, " Margin="0,6,0,12" 
                                      TextChanged="Filters_Changed" Style="{StaticResource ModernTextBox}"/>
                             <TextBlock Grid.Row="2" Text="Ignored Directories" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource TextSecondary}"/>
                             <TextBox x:Name="ignoredDirsTextBox" Grid.Row="3" Text="bin, obj, .vs, Properties" Margin="0,6,0,0" 

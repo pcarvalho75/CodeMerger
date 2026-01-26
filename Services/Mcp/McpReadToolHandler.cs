@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -14,13 +15,29 @@ namespace CodeMerger.Services.Mcp
     {
         private readonly WorkspaceAnalysis _workspaceAnalysis;
         private readonly ContextAnalyzer _contextAnalyzer;
+        private readonly FilePathResolver _pathResolver;
         private readonly Action<string> _sendActivity;
 
-        public McpReadToolHandler(WorkspaceAnalysis workspaceAnalysis, Action<string> sendActivity)
+        public McpReadToolHandler(WorkspaceAnalysis workspaceAnalysis, List<CallSite> callSites, List<string> inputDirectories, Action<string> sendActivity)
         {
             _workspaceAnalysis = workspaceAnalysis;
-            _contextAnalyzer = new ContextAnalyzer(workspaceAnalysis);
+            _contextAnalyzer = new ContextAnalyzer(workspaceAnalysis, callSites);
+            _pathResolver = new FilePathResolver(workspaceAnalysis, inputDirectories);
             _sendActivity = sendActivity;
+        }
+
+        /// <summary>
+        /// Returns true if any files have SourceWorkspace set (merged mode).
+        /// </summary>
+        private bool IsMergedMode => _workspaceAnalysis.AllFiles.Any(f => !string.IsNullOrEmpty(f.SourceWorkspace));
+
+        /// <summary>
+        /// Formats the workspace prefix for display, e.g. "[SmartMoney] "
+        /// Returns empty string if no source workspace.
+        /// </summary>
+        private static string FormatWorkspacePrefix(FileAnalysis file)
+        {
+            return string.IsNullOrEmpty(file.SourceWorkspace) ? "" : $"[{file.SourceWorkspace}] ";
         }
 
         public string GetWorkspaceOverview()
@@ -86,6 +103,31 @@ namespace CodeMerger.Services.Mcp
                 sb.AppendLine($"- {file.RelativePath}{ns}");
             }
 
+            // Project References section
+            if (_workspaceAnalysis.ProjectReferences.Count > 0)
+            {
+                sb.AppendLine();
+                sb.AppendLine("## Project References");
+
+                // Group by resolved path to show unique external projects
+                var groupedRefs = _workspaceAnalysis.ProjectReferences
+                    .GroupBy(r => r.ResolvedPath)
+                    .OrderBy(g => g.First().Name);
+
+                foreach (var group in groupedRefs)
+                {
+                    var first = group.First();
+                    var referencedBy = string.Join(", ", group.Select(r => r.SourceProject).Distinct());
+                    var isExternal = !_workspaceAnalysis.AllFiles.Any(f => 
+                        f.FilePath.Equals(first.ResolvedPath, StringComparison.OrdinalIgnoreCase));
+                    
+                    var location = isExternal ? "external" : "in workspace";
+                    sb.AppendLine($"- **{first.Name}** ({location})");
+                    sb.AppendLine($"  - Path: `{first.ResolvedPath}`");
+                    sb.AppendLine($"  - Referenced by: {referencedBy}");
+                }
+            }
+
             return sb.ToString();
         }
 
@@ -131,9 +173,25 @@ namespace CodeMerger.Services.Mcp
                 .ToList();
             var hasMultipleRoots = distinctRoots.Count > 1;
 
+            // Check if we're in merged mode
+            var isMerged = IsMergedMode;
+
             var sb = new StringBuilder();
 
-            if (hasMultipleRoots)
+            if (isMerged)
+            {
+                // Merged mode: show workspace column
+                sb.AppendLine("| Workspace | File | Namespace | Classification | Tokens |");
+                sb.AppendLine("|-----------|------|-----------|----------------|--------|");
+
+                foreach (var file in fileList.Take(limit))
+                {
+                    var ns = !string.IsNullOrEmpty(file.Namespace) ? file.Namespace : "-";
+                    var ws = !string.IsNullOrEmpty(file.SourceWorkspace) ? file.SourceWorkspace : "-";
+                    sb.AppendLine($"| {ws} | {file.RelativePath} | {ns} | {file.Classification} | {file.EstimatedTokens:N0} |");
+                }
+            }
+            else if (hasMultipleRoots)
             {
                 sb.AppendLine("| File | Root | Namespace | Classification | Tokens |");
                 sb.AppendLine("|------|------|-----------|----------------|--------|");
@@ -174,17 +232,13 @@ namespace CodeMerger.Services.Mcp
                 return "Error: 'path' parameter is required.";
             }
 
-            var path = pathEl.GetString();
+            var path = pathEl.GetString() ?? "";
             _sendActivity($"Reading: {path}");
 
-            var file = _workspaceAnalysis.AllFiles.FirstOrDefault(f =>
-                f.RelativePath.Equals(path, StringComparison.OrdinalIgnoreCase) ||
-                f.FileName.Equals(path, StringComparison.OrdinalIgnoreCase));
-
+            var (file, error) = _pathResolver.FindFile(path);
             if (file == null)
             {
-                return $"File not found: {path}\n\nAvailable files:\n" +
-                       string.Join("\n", _workspaceAnalysis.AllFiles.Take(10).Select(f => $"- {f.RelativePath}"));
+                return error!;
             }
 
             try
@@ -195,6 +249,8 @@ namespace CodeMerger.Services.Mcp
                 sb.AppendLine();
                 sb.AppendLine($"**Classification:** {file.Classification}");
                 sb.AppendLine($"**Tokens:** {file.EstimatedTokens:N0}");
+                if (!string.IsNullOrEmpty(file.SourceWorkspace))
+                    sb.AppendLine($"**Source Workspace:** {file.SourceWorkspace}");
                 if (!string.IsNullOrEmpty(file.Namespace))
                     sb.AppendLine($"**Namespace:** {file.Namespace}");
                 sb.AppendLine();
@@ -261,8 +317,9 @@ namespace CodeMerger.Services.Mcp
                     sb.AppendLine("## Types");
                     foreach (var match in matchingTypes)
                     {
+                        var ws = FormatWorkspacePrefix(match.File);
                         var ns = !string.IsNullOrEmpty(match.File.Namespace) ? $" [{match.File.Namespace}]" : "";
-                        sb.AppendLine($"- **{match.Type.Name}** ({match.Type.Kind}) in `{match.File.RelativePath}`{ns}");
+                        sb.AppendLine($"- {ws}**{match.Type.Name}** ({match.Type.Kind}) in `{match.File.RelativePath}`{ns}");
                     }
                     sb.AppendLine();
                 }
@@ -280,9 +337,10 @@ namespace CodeMerger.Services.Mcp
                     sb.AppendLine("## Methods/Members");
                     foreach (var match in matchingMethods)
                     {
+                        var ws = FormatWorkspacePrefix(match.File);
                         var sig = !string.IsNullOrEmpty(match.Member.Signature) ? match.Member.Signature : match.Member.Name;
                         var ns = !string.IsNullOrEmpty(match.File.Namespace) ? $" [{match.File.Namespace}]" : "";
-                        sb.AppendLine($"- **{match.Type.Name}.{sig}** in `{match.File.RelativePath}`{ns}");
+                        sb.AppendLine($"- {ws}**{match.Type.Name}.{sig}** in `{match.File.RelativePath}`{ns}");
                     }
                     sb.AppendLine();
                 }
@@ -300,8 +358,9 @@ namespace CodeMerger.Services.Mcp
                     sb.AppendLine("## Files");
                     foreach (var file in matchingFiles)
                     {
+                        var ws = FormatWorkspacePrefix(file);
                         var ns = !string.IsNullOrEmpty(file.Namespace) ? $" [{file.Namespace}]" : "";
-                        sb.AppendLine($"- `{file.RelativePath}` ({file.Classification}){ns}");
+                        sb.AppendLine($"- {ws}`{file.RelativePath}` ({file.Classification}){ns}");
                     }
                 }
             }
@@ -339,6 +398,8 @@ namespace CodeMerger.Services.Mcp
             sb.AppendLine();
             sb.AppendLine($"**Kind:** {match.Type.Kind}");
             sb.AppendLine($"**File:** {match.File.RelativePath}");
+            if (!string.IsNullOrEmpty(match.File.SourceWorkspace))
+                sb.AppendLine($"**Source Workspace:** {match.File.SourceWorkspace}");
             if (!string.IsNullOrEmpty(match.File.Namespace))
                 sb.AppendLine($"**Namespace:** {match.File.Namespace}");
 
@@ -498,14 +559,10 @@ namespace CodeMerger.Services.Mcp
 
             _sendActivity($"GetLines: {path} [{startLine}-{endLine}]");
 
-            var file = _workspaceAnalysis.AllFiles.FirstOrDefault(f =>
-                f.RelativePath.Equals(path, StringComparison.OrdinalIgnoreCase) ||
-                f.FileName.Equals(path, StringComparison.OrdinalIgnoreCase));
-
+            var (file, error) = _pathResolver.FindFile(path);
             if (file == null)
             {
-                return $"Error: File not found: {path}\n\nAvailable files:\n" +
-                       string.Join("\n", _workspaceAnalysis.AllFiles.Take(10).Select(f => $"- {f.RelativePath}"));
+                return $"Error: {error}";
             }
 
             try

@@ -2,6 +2,14 @@ using System.Collections.Generic;
 
 namespace CodeMerger.Models
 {
+    public class ProjectReference
+    {
+        public string SourceProject { get; set; } = string.Empty;
+        public string RelativePath { get; set; } = string.Empty;
+        public string ResolvedPath { get; set; } = string.Empty;
+        public string Name => System.IO.Path.GetFileNameWithoutExtension(RelativePath);
+    }
+
     public class Chunk
     {
         public int ChunkNumber { get; set; }
@@ -12,9 +20,9 @@ namespace CodeMerger.Models
         public List<string> CrossReferences { get; set; } = new List<string>();
     }
 
-    public class ProjectAnalysis
+    public class WorkspaceAnalysis
     {
-        public string ProjectName { get; set; } = string.Empty;
+        public string WorkspaceName { get; set; } = string.Empty;
         public string GeneratedDate { get; set; } = string.Empty;
         public int TotalFiles { get; set; }
         public int TotalChunks { get; set; }

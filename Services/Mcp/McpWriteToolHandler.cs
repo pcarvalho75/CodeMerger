@@ -16,6 +16,7 @@ namespace CodeMerger.Services.Mcp
     {
         private readonly WorkspaceAnalysis _workspaceAnalysis;
         private readonly RefactoringService _refactoringService;
+        private readonly FilePathResolver _pathResolver;
         private readonly List<string> _inputDirectories;
         private readonly Action<string> _updateFileIndex;
         private readonly Action<string> _sendActivity;
@@ -31,48 +32,11 @@ namespace CodeMerger.Services.Mcp
         {
             _workspaceAnalysis = workspaceAnalysis;
             _refactoringService = refactoringService;
+            _pathResolver = new FilePathResolver(workspaceAnalysis, inputDirectories);
             _inputDirectories = inputDirectories;
             _updateFileIndex = updateFileIndex;
             _sendActivity = sendActivity;
             _log = log;
-        }
-
-        /// <summary>
-        /// Finds a file by path with disambiguation when multiple files match.
-        /// Returns (file, null) on success, (null, errorMessage) on failure.
-        /// </summary>
-        private (FileAnalysis? file, string? error) FindFile(string path)
-        {
-            var normalizedPath = path.Replace('\\', '/');
-
-            var matches = _workspaceAnalysis.AllFiles.Where(f =>
-                f.RelativePath.Equals(path, StringComparison.OrdinalIgnoreCase) ||
-                f.RelativePath.Replace('\\', '/').Equals(normalizedPath, StringComparison.OrdinalIgnoreCase) ||
-                f.FileName.Equals(path, StringComparison.OrdinalIgnoreCase)).ToList();
-
-            if (matches.Count == 0)
-            {
-                return (null, $"Error: File not found: {path}");
-            }
-
-            if (matches.Count > 1)
-            {
-                var sb = new StringBuilder();
-                sb.AppendLine($"Error: Ambiguous path '{path}' matches {matches.Count} files:");
-                sb.AppendLine();
-                foreach (var m in matches)
-                {
-                    var rootName = !string.IsNullOrEmpty(m.RootDirectory)
-                        ? Path.GetFileName(m.RootDirectory.TrimEnd('\\', '/'))
-                        : "unknown";
-                    sb.AppendLine($"- `{m.RelativePath}` in root **{rootName}** (`{m.RootDirectory}`)");
-                }
-                sb.AppendLine();
-                sb.AppendLine("Please use the full relative path to disambiguate.");
-                return (null, sb.ToString());
-            }
-
-            return (matches[0], null);
         }
 
         public string StrReplace(JsonElement arguments)
@@ -91,9 +55,13 @@ namespace CodeMerger.Services.Mcp
             if (arguments.TryGetProperty("createBackup", out var backupEl))
                 createBackup = backupEl.GetBoolean();
 
+            var normalizeIndent = false;
+            if (arguments.TryGetProperty("normalizeIndent", out var normalizeEl))
+                normalizeIndent = normalizeEl.GetBoolean();
+
             _sendActivity($"StrReplace: {path}");
 
-            var (file, findError) = FindFile(path);
+            var (file, findError) = _pathResolver.FindFile(path);
             if (file == null)
             {
                 return findError!;
@@ -124,29 +92,52 @@ namespace CodeMerger.Services.Mcp
                 if (fileLineEnding != "\n")
                     replaceStr = replaceStr.Replace("\n", fileLineEnding);
 
-                // Find exact match
-                int index = content.IndexOf(searchStr, StringComparison.Ordinal);
+                int index;
+                string matchedOriginal = "";
+
+                if (normalizeIndent)
+                {
+                    // Find match with normalized indentation
+                    var result = FindWithNormalizedIndent(content, searchStr, fileLineEnding);
+                    index = result.index;
+                    matchedOriginal = result.matchedText;
+
+                    // Adapt replacement indentation to match original
+                    if (index != -1 && !string.IsNullOrEmpty(matchedOriginal))
+                    {
+                        replaceStr = AdaptIndentation(replaceStr, matchedOriginal, fileLineEnding);
+                    }
+                }
+                else
+                {
+                    // Find exact match
+                    index = content.IndexOf(searchStr, StringComparison.Ordinal);
+                    if (index != -1)
+                        matchedOriginal = searchStr;
+                }
 
                 if (index == -1)
                 {
                     // Not found - provide diagnostics
-                    return BuildNotFoundError(content, oldStr, file.RelativePath);
+                    return BuildNotFoundError(content, oldStr, file.RelativePath, normalizeIndent);
                 }
 
                 // Check for multiple matches
-                int secondIndex = content.IndexOf(searchStr, index + 1, StringComparison.Ordinal);
+                int matchLength = matchedOriginal.Length;
+                int secondIndex;
+                if (normalizeIndent)
+                {
+                    var secondResult = FindWithNormalizedIndent(content, searchStr, fileLineEnding, index + matchLength);
+                    secondIndex = secondResult.index;
+                }
+                else
+                {
+                    secondIndex = content.IndexOf(searchStr, index + 1, StringComparison.Ordinal);
+                }
+
                 if (secondIndex != -1)
                 {
-                    // Count all occurrences
-                    int count = 2;
-                    int searchPos = secondIndex + 1;
-                    while ((searchPos = content.IndexOf(searchStr, searchPos, StringComparison.Ordinal)) != -1)
-                    {
-                        count++;
-                        searchPos++;
-                    }
-
-                    return $"Error: String appears {count} times in file. It must be unique (appear exactly once).\n\n" +
+                    return $"Error: String appears multiple times in file. It must be unique (appear exactly once).\n\n" +
                            $"💡 **Tip:** Include more surrounding context to make the match unique.";
                 }
 
@@ -157,12 +148,12 @@ namespace CodeMerger.Services.Mcp
                 }
 
                 // Perform the replacement
-                var newContent = content.Substring(0, index) + replaceStr + content.Substring(index + searchStr.Length);
+                var newContent = content.Substring(0, index) + replaceStr + content.Substring(index + matchLength);
 
                 File.WriteAllText(file.FilePath, newContent);
 
                 var action = string.IsNullOrEmpty(newStr) ? "deleted" : "replaced";
-                _log($"StrReplace: {path} - {action}");
+                _log($"StrReplace: {path} - {action}{(normalizeIndent ? " (indent-normalized)" : "")}");
 
                 _updateFileIndex(file.FilePath);
 
@@ -182,7 +173,169 @@ namespace CodeMerger.Services.Mcp
             }
         }
 
-        private string BuildNotFoundError(string content, string searchStr, string filePath)
+        /// <summary>
+        /// Find a match with normalized indentation (ignores leading whitespace differences).
+        /// Returns the index in the original content and the actual matched text.
+        /// </summary>
+        private (int index, string matchedText) FindWithNormalizedIndent(string content, string searchStr, string lineEnding, int startIndex = 0)
+        {
+            var searchLines = searchStr.Split(new[] { lineEnding }, StringSplitOptions.None);
+            var contentLines = content.Split(new[] { lineEnding }, StringSplitOptions.None);
+
+            // Normalize search lines (trim leading whitespace for comparison)
+            var normalizedSearch = searchLines.Select(l => l.TrimStart()).ToArray();
+
+            // Find first non-empty search line for initial matching
+            int firstNonEmptyIdx = Array.FindIndex(normalizedSearch, l => !string.IsNullOrWhiteSpace(l));
+            if (firstNonEmptyIdx == -1)
+                return (-1, "");
+
+            string firstSearchLine = normalizedSearch[firstNonEmptyIdx];
+
+            // Calculate starting line index from character position
+            int startLineIdx = 0;
+            if (startIndex > 0)
+            {
+                int charCount = 0;
+                for (int i = 0; i < contentLines.Length; i++)
+                {
+                    charCount += contentLines[i].Length + lineEnding.Length;
+                    if (charCount > startIndex)
+                    {
+                        startLineIdx = i;
+                        break;
+                    }
+                }
+            }
+
+            // Search through content lines
+            for (int i = startLineIdx; i <= contentLines.Length - searchLines.Length; i++)
+            {
+                // Check if first non-empty line matches
+                if (!contentLines[i + firstNonEmptyIdx].TrimStart().Equals(firstSearchLine, StringComparison.Ordinal))
+                    continue;
+
+                // Check all lines match (with normalized whitespace)
+                bool allMatch = true;
+                for (int j = 0; j < searchLines.Length; j++)
+                {
+                    var contentTrimmed = contentLines[i + j].TrimStart();
+                    var searchTrimmed = normalizedSearch[j];
+
+                    if (!contentTrimmed.Equals(searchTrimmed, StringComparison.Ordinal))
+                    {
+                        allMatch = false;
+                        break;
+                    }
+                }
+
+                if (allMatch)
+                {
+                    // Calculate character position of match start
+                    int charPos = 0;
+                    for (int k = 0; k < i; k++)
+                        charPos += contentLines[k].Length + lineEnding.Length;
+
+                    // Build the matched text from original content
+                    var matchedLines = contentLines.Skip(i).Take(searchLines.Length);
+                    var matchedText = string.Join(lineEnding, matchedLines);
+
+                    return (charPos, matchedText);
+                }
+            }
+
+            return (-1, "");
+        }
+
+        /// <summary>
+        /// Adapt the replacement string's indentation to match the original matched text.
+        /// </summary>
+        private string AdaptIndentation(string replacement, string originalMatch, string lineEnding)
+        {
+            var replaceLines = replacement.Split(new[] { lineEnding }, StringSplitOptions.None);
+            var originalLines = originalMatch.Split(new[] { lineEnding }, StringSplitOptions.None);
+
+            if (replaceLines.Length == 0 || originalLines.Length == 0)
+                return replacement;
+
+            // Detect indentation style from original (first non-empty line)
+            string baseIndent = "";
+            foreach (var line in originalLines)
+            {
+                if (!string.IsNullOrWhiteSpace(line))
+                {
+                    int contentStart = 0;
+                    while (contentStart < line.Length && char.IsWhiteSpace(line[contentStart]))
+                        contentStart++;
+                    baseIndent = line.Substring(0, contentStart);
+                    break;
+                }
+            }
+
+            // Detect the indent unit from original (difference between indentation levels)
+            string indentUnit = "    "; // default to 4 spaces
+            string? prevIndent = null;
+            foreach (var line in originalLines)
+            {
+                if (string.IsNullOrWhiteSpace(line)) continue;
+                
+                int contentStart = 0;
+                while (contentStart < line.Length && char.IsWhiteSpace(line[contentStart]))
+                    contentStart++;
+                var currentIndent = line.Substring(0, contentStart);
+                
+                if (prevIndent != null && currentIndent.Length > prevIndent.Length)
+                {
+                    indentUnit = currentIndent.Substring(prevIndent.Length);
+                    break;
+                }
+                prevIndent = currentIndent;
+            }
+
+            // Calculate minimum indent in replacement (to preserve relative indentation)
+            int minReplaceIndent = int.MaxValue;
+            foreach (var line in replaceLines)
+            {
+                if (string.IsNullOrWhiteSpace(line)) continue;
+                int indent = 0;
+                while (indent < line.Length && char.IsWhiteSpace(line[indent]))
+                    indent++;
+                minReplaceIndent = Math.Min(minReplaceIndent, indent);
+            }
+            if (minReplaceIndent == int.MaxValue) minReplaceIndent = 0;
+
+            // Apply indentation to replacement lines
+            var result = new StringBuilder();
+            for (int i = 0; i < replaceLines.Length; i++)
+            {
+                if (i > 0) result.Append(lineEnding);
+
+                var line = replaceLines[i];
+                if (string.IsNullOrWhiteSpace(line))
+                {
+                    result.Append(line);
+                    continue;
+                }
+
+                // Calculate this line's relative indentation
+                int lineIndent = 0;
+                while (lineIndent < line.Length && char.IsWhiteSpace(line[lineIndent]))
+                    lineIndent++;
+                int relativeIndent = lineIndent - minReplaceIndent;
+
+                // Build new indentation
+                string newIndent = baseIndent;
+                for (int j = 0; j < relativeIndent / 4; j++) // Assuming 4-space units in input
+                    newIndent += indentUnit;
+
+                result.Append(newIndent);
+                result.Append(line.TrimStart());
+            }
+
+            return result.ToString();
+        }
+
+        private string BuildNotFoundError(string content, string searchStr, string filePath, bool normalizeIndent = false)
         {
             var sb = new StringBuilder();
             sb.AppendLine("# Error: String not found in file");
@@ -225,6 +378,8 @@ namespace CodeMerger.Services.Mcp
             sb.AppendLine("💡 **Tips:**");
             sb.AppendLine("- Use `codemerger_get_lines` to see exact file content");
             sb.AppendLine("- Check for whitespace differences (tabs vs spaces)");
+            if (!normalizeIndent)
+                sb.AppendLine("- Try `normalizeIndent: true` to ignore leading whitespace differences");
             sb.AppendLine("- Copy the exact text from `get_lines` output");
 
             return sb.ToString();
@@ -284,7 +439,7 @@ namespace CodeMerger.Services.Mcp
             var path = pathEl.GetString() ?? "";
             _sendActivity($"Deleting: {path}");
 
-            var (file, findError) = FindFile(path);
+            var (file, findError) = _pathResolver.FindFile(path);
             if (file == null)
                 return findError!;
 
@@ -326,7 +481,7 @@ namespace CodeMerger.Services.Mcp
             _sendActivity($"Undo: {path}");
 
             // Find the file or determine the full path
-            var (file, findError) = FindFile(path);
+            var (file, findError) = _pathResolver.FindFile(path);
 
             string fullPath;
             string relativePath;
@@ -394,7 +549,7 @@ namespace CodeMerger.Services.Mcp
 
             _sendActivity($"MoveFile: {oldPath} -> {newPath}");
 
-            var (file, findError) = FindFile(oldPath);
+            var (file, findError) = _pathResolver.FindFile(oldPath);
             if (file == null)
                 return findError!;
 

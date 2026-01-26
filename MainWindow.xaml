@@ -168,14 +168,15 @@
                                               Margin="10,8,28,8" VerticalAlignment="Center" HorizontalAlignment="Left"/>
                             <Popup Name="Popup" Placement="Bottom" IsOpen="{TemplateBinding IsDropDownOpen}"
                                    AllowsTransparency="True" Focusable="False" PopupAnimation="Slide">
-                                <Grid Name="DropDown" SnapsToDevicePixels="True"
-                                      MinWidth="{TemplateBinding ActualWidth}" MaxHeight="{TemplateBinding MaxDropDownHeight}">
-                                    <Border x:Name="DropDownBorder" Background="{StaticResource BackgroundCard}"
-                                            BorderBrush="{StaticResource BorderColor}" BorderThickness="1" CornerRadius="6"/>
-                                    <ScrollViewer Margin="4" SnapsToDevicePixels="True">
-                                        <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Contained"/>
-                                    </ScrollViewer>
-                                </Grid>
+                                   <Grid Name="DropDown" SnapsToDevicePixels="True"
+                                          MinWidth="{TemplateBinding ActualWidth}" MaxHeight="{TemplateBinding MaxDropDownHeight}"
+                                          Background="{StaticResource BackgroundCard}">
+                                          <Border x:Name="DropDownBorder" Background="{StaticResource BackgroundCard}"
+                                                        BorderBrush="{StaticResource BorderColor}" BorderThickness="1" CornerRadius="6"/>
+                                          <ScrollViewer Margin="4" SnapsToDevicePixels="True" Background="{StaticResource BackgroundCard}">
+                                                 <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Contained" Background="{StaticResource BackgroundCard}"/>
+                                          </ScrollViewer>
+                                   </Grid>
                             </Popup>
                         </Grid>
                     </ControlTemplate>
@@ -183,9 +184,9 @@
             </Setter>
         </Style>
 
-        <!-- ComboBoxItem Style -->
+        <!-- ComboBoxItem Style - uses solid dark background to prevent white bleed-through in dropdowns -->
         <Style TargetType="ComboBoxItem">
-            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Background" Value="{StaticResource BackgroundCard}"/>
             <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
             <Setter Property="Padding" Value="10,8"/>
             <Setter Property="Template">
@@ -372,7 +373,7 @@
                                 <RowDefinition Height="Auto"/>
                             </Grid.RowDefinitions>
                             <TextBlock Text="Extensions" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource TextSecondary}"/>
-                            <TextBox x:Name="extensionsTextBox" Grid.Row="1" Text=".cs, .xaml, .py" Margin="0,6,0,12" 
+                            <TextBox x:Name="extensionsTextBox" Grid.Row="1" Text=".cs, .xaml, .py, .csproj, .sln, " Margin="0,6,0,12" 
                                      TextChanged="Filters_Changed" Style="{StaticResource ModernTextBox}"/>
                             <TextBlock Grid.Row="2" Text="Ignored Directories" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource TextSecondary}"/>
                             <TextBox x:Name="ignoredDirsTextBox" Grid.Row="3" Text="bin, obj, .vs, Properties" Margin="0,6,0,0" 

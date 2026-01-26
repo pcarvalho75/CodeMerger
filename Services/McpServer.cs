@@ -41,6 +41,10 @@ namespace CodeMerger.Services
         private List<string> _inputDirectories = new();
         private string _workspaceName = string.Empty;
 
+        // Merged workspace mode - tracks which workspace each directory came from
+        private bool _isMergedMode = false;
+        private Dictionary<string, string> _directoryToWorkspace = new();
+
         // File scanning settings
         private List<string> _extensions = new();
         private HashSet<string> _ignoredDirs = new();
@@ -51,12 +55,17 @@ namespace CodeMerger.Services
         private McpSemanticToolHandler? _semanticHandler;
         private McpRefactoringToolHandler? _refactoringHandler;
         private McpWorkspaceToolHandler? _workspaceHandler;
+        private McpMaintenanceToolHandler? _maintenanceHandler;
         private McpLessonToolHandler? _lessonHandler;
         private McpNotesToolHandler? _notesHandler;
         private McpGitToolHandler? _gitHandler;
 
         // Services
         private readonly LessonService _lessonService;
+
+        // Memory management
+        private int _toolCallsSinceGC = 0;
+        private const int GC_INTERVAL = 50; // Force GC every 50 tool calls
 
         public bool IsRunning => _serverTask != null && !_serverTask.IsCompleted;
         public event Action<string>? OnLog;
@@ -90,9 +99,31 @@ namespace CodeMerger.Services
         /// <summary>
         /// Switches to a different workspace without restarting the server.
         /// Loads the new workspace config and re-indexes.
+        /// Supports comma-separated names for merged workspace mode (e.g., "SmartMoney,Sequoia").
         /// </summary>
         public bool SwitchToWorkspace(string workspaceName)
         {
+            // Check for merged workspace request (comma-separated names)
+            if (workspaceName.Contains(','))
+            {
+                var names = workspaceName
+                    .Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Select(n => n.Trim())
+                    .Where(n => !string.IsNullOrEmpty(n))
+                    .ToArray();
+
+                if (names.Length > 1)
+                {
+                    return LoadMergedWorkspaces(names);
+                }
+                // Single name after split, treat as normal
+                workspaceName = names.FirstOrDefault() ?? workspaceName;
+            }
+
+            // Reset merged mode for single workspace
+            _isMergedMode = false;
+            _directoryToWorkspace.Clear();
+
             var workspace = _workspaceService.LoadWorkspace(workspaceName);
             if (workspace == null)
             {
@@ -133,6 +164,7 @@ namespace CodeMerger.Services
             _writeHandler = null;
             _semanticHandler = null;
             _refactoringHandler = null;
+            _maintenanceHandler = null;
             _workspaceHandler = null;
             _refactoringService = null;
 
@@ -150,6 +182,103 @@ namespace CodeMerger.Services
             PerformIndexing();
 
             LogWithMemory($"Switched to workspace: {workspaceName} ({_workspaceAnalysis?.TotalFiles ?? 0} files)");
+            return true;
+        }
+
+        /// <summary>
+        /// Loads multiple workspaces into a single merged virtual workspace.
+        /// Files are tagged with their source workspace for clear project boundaries.
+        /// Shared directories appear with both workspace tags.
+        /// </summary>
+        private bool LoadMergedWorkspaces(string[] workspaceNames)
+        {
+            Log($"Loading merged workspaces: {string.Join(", ", workspaceNames)}");
+
+            // Load all workspace configs
+            var workspaces = new List<(string Name, Workspace Config)>();
+            foreach (var name in workspaceNames)
+            {
+                var ws = _workspaceService.LoadWorkspace(name);
+                if (ws == null)
+                {
+                    Log($"LoadMergedWorkspaces failed: workspace '{name}' not found");
+                    return false;
+                }
+                workspaces.Add((name, ws));
+            }
+
+            // Combine extensions from all workspaces
+            var allExtensions = workspaces
+                .SelectMany(w => w.Config.Extensions
+                    .Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Select(ext => ext.Trim()))
+                .Where(ext => !string.IsNullOrEmpty(ext))
+                .Distinct()
+                .ToList();
+
+            // Combine ignored directories from all workspaces
+            var allIgnoredDirs = workspaces
+                .SelectMany(w => (w.Config.IgnoredDirectories + ",.git")
+                    .Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Select(dir => dir.Trim().ToLowerInvariant()))
+                .ToHashSet();
+
+            // Build directory-to-workspace mapping (a directory can belong to multiple workspaces)
+            _directoryToWorkspace.Clear();
+            var allDirectories = new List<string>();
+
+            foreach (var (name, config) in workspaces)
+            {
+                var activeDirs = config.InputDirectories
+                    .Where(dir => !config.DisabledDirectories.Contains(dir))
+                    .ToList();
+
+                foreach (var dir in activeDirs)
+                {
+                    if (_directoryToWorkspace.ContainsKey(dir))
+                    {
+                        // Directory exists in multiple workspaces - append workspace name
+                        _directoryToWorkspace[dir] += $", {name}";
+                    }
+                    else
+                    {
+                        _directoryToWorkspace[dir] = name;
+                        allDirectories.Add(dir);
+                    }
+                }
+            }
+
+            // Set merged mode state
+            _isMergedMode = true;
+            _workspaceName = $"Merged: {string.Join(", ", workspaceNames)}";
+            _inputDirectories = allDirectories;
+            _extensions = allExtensions;
+            _ignoredDirs = allIgnoredDirs;
+
+            // Clear update state to free memory
+            _updateAnalyzer = null;
+            _pendingUpdates.Clear();
+
+            // CRITICAL: Null out handlers FIRST to release references to old workspace
+            _readHandler = null;
+            _writeHandler = null;
+            _semanticHandler = null;
+            _refactoringHandler = null;
+            _maintenanceHandler = null;
+            _workspaceHandler = null;
+            _refactoringService = null;
+
+            // Clear old workspace data before creating new
+            _workspaceAnalysis = null;
+            _callSites.Clear();
+
+            // Force GC NOW to release old workspace memory before loading new one
+            GC.Collect(2, GCCollectionMode.Forced, blocking: true);
+
+            // Re-index with merged config
+            PerformIndexing();
+
+            LogWithMemory($"Merged workspaces loaded: {_workspaceName} ({_workspaceAnalysis?.TotalFiles ?? 0} files)");
             return true;
         }
 
@@ -192,7 +321,7 @@ namespace CodeMerger.Services
                 Log($"Starting indexing of {files.Count} files...");
 
                 // Clear previous call sites
-                _codeAnalyzer.CallSites.Clear();
+                _codeAnalyzer.Reset();
                 _callSites.Clear();
 
                 var fileAnalyses = new List<FileAnalysis>();
@@ -204,6 +333,13 @@ namespace CodeMerger.Services
                     if (baseDir == null) continue;
 
                     var analysis = _codeAnalyzer.AnalyzeFile(file, baseDir);
+
+                    // Set source workspace when in merged mode
+                    if (_isMergedMode && _directoryToWorkspace.TryGetValue(baseDir, out var sourceWorkspace))
+                    {
+                        analysis.SourceWorkspace = sourceWorkspace;
+                    }
+
                     fileAnalyses.Add(analysis);
 
                     processed++;
@@ -304,6 +440,13 @@ namespace CodeMerger.Services
                                 _updateAnalyzer.CallSites.Clear();
 
                                 var newAnalysis = _updateAnalyzer.AnalyzeFile(filePath, baseDir);
+
+                                // Set source workspace when in merged mode
+                                if (_isMergedMode && _directoryToWorkspace.TryGetValue(baseDir, out var sourceWorkspace))
+                                {
+                                    newAnalysis.SourceWorkspace = sourceWorkspace;
+                                }
+
                                 _workspaceAnalysis.AllFiles.Add(newAnalysis);
 
                                 // Add new call sites
@@ -339,10 +482,11 @@ namespace CodeMerger.Services
         {
             if (_workspaceAnalysis == null || _refactoringService == null) return;
 
-            _readHandler = new McpReadToolHandler(_workspaceAnalysis, SendActivity);
+            _readHandler = new McpReadToolHandler(_workspaceAnalysis, _callSites, _inputDirectories, SendActivity);
             _writeHandler = new McpWriteToolHandler(_workspaceAnalysis, _refactoringService, _inputDirectories, UpdateSingleFileAsync, SendActivity, Log);
             _semanticHandler = new McpSemanticToolHandler(_workspaceAnalysis, _callSites, SendActivity);
             _refactoringHandler = new McpRefactoringToolHandler(_workspaceAnalysis, _refactoringService, _callSites, SendActivity, Log);
+            _maintenanceHandler = new McpMaintenanceToolHandler(_workspaceAnalysis, _inputDirectories, SendActivity);
             _workspaceHandler = new McpWorkspaceToolHandler(
                 _workspaceService,
                 _workspaceName,
@@ -504,6 +648,7 @@ namespace CodeMerger.Services
             _writeHandler = null;
             _semanticHandler = null;
             _refactoringHandler = null;
+            _maintenanceHandler = null;
             _workspaceHandler = null;
             _refactoringService = null;
 
@@ -578,6 +723,14 @@ namespace CodeMerger.Services
 
             Log($"Tool call: {toolName}");
             SendActivity($"Tool: {toolName}");
+
+            // Periodic memory cleanup
+            _toolCallsSinceGC++;
+            if (_toolCallsSinceGC >= GC_INTERVAL)
+            {
+                _toolCallsSinceGC = 0;
+                GC.Collect(1, GCCollectionMode.Optimized, blocking: false);
+            }
 
             // Server control tools don't require workspace
             if (toolName == "codemerger_shutdown")
@@ -676,6 +829,10 @@ namespace CodeMerger.Services
                 "codemerger_add_parameter" => _refactoringHandler!.AddParameter(arguments),
                 "codemerger_implement_interface" => _refactoringHandler!.ImplementInterface(arguments),
                 "codemerger_generate_constructor" => _refactoringHandler!.GenerateConstructor(arguments),
+
+                // Maintenance tools
+                "codemerger_clean_backups" => _maintenanceHandler!.CleanBackups(arguments),
+                "codemerger_find_duplicates" => _maintenanceHandler!.FindDuplicates(arguments),
 
                 _ => $"Unknown tool: {toolName}"
             };
