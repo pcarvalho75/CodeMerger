@@ -62,13 +62,23 @@ namespace CodeMerger.Services
 
         // Services
         private readonly LessonService _lessonService;
+        private readonly McpLogger _logger;
+
+        // HTTP Transport for ChatGPT Desktop (Streamable HTTP)
+        private McpHttpTransport? _httpTransport;
 
         // Memory management
         private int _toolCallsSinceGC = 0;
         private const int GC_INTERVAL = 50; // Force GC every 50 tool calls
 
         public bool IsRunning => _serverTask != null && !_serverTask.IsCompleted;
+        public bool IsSseRunning => _httpTransport?.IsRunning ?? false;
+        public int SsePort => _httpTransport?.Port ?? 0;
+        
         public event Action<string>? OnLog;
+        public event Action<string>? OnSseClientConnected;
+        public event Action<string>? OnSseClientDisconnected;
+        public event Action<string>? OnSseMessageReceived;
 
         public const string ActivityPipeName = "codemerger_activity";
 
@@ -84,10 +94,21 @@ namespace CodeMerger.Services
             _indexGenerator = new IndexGenerator();
             _workspaceService = new WorkspaceService();
             _lessonService = new LessonService();
+            _logger = new McpLogger();
+            
+            // Forward logger events to our OnLog event
+            _logger.OnLog += msg => OnLog?.Invoke(msg);
         }
+
+        /// <summary>
+        /// Gets the path to the log file for external access.
+        /// </summary>
+        public string LogFilePath => _logger.LogFilePath;
 
         public void IndexWorkspace(string workspaceName, List<string> inputDirectories, List<string> extensions, HashSet<string> ignoredDirs)
         {
+            _logger.LogSeparator($"INDEX: {workspaceName}");
+            
             _workspaceName = workspaceName;
             _inputDirectories = inputDirectories;
             _extensions = extensions;
@@ -131,6 +152,7 @@ namespace CodeMerger.Services
                 return false;
             }
 
+            _logger.LogSeparator($"SWITCH: {workspaceName}");
             Log($"Switching to workspace: {workspaceName}");
 
             // Parse extensions
@@ -553,7 +575,7 @@ namespace CodeMerger.Services
                     }
                     catch (Exception ex)
                     {
-                        Log($"Error: {ex.Message}");
+                        _logger.LogError("ServerLoop", ex);
                     }
                 }
 
@@ -639,6 +661,11 @@ namespace CodeMerger.Services
             SendDisconnect();
             _cancellationTokenSource?.Cancel();
 
+            // Stop HTTP transport
+            _httpTransport?.Stop();
+            _httpTransport?.Dispose();
+            _httpTransport = null;
+
             // Clean up all resources
             _updateAnalyzer = null;
             _pendingUpdates.Clear();
@@ -657,12 +684,63 @@ namespace CodeMerger.Services
             _callSites.Clear();
 
             Log("MCP Server stopping...");
+            
+            // Dispose logger last
+            _logger.Dispose();
         }
 
-        private string? ProcessMessage(string message)
+        /// <summary>
+        /// Start SSE transport for ChatGPT Desktop and other HTTP-based MCP clients.
+        /// </summary>
+        public void StartSse(int port = 52780, bool useHttps = false)
+        {
+            if (_httpTransport != null)
+            {
+                _httpTransport.Stop();
+                _httpTransport.Dispose();
+            }
+
+            _httpTransport = new McpHttpTransport(port, ProcessMessage);
+            _httpTransport.OnLog += msg => OnLog?.Invoke(msg);
+            _httpTransport.OnClientConnected += sessionId =>
+            {
+                OnSseClientConnected?.Invoke(sessionId);
+                SendActivity($"ChatGPT connected: {sessionId}");
+            };
+            _httpTransport.OnClientDisconnected += sessionId =>
+            {
+                OnSseClientDisconnected?.Invoke(sessionId);
+            };
+            _httpTransport.OnMessageReceived += method =>
+            {
+                OnSseMessageReceived?.Invoke(method);
+            };
+
+            _httpTransport.Start();
+            Log($"MCP HTTP transport started on http://localhost:{port}/mcp");
+        }
+
+        /// <summary>
+        /// Stop HTTP transport.
+        /// </summary>
+        public void StopSse()
+        {
+            _httpTransport?.Stop();
+            _httpTransport?.Dispose();
+            _httpTransport = null;
+            Log("MCP HTTP transport stopped");
+        }
+
+        /// <summary>
+        /// Process a JSON-RPC message and return the response.
+        /// Used by both stdio and SSE transports.
+        /// </summary>
+        internal string? ProcessMessage(string message)
         {
             try
             {
+                _logger.LogJsonRpc("REQUEST", message);
+                
                 using var doc = JsonDocument.Parse(message);
                 var root = doc.RootElement;
 
@@ -671,7 +749,7 @@ namespace CodeMerger.Services
 
                 Log($"Received: {method}");
 
-                return method switch
+                var response = method switch
                 {
                     "initialize" => HandleInitialize(id),
                     "tools/list" => HandleListTools(id),
@@ -679,10 +757,17 @@ namespace CodeMerger.Services
                     "notifications/initialized" => null,
                     _ => CreateErrorResponse(id, -32601, $"Method not found: {method}")
                 };
+                
+                if (response != null)
+                {
+                    _logger.LogJsonRpc("RESPONSE", response);
+                }
+                
+                return response;
             }
             catch (Exception ex)
             {
-                Log($"Parse error: {ex.Message}");
+                _logger.LogError("ProcessMessage", ex);
                 return CreateErrorResponse(0, -32700, "Parse error");
             }
         }
@@ -723,6 +808,14 @@ namespace CodeMerger.Services
 
             Log($"Tool call: {toolName}");
             SendActivity($"Tool: {toolName}");
+
+            // Periodic memory cleanup
+            _toolCallsSinceGC++;
+            if (_toolCallsSinceGC >= GC_INTERVAL)
+            {
+                _toolCallsSinceGC = 0;
+                GC.Collect(1, GCCollectionMode.Optimized, blocking: false);
+            }
 
             // Server control tools don't require workspace
             if (toolName == "codemerger_shutdown")
@@ -967,13 +1060,12 @@ namespace CodeMerger.Services
 
         private void Log(string message)
         {
-            OnLog?.Invoke($"[MCP] {message}");
+            _logger.Log(message);
         }
 
         private void LogWithMemory(string message)
         {
-            var memMB = GC.GetTotalMemory(false) / 1024 / 1024;
-            OnLog?.Invoke($"[MCP] {message} (Mem: {memMB}MB)");
+            _logger.LogWithMemory(message);
         }
 
         private void SendActivity(string activity)

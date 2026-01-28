@@ -1,0 +1,535 @@
+using System;
+using System.Collections.Concurrent;
+using System.IO;
+using System.Net;
+using System.Text;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
+
+namespace CodeMerger.Services
+{
+    /// <summary>
+    /// SSE (Server-Sent Events) transport for MCP protocol.
+    /// Enables ChatGPT Desktop and other HTTP-based MCP clients to connect.
+    /// 
+    /// Endpoints:
+    /// - GET /sse - Client connects here to receive SSE stream
+    /// - POST /messages - Client sends JSON-RPC requests here
+    /// </summary>
+    public class SseTransport : IDisposable
+    {
+        private readonly int _port;
+        private HttpListener? _listener;
+        private CancellationTokenSource? _cts;
+        private Task? _listenerTask;
+        private bool _disposed;
+
+        // Active SSE connections indexed by session ID
+        private readonly ConcurrentDictionary<string, SseSession> _sessions = new();
+
+        // Callback to process incoming JSON-RPC messages (shared with stdio transport)
+        private readonly Func<string, string?> _messageHandler;
+        private readonly bool _useHttps;
+
+        public bool IsRunning => _listener?.IsListening ?? false;
+        public int Port => _port;
+        public int ActiveConnections => _sessions.Count;
+        public bool UseHttps => _useHttps;
+        public string Protocol => _useHttps ? "https" : "http";
+
+        public event Action<string>? OnLog;
+        public event Action<string>? OnClientConnected;
+        public event Action<string>? OnClientDisconnected;
+        public event Action<string>? OnMessageReceived; // Fires when a message is processed
+
+        public SseTransport(int port, Func<string, string?> messageHandler, bool useHttps = false)
+        {
+            _port = port;
+            _messageHandler = messageHandler;
+            _useHttps = useHttps;
+        }
+
+        public void Start()
+        {
+            if (_disposed) throw new ObjectDisposedException(nameof(SseTransport));
+            if (IsRunning) return;
+
+            // Configure HTTPS if requested
+            if (_useHttps)
+            {
+                Log("Configuring HTTPS...");
+                CertificateManager.OnLog += Log;
+                
+                if (!CertificateManager.EnsureHttpsConfigured(_port))
+                {
+                    Log("HTTPS configuration failed, falling back to HTTP");
+                    // Continue with HTTP as fallback
+                }
+                
+                CertificateManager.OnLog -= Log;
+            }
+
+            _cts = new CancellationTokenSource();
+            _listener = new HttpListener();
+            
+            var protocol = _useHttps ? "https" : "http";
+            
+            // Listen on all interfaces for ngrok/tunnel compatibility
+            _listener.Prefixes.Add($"{protocol}://+:{_port}/");
+            
+            try
+            {
+                _listener.Start();
+                Log($"SSE transport started on {protocol}://localhost:{_port}/");
+                
+                _listenerTask = Task.Run(() => ListenLoop(_cts.Token), _cts.Token);
+            }
+            catch (HttpListenerException ex) when (ex.ErrorCode == 5) // Access denied
+            {
+                // Try localhost only (doesn't require admin)
+                _listener = new HttpListener();
+                _listener.Prefixes.Add($"{protocol}://localhost:{_port}/");
+                
+                try
+                {
+                    _listener.Start();
+                    Log($"SSE transport started on {protocol}://localhost:{_port}/ (limited - run as admin for external access)");
+                    
+                    _listenerTask = Task.Run(() => ListenLoop(_cts.Token), _cts.Token);
+                }
+                catch (HttpListenerException)
+                {
+                    // If HTTPS localhost fails, fall back to HTTP
+                    if (_useHttps)
+                    {
+                        Log("HTTPS localhost failed, falling back to HTTP...");
+                        _listener = new HttpListener();
+                        _listener.Prefixes.Add($"http://localhost:{_port}/");
+                        _listener.Start();
+                        Log($"SSE transport started on http://localhost:{_port}/ (HTTP fallback)");
+                        
+                        _listenerTask = Task.Run(() => ListenLoop(_cts.Token), _cts.Token);
+                    }
+                    else
+                    {
+                        throw;
+                    }
+                }
+            }
+        }
+
+        public void Stop()
+        {
+            _cts?.Cancel();
+            
+            // Close all active sessions
+            foreach (var session in _sessions.Values)
+            {
+                session.Close();
+            }
+            _sessions.Clear();
+
+            try
+            {
+                _listener?.Stop();
+                _listener?.Close();
+            }
+            catch { }
+
+            _listener = null;
+            Log("SSE transport stopped");
+        }
+
+        private async Task ListenLoop(CancellationToken token)
+        {
+            while (!token.IsCancellationRequested && _listener?.IsListening == true)
+            {
+                try
+                {
+                    var context = await _listener.GetContextAsync().WaitAsync(token);
+                    _ = Task.Run(() => HandleRequest(context, token), token);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch (HttpListenerException) when (token.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    Log($"Listener error: {ex.Message}");
+                    await Task.Delay(100, token);
+                }
+            }
+        }
+
+        private async Task HandleRequest(HttpListenerContext context, CancellationToken token)
+        {
+            var request = context.Request;
+            var response = context.Response;
+
+            // Add CORS headers for browser/desktop app compatibility
+            response.Headers.Add("Access-Control-Allow-Origin", "*");
+            response.Headers.Add("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+            response.Headers.Add("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept, X-Requested-With");
+            response.Headers.Add("Access-Control-Expose-Headers", "Content-Type");
+            response.Headers.Add("Access-Control-Max-Age", "86400");
+
+            try
+            {
+                var path = request.Url?.AbsolutePath?.TrimEnd('/') ?? "";
+                
+                // Log request details for debugging
+                Log($"{request.HttpMethod} {path} (Host: {request.Headers["Host"]}, Accept: {request.Headers["Accept"]})");
+
+                // Handle CORS preflight
+                if (request.HttpMethod == "OPTIONS")
+                {
+                    response.StatusCode = 204;
+                    response.Close();
+                    return;
+                }
+
+                // Route to appropriate handler
+                if ((path == "/sse" || path.StartsWith("/sse")) && request.HttpMethod == "GET")
+                {
+                    await HandleSseConnection(context, token);
+                }
+                else if ((path == "/messages" || path.StartsWith("/messages") || path == "/message") && request.HttpMethod == "POST")
+                {
+                    await HandleMessage(context);
+                }
+                else if ((path == "" || path == "/") && request.HttpMethod == "GET")
+                {
+                    // Health check / info endpoint
+                    await HandleInfo(context);
+                }
+                else
+                {
+                    Log($"404 Not Found: {request.HttpMethod} {path}");
+                    response.StatusCode = 404;
+                    var errorBytes = System.Text.Encoding.UTF8.GetBytes($"Not Found: {path}");
+                    response.ContentLength64 = errorBytes.Length;
+                    await response.OutputStream.WriteAsync(errorBytes, 0, errorBytes.Length);
+                    response.Close();
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"Request error: {ex.Message}");
+                try
+                {
+                    response.StatusCode = 500;
+                    response.Close();
+                }
+                catch { }
+            }
+        }
+
+        private async Task HandleSseConnection(HttpListenerContext context, CancellationToken token)
+        {
+            var response = context.Response;
+            var sessionId = Guid.NewGuid().ToString("N")[..8];
+
+            Log($"SSE client connecting: {sessionId}");
+
+            // Log all headers for debugging
+            foreach (string key in context.Request.Headers.AllKeys)
+            {
+                Log($"  Header: {key} = {context.Request.Headers[key]}");
+            }
+
+            // Set SSE headers
+            response.StatusCode = 200;
+            response.ContentType = "text/event-stream; charset=utf-8";
+            response.Headers.Add("Cache-Control", "no-cache, no-store, must-revalidate");
+            response.Headers.Add("Connection", "keep-alive");
+            response.Headers.Add("X-Accel-Buffering", "no"); // Disable nginx buffering
+            response.Headers.Add("Pragma", "no-cache");
+            response.Headers.Add("Expires", "0");
+            
+            // Keep the response open
+            response.SendChunked = true;
+
+            var session = new SseSession(sessionId, response.OutputStream);
+            _sessions[sessionId] = session;
+            
+            OnClientConnected?.Invoke(sessionId);
+
+            try
+            {
+                // Send endpoint event - tells client where to POST messages
+                var baseUrl = GetBaseUrl(context.Request);
+                var endpointUrl = $"{baseUrl}/messages?session={sessionId}";
+                Log($"Sending endpoint URL: {endpointUrl}");
+                
+                // Send as plain URL (MCP spec expects plain text, not JSON)
+                await session.SendEventAsync("endpoint", endpointUrl);
+
+                // Keep connection alive with periodic heartbeats
+                while (!token.IsCancellationRequested && !session.IsClosed)
+                {
+                    await Task.Delay(15000, token); // 15 second heartbeat
+                    
+                    if (!session.IsClosed)
+                    {
+                        await session.SendCommentAsync("heartbeat");
+                        Log($"Sent heartbeat to session {sessionId}");
+                    }
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex)
+            {
+                Log($"SSE session {sessionId} error: {ex.Message}");
+            }
+            finally
+            {
+                _sessions.TryRemove(sessionId, out _);
+                session.Close();
+                OnClientDisconnected?.Invoke(sessionId);
+                Log($"SSE client disconnected: {sessionId}");
+            }
+        }
+
+        private async Task HandleMessage(HttpListenerContext context)
+        {
+            var request = context.Request;
+            var response = context.Response;
+
+            // Get session ID from query string
+            var sessionId = request.QueryString["session"];
+            
+            if (string.IsNullOrEmpty(sessionId) || !_sessions.TryGetValue(sessionId, out var session))
+            {
+                // No session - could be a stateless request, try to handle anyway
+                // Some clients may not maintain session
+                Log($"Message received without valid session (session={sessionId})");
+                session = null;
+            }
+
+            // Read request body
+            string body;
+            using (var reader = new StreamReader(request.InputStream, request.ContentEncoding))
+            {
+                body = await reader.ReadToEndAsync();
+            }
+
+            // Extract method name for activity indicator and logging
+            string methodName = "unknown";
+            int? requestId = null;
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(body);
+                if (doc.RootElement.TryGetProperty("method", out var methodProp))
+                {
+                    methodName = methodProp.GetString() ?? "unknown";
+                }
+                if (doc.RootElement.TryGetProperty("id", out var idProp))
+                {
+                    requestId = idProp.GetInt32();
+                }
+            }
+            catch { }
+
+            Log($">>> Received: method={methodName}, id={requestId}, body={body.Substring(0, Math.Min(200, body.Length))}");
+            
+            OnMessageReceived?.Invoke(methodName);
+
+            // Process the JSON-RPC message using shared handler
+            var result = _messageHandler(body);
+
+            Log($"<<< Response: {(result != null ? result.Substring(0, Math.Min(200, result.Length)) : "(null)")}");
+
+            if (result != null)
+            {
+                // If we have an SSE session, send response via SSE
+                if (session != null && !session.IsClosed)
+                {
+                    Log($"Sending response via SSE to session {sessionId}");
+                    await session.SendEventAsync("message", result);
+                    
+                    // Also send HTTP 202 Accepted
+                    response.StatusCode = 202;
+                    response.Close();
+                }
+                else
+                {
+                    // No SSE session - send response directly as HTTP response
+                    Log($"Sending response via HTTP (no active SSE session)");
+                    response.ContentType = "application/json";
+                    response.StatusCode = 200;
+                    
+                    var bytes = Encoding.UTF8.GetBytes(result);
+                    response.ContentLength64 = bytes.Length;
+                    await response.OutputStream.WriteAsync(bytes, 0, bytes.Length);
+                    response.Close();
+                }
+            }
+            else
+            {
+                // Notification or no response needed
+                Log($"No response needed for {methodName}");
+                response.StatusCode = 202;
+                response.Close();
+            }
+        }
+
+        private async Task HandleInfo(HttpListenerContext context)
+        {
+            var response = context.Response;
+            response.ContentType = "application/json";
+            response.StatusCode = 200;
+
+            var info = new
+            {
+                server = "CodeMerger MCP Server",
+                version = "2.0.0",
+                protocolVersion = "2024-11-05",
+                transport = "sse",
+                endpoints = new
+                {
+                    sse = "/sse/",
+                    messages = "/messages"
+                },
+                activeConnections = _sessions.Count,
+                status = _sessions.Count > 0 ? "connected" : "waiting"
+            };
+
+            var json = JsonSerializer.Serialize(info);
+            var bytes = Encoding.UTF8.GetBytes(json);
+            response.ContentLength64 = bytes.Length;
+            await response.OutputStream.WriteAsync(bytes, 0, bytes.Length);
+            response.Close();
+        }
+
+        private string GetBaseUrl(HttpListenerRequest request)
+        {
+            // Check for forwarded headers (ngrok, cloudflare tunnel, etc.)
+            // Cloudflared uses CF-* headers and also passes through the Host header
+            var forwardedHost = request.Headers["X-Forwarded-Host"];
+            var forwardedProto = request.Headers["X-Forwarded-Proto"];
+            var cfVisitor = request.Headers["CF-Visitor"]; // Contains {"scheme":"https"}
+            var host = request.Headers["Host"];
+
+            // Try to determine protocol from CF-Visitor header
+            string protocol = "https"; // Default to https for tunnels
+            if (!string.IsNullOrEmpty(forwardedProto))
+            {
+                protocol = forwardedProto;
+            }
+            else if (!string.IsNullOrEmpty(cfVisitor) && cfVisitor.Contains("http"))
+            {
+                protocol = cfVisitor.Contains("\"https\"") ? "https" : "http";
+            }
+
+            // Determine host - prefer forwarded headers, then Host header, then UserHostName
+            string hostName;
+            if (!string.IsNullOrEmpty(forwardedHost))
+            {
+                hostName = forwardedHost;
+            }
+            else if (!string.IsNullOrEmpty(host) && !host.StartsWith("localhost") && !host.StartsWith("127."))
+            {
+                // Use Host header if it's not localhost (means it's the tunnel URL)
+                hostName = host;
+            }
+            else
+            {
+                hostName = request.UserHostName;
+                protocol = "http"; // Local connection
+            }
+
+            var url = $"{protocol}://{hostName}";
+            Log($"GetBaseUrl: Host={host}, ForwardedHost={forwardedHost}, Result={url}");
+            return url;
+        }
+
+        private void Log(string message)
+        {
+            OnLog?.Invoke($"[SSE] {message}");
+        }
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            Stop();
+            _cts?.Dispose();
+        }
+
+        /// <summary>
+        /// Represents an active SSE client session.
+        /// </summary>
+        private class SseSession
+        {
+            public string SessionId { get; }
+            private readonly Stream _outputStream;
+            private readonly SemaphoreSlim _writeLock = new(1, 1);
+            public bool IsClosed { get; private set; }
+
+            public SseSession(string sessionId, Stream outputStream)
+            {
+                SessionId = sessionId;
+                _outputStream = outputStream;
+            }
+
+            public async Task SendEventAsync(string eventType, string data)
+            {
+                if (IsClosed) return;
+
+                await _writeLock.WaitAsync();
+                try
+                {
+                    var message = $"event: {eventType}\ndata: {data}\n\n";
+                    var bytes = Encoding.UTF8.GetBytes(message);
+                    await _outputStream.WriteAsync(bytes, 0, bytes.Length);
+                    await _outputStream.FlushAsync();
+                }
+                catch
+                {
+                    IsClosed = true;
+                }
+                finally
+                {
+                    _writeLock.Release();
+                }
+            }
+
+            public async Task SendCommentAsync(string comment)
+            {
+                if (IsClosed) return;
+
+                await _writeLock.WaitAsync();
+                try
+                {
+                    var message = $": {comment}\n\n";
+                    var bytes = Encoding.UTF8.GetBytes(message);
+                    await _outputStream.WriteAsync(bytes, 0, bytes.Length);
+                    await _outputStream.FlushAsync();
+                }
+                catch
+                {
+                    IsClosed = true;
+                }
+                finally
+                {
+                    _writeLock.Release();
+                }
+            }
+
+            public void Close()
+            {
+                IsClosed = true;
+                try
+                {
+                    _outputStream.Close();
+                }
+                catch { }
+            }
+        }
+    }
+}

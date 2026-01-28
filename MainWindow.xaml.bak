@@ -168,14 +168,15 @@
                                               Margin="10,8,28,8" VerticalAlignment="Center" HorizontalAlignment="Left"/>
                             <Popup Name="Popup" Placement="Bottom" IsOpen="{TemplateBinding IsDropDownOpen}"
                                    AllowsTransparency="True" Focusable="False" PopupAnimation="Slide">
-                                <Grid Name="DropDown" SnapsToDevicePixels="True"
-                                      MinWidth="{TemplateBinding ActualWidth}" MaxHeight="{TemplateBinding MaxDropDownHeight}">
-                                    <Border x:Name="DropDownBorder" Background="{StaticResource BackgroundCard}"
-                                            BorderBrush="{StaticResource BorderColor}" BorderThickness="1" CornerRadius="6"/>
-                                    <ScrollViewer Margin="4" SnapsToDevicePixels="True">
-                                        <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Contained"/>
-                                    </ScrollViewer>
-                                </Grid>
+                                   <Grid Name="DropDown" SnapsToDevicePixels="True"
+                                          MinWidth="{TemplateBinding ActualWidth}" MaxHeight="{TemplateBinding MaxDropDownHeight}"
+                                          Background="{StaticResource BackgroundCard}">
+                                          <Border x:Name="DropDownBorder" Background="{StaticResource BackgroundCard}"
+                                                        BorderBrush="{StaticResource BorderColor}" BorderThickness="1" CornerRadius="6"/>
+                                          <ScrollViewer Margin="4" SnapsToDevicePixels="True" Background="{StaticResource BackgroundCard}">
+                                                 <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Contained" Background="{StaticResource BackgroundCard}"/>
+                                          </ScrollViewer>
+                                   </Grid>
                             </Popup>
                         </Grid>
                     </ControlTemplate>
@@ -264,8 +265,15 @@
                 <!-- Connection Status -->
                 <Border Grid.Column="5" Background="{StaticResource BackgroundDark}" CornerRadius="20" Padding="16,8" VerticalAlignment="Center">
                     <StackPanel Orientation="Horizontal">
-                        <Ellipse x:Name="connectionIndicator" Width="10" Height="10" Fill="#555" Margin="0,0,10,0" VerticalAlignment="Center"/>
-                        <TextBlock x:Name="connectionStatusText" Text="Waiting for Claude..." Foreground="{StaticResource TextSecondary}" FontSize="12" VerticalAlignment="Center"/>
+                        <!-- Claude Status -->
+                        <Ellipse x:Name="connectionIndicator" Width="10" Height="10" Fill="#555" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                        <TextBlock Text="Claude" Foreground="{StaticResource TextSecondary}" FontSize="11" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                        
+                        <!-- ChatGPT Status -->
+                        <Ellipse x:Name="chatGptConnectionIndicator" Width="10" Height="10" Fill="#555" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                        <TextBlock Text="ChatGPT" Foreground="{StaticResource TextSecondary}" FontSize="11" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                        
+                        <TextBlock x:Name="connectionStatusText" Text="Waiting..." Foreground="{StaticResource TextSecondary}" FontSize="11" VerticalAlignment="Center"/>
                         <Button x:Name="stopServerButton" Content="⏹ Stop" Click="StopServer_Click" 
                                 Style="{StaticResource SmallLinkButton}" Margin="12,0,0,0" Visibility="Collapsed"
                                 ToolTip="Stop MCP server to allow recompilation"/>
@@ -288,199 +296,271 @@
 
         <!-- MAIN CONTENT -->
         <Grid Grid.Row="2" Margin="24,20">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="380"/>
-                <ColumnDefinition Width="*"/>
-            </Grid.ColumnDefinitions>
-
-            <!-- LEFT PANEL -->
-            <Grid Grid.Column="0" Margin="0,0,12,0">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="*"/>
-                    <RowDefinition Height="Auto"/>
-                </Grid.RowDefinitions>
-
-                <!-- Input Directories Card -->
-                <Border Grid.Row="0" Background="{StaticResource BackgroundCard}" CornerRadius="12" Padding="20">
-                    <Grid>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="*"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                        </Grid.RowDefinitions>
-                        
-                        <Grid>
+            <Border Background="{StaticResource BackgroundCard}" CornerRadius="12" Padding="20">
+                <TabControl Background="Transparent" BorderThickness="0">
+                    <TabControl.Resources>
+                        <Style TargetType="TabItem">
+                            <Setter Property="Background" Value="Transparent"/>
+                            <Setter Property="Foreground" Value="{StaticResource TextSecondary}"/>
+                            <Setter Property="Padding" Value="16,8"/>
+                            <Setter Property="FontSize" Value="14"/>
+                            <Setter Property="Template">
+                                <Setter.Value>
+                                    <ControlTemplate TargetType="TabItem">
+                                        <Border x:Name="Border" Background="Transparent" BorderThickness="0,0,0,2" BorderBrush="Transparent" Padding="{TemplateBinding Padding}" Margin="0,0,8,0">
+                                            <ContentPresenter ContentSource="Header" HorizontalAlignment="Center"/>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsSelected" Value="True">
+                                                <Setter TargetName="Border" Property="BorderBrush" Value="{StaticResource AccentPrimary}"/>
+                                                <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+                                                <Setter Property="FontWeight" Value="SemiBold"/>
+                                            </Trigger>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </Setter.Value>
+                            </Setter>
+                        </Style>
+                    </TabControl.Resources>
+                    
+                    <!-- Tab 1: Source Directories -->
+                    <TabItem Header="📁 Source Directories">
+                        <Grid Margin="0,16,0,0">
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto"/>
                                 <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="320"/>
                             </Grid.ColumnDefinitions>
-                            <TextBlock Text="📁 Source Directories" FontSize="15" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" VerticalAlignment="Center"/>
-                            <TextBlock x:Name="directoryCountText" Grid.Column="1" Text="" FontSize="12" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center" Margin="10,0,0,0"/>
-                            <StackPanel Grid.Column="2" Orientation="Horizontal">
-                                <Button Content="All" Click="SelectAllDirectories_Click" Style="{StaticResource SmallLinkButton}" ToolTip="Select all"/>
-                                <TextBlock Text="·" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center" Margin="6,0"/>
-                                <Button Content="None" Click="DeselectAllDirectories_Click" Style="{StaticResource SmallLinkButton}" ToolTip="Deselect all"/>
-                            </StackPanel>
-                        </Grid>
-                        
-                        <ListBox x:Name="inputDirListBox" Grid.Row="1" Margin="0,12,0,12" Style="{StaticResource ModernListBox}" SelectionMode="Extended">
-                            <ListBox.ItemTemplate>
-                                <DataTemplate>
-                                    <StackPanel Orientation="Horizontal" Margin="4">
-                                        <StackPanel.Style>
-                                            <Style TargetType="StackPanel">
-                                                <Style.Triggers>
-                                                    <DataTrigger Binding="{Binding IsSelected}" Value="False">
-                                                        <Setter Property="Opacity" Value="0.4"/>
-                                                    </DataTrigger>
-                                                </Style.Triggers>
-                                            </Style>
-                                        </StackPanel.Style>
-                                        <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay}" 
-                                                  VerticalAlignment="Center" Margin="0,0,10,0"
-                                                  Checked="DirectoryCheckBox_Changed" 
-                                                  Unchecked="DirectoryCheckBox_Changed"/>
-                                        <TextBlock Text="{Binding Path}" VerticalAlignment="Center" Foreground="{StaticResource TextPrimary}" FontSize="12">
-                                            <TextBlock.Style>
-                                                <Style TargetType="TextBlock">
-                                                    <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding IsSelected}" Value="False">
-                                                            <Setter Property="Foreground" Value="{StaticResource TextSecondary}"/>
-                                                            <Setter Property="TextDecorations" Value="Strikethrough"/>
-                                                        </DataTrigger>
-                                                    </Style.Triggers>
-                                                </Style>
-                                            </TextBlock.Style>
-                                        </TextBlock>
+                            
+                            <!-- Directory List -->
+                            <Grid Grid.Column="0" Margin="0,0,20,0">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock x:Name="directoryCountText" Text="" FontSize="12" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center"/>
+                                    <StackPanel Grid.Column="2" Orientation="Horizontal">
+                                        <Button Content="All" Click="SelectAllDirectories_Click" Style="{StaticResource SmallLinkButton}" ToolTip="Select all"/>
+                                        <TextBlock Text="·" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center" Margin="6,0"/>
+                                        <Button Content="None" Click="DeselectAllDirectories_Click" Style="{StaticResource SmallLinkButton}" ToolTip="Deselect all"/>
                                     </StackPanel>
-                                </DataTemplate>
-                            </ListBox.ItemTemplate>
-                        </ListBox>
+                                </Grid>
+                                
+                                <ListBox x:Name="inputDirListBox" Grid.Row="1" Margin="0,12,0,12" Style="{StaticResource ModernListBox}" SelectionMode="Extended">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Orientation="Horizontal" Margin="4">
+                                                <StackPanel.Style>
+                                                    <Style TargetType="StackPanel">
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsSelected}" Value="False">
+                                                                <Setter Property="Opacity" Value="0.4"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </StackPanel.Style>
+                                                <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay}" 
+                                                          VerticalAlignment="Center" Margin="0,0,10,0"
+                                                          Checked="DirectoryCheckBox_Changed" 
+                                                          Unchecked="DirectoryCheckBox_Changed"/>
+                                                <TextBlock Text="{Binding Path}" VerticalAlignment="Center" Foreground="{StaticResource TextPrimary}" FontSize="12">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsSelected}" Value="False">
+                                                                    <Setter Property="Foreground" Value="{StaticResource TextSecondary}"/>
+                                                                    <Setter Property="TextDecorations" Value="Strikethrough"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
 
-                        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
-                            <Button Content="Remove" Click="RemoveDirectory_Click" Margin="0,0,8,0" Style="{StaticResource ModernButton}"/>
-                            <Button Content="+ Add Folder" Click="AddDirectory_Click" Style="{StaticResource PrimaryButton}"/>
-                        </StackPanel>
-
-                        <Grid Grid.Row="3" Margin="0,20,0,0">
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                            </Grid.RowDefinitions>
-                            <TextBlock Text="Extensions" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource TextSecondary}"/>
-                            <TextBox x:Name="extensionsTextBox" Grid.Row="1" Text=".cs, .xaml, .py, .csproj, .sln, " Margin="0,6,0,12" 
-                                     TextChanged="Filters_Changed" Style="{StaticResource ModernTextBox}"/>
-                            <TextBlock Grid.Row="2" Text="Ignored Directories" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource TextSecondary}"/>
-                            <TextBox x:Name="ignoredDirsTextBox" Grid.Row="3" Text="bin, obj, .vs, Properties" Margin="0,6,0,0" 
-                                     TextChanged="Filters_Changed" Style="{StaticResource ModernTextBox}"/>
-                        </Grid>
-                    </Grid>
-                </Border>
-
-                <!-- External Repositories Card -->
-                <Border Grid.Row="1" Background="{StaticResource BackgroundCard}" CornerRadius="12" Padding="20" Margin="0,12,0,0">
-                    <Expander IsExpanded="False" Foreground="{StaticResource TextPrimary}">
-                        <Expander.Header>
-                            <TextBlock Text="🔗 External Git Repositories" FontSize="14" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}"/>
-                        </Expander.Header>
-                        <StackPanel Margin="0,16,0,0">
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBox x:Name="gitUrlTextBox" Style="{StaticResource ModernTextBox}"
-                                         Text="https://github.com/user/repo"/>
-                                <Button Grid.Column="1" Content="Clone" Click="AddGitRepo_Click" 
-                                        Style="{StaticResource GitButton}" Margin="8,0,0,0"/>
+                                <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Left">
+                                    <Button Content="+ Add Folder" Click="AddDirectory_Click" Style="{StaticResource PrimaryButton}" Margin="0,0,8,0"/>
+                                    <Button Content="Remove" Click="RemoveDirectory_Click" Style="{StaticResource ModernButton}"/>
+                                </StackPanel>
                             </Grid>
-
-                            <ListBox x:Name="gitRepoListBox" Margin="0,12,0,0" MinHeight="60" MaxHeight="120" Style="{StaticResource ModernListBox}">
-                                <ListBox.ItemTemplate>
-                                    <DataTemplate>
-                                        <Grid Margin="4">
+                            
+                            <!-- Right Side: Filters + Git Repos -->
+                            <Grid Grid.Column="1">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                </Grid.RowDefinitions>
+                                
+                                <!-- Filters -->
+                                <StackPanel>
+                                    <TextBlock Text="Extensions" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource TextSecondary}"/>
+                                    <TextBox x:Name="extensionsTextBox" Text=".cs, .xaml, .py, .csproj, .sln, " Margin="0,6,0,12" 
+                                             TextChanged="Filters_Changed" Style="{StaticResource ModernTextBox}"/>
+                                    <TextBlock Text="Ignored Directories" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource TextSecondary}"/>
+                                    <TextBox x:Name="ignoredDirsTextBox" Text="bin, obj, .vs, Properties" Margin="0,6,0,0" 
+                                             TextChanged="Filters_Changed" Style="{StaticResource ModernTextBox}"/>
+                                </StackPanel>
+                                
+                                <!-- External Repositories -->
+                                <Expander Grid.Row="1" IsExpanded="False" Foreground="{StaticResource TextPrimary}" Margin="0,20,0,0">
+                                    <Expander.Header>
+                                        <TextBlock Text="🔗 External Git Repositories" FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}"/>
+                                    </Expander.Header>
+                                    <StackPanel Margin="0,12,0,0">
+                                        <Grid>
                                             <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="Auto"/>
                                                 <ColumnDefinition Width="*"/>
                                                 <ColumnDefinition Width="Auto"/>
-                                                <ColumnDefinition Width="Auto"/>
                                             </Grid.ColumnDefinitions>
-                                            <CheckBox IsChecked="{Binding IsEnabled, Mode=TwoWay}" 
-                                                      VerticalAlignment="Center" Margin="0,0,10,0"
-                                                      Checked="GitRepoCheckBox_Changed" 
-                                                      Unchecked="GitRepoCheckBox_Changed"/>
-                                            <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}"/>
-                                                <TextBlock Text="{Binding Branch}" FontSize="10" Foreground="{StaticResource TextSecondary}"/>
-                                            </StackPanel>
-                                            <Button Grid.Column="2" Content="🔄" Click="RefreshGitRepo_Click" 
-                                                    Style="{StaticResource IconButton}" ToolTip="Pull latest"/>
-                                            <Button Grid.Column="3" Content="✕" Click="RemoveGitRepo_Click" 
-                                                    Style="{StaticResource IconButton}" Foreground="{StaticResource AccentPrimary}" ToolTip="Remove"/>
+                                            <TextBox x:Name="gitUrlTextBox" Style="{StaticResource ModernTextBox}"
+                                                     Text="https://github.com/user/repo"/>
+                                            <Button Grid.Column="1" Content="Clone" Click="AddGitRepo_Click" 
+                                                    Style="{StaticResource GitButton}" Margin="8,0,0,0"/>
                                         </Grid>
-                                    </DataTemplate>
-                                </ListBox.ItemTemplate>
-                            </ListBox>
 
-                            <TextBlock x:Name="gitStatusText" Text="" FontSize="11" Foreground="{StaticResource TextSecondary}" Margin="0,8,0,0" TextWrapping="Wrap"/>
-                        </StackPanel>
-                    </Expander>
-                </Border>
-            </Grid>
+                                        <ListBox x:Name="gitRepoListBox" Margin="0,12,0,0" MinHeight="60" MaxHeight="150" Style="{StaticResource ModernListBox}">
+                                            <ListBox.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Grid Margin="4">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <CheckBox IsChecked="{Binding IsEnabled, Mode=TwoWay}" 
+                                                                  VerticalAlignment="Center" Margin="0,0,10,0"
+                                                                  Checked="GitRepoCheckBox_Changed" 
+                                                                  Unchecked="GitRepoCheckBox_Changed"/>
+                                                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}"/>
+                                                            <TextBlock Text="{Binding Branch}" FontSize="10" Foreground="{StaticResource TextSecondary}"/>
+                                                        </StackPanel>
+                                                        <Button Grid.Column="2" Content="🔄" Click="RefreshGitRepo_Click" 
+                                                                Style="{StaticResource IconButton}" ToolTip="Pull latest"/>
+                                                        <Button Grid.Column="3" Content="✕" Click="RemoveGitRepo_Click" 
+                                                                Style="{StaticResource IconButton}" Foreground="{StaticResource AccentPrimary}" ToolTip="Remove"/>
+                                                    </Grid>
+                                                </DataTemplate>
+                                            </ListBox.ItemTemplate>
+                                        </ListBox>
 
-            <!-- RIGHT PANEL: Files -->
-            <Border Grid.Column="1" Margin="12,0,0,0" Background="{StaticResource BackgroundCard}" CornerRadius="12" Padding="20">
-                <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*"/>
-                    </Grid.RowDefinitions>
-                    <TextBlock Text="📄 Found Files" FontSize="15" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}"/>
-                    <ListBox x:Name="fileListBox" Grid.Row="1" Margin="0,12,0,0" Style="{StaticResource ModernListBox}" 
-                             HorizontalContentAlignment="Stretch" FontSize="12"/>
-                </Grid>
+                                        <TextBlock x:Name="gitStatusText" Text="" FontSize="11" Foreground="{StaticResource TextSecondary}" Margin="0,8,0,0" TextWrapping="Wrap"/>
+                                    </StackPanel>
+                                </Expander>
+                            </Grid>
+                        </Grid>
+                    </TabItem>
+                    
+                    <!-- Tab 2: Found Files -->
+                    <TabItem Header="📄 Found Files">
+                        <Grid Margin="0,16,0,0">
+                            <ListBox x:Name="fileListBox" Style="{StaticResource ModernListBox}" 
+                                     HorizontalContentAlignment="Stretch" FontSize="12"/>
+                        </Grid>
+                    </TabItem>
+                </TabControl>
             </Border>
         </Grid>
 
         <!-- BOTTOM BAR -->
         <Border Grid.Row="3" Background="{StaticResource BackgroundCard}" Padding="24,16">
             <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
 
-                <!-- Claude Desktop Status -->
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <TextBlock Text="Claude Desktop:" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" VerticalAlignment="Center" Margin="0,0,12,0"/>
-                    <Border Background="{StaticResource BackgroundDark}" CornerRadius="4" Padding="8,4" Margin="0,0,16,0">
-                        <TextBlock x:Name="claudeInstallStatus" Text="Checking..." Foreground="{StaticResource TextSecondary}" FontSize="11"/>
-                    </Border>
-                    <TextBlock Text="Config:" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" VerticalAlignment="Center" Margin="0,0,12,0"/>
-                    <Border Background="{StaticResource BackgroundDark}" CornerRadius="4" Padding="8,4">
-                        <TextBlock x:Name="claudeConfigStatus" Text="Checking..." Foreground="{StaticResource TextSecondary}" FontSize="11"/>
-                    </Border>
-                </StackPanel>
+                <!-- Row 1: Claude Desktop Status -->
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
 
-                <!-- Output Folder -->
-                <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
-                    <TextBlock Text="Output:" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                    <TextBox x:Name="outputFileTextBox" Width="300" IsReadOnly="True" Style="{StaticResource ModernTextBox}" 
-                             Background="{StaticResource BackgroundDark}" FontSize="11"/>
-                    <Button Content="📂 Open" Click="OpenFolder_Click" Style="{StaticResource ModernButton}" Margin="8,0,0,0"/>
-                </StackPanel>
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Text="Claude Desktop:" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                        <Border Background="{StaticResource BackgroundDark}" CornerRadius="4" Padding="8,4" Margin="0,0,16,0">
+                            <TextBlock x:Name="claudeInstallStatus" Text="Checking..." Foreground="{StaticResource TextSecondary}" FontSize="11"/>
+                        </Border>
+                        <TextBlock Text="Config:" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                        <Border Background="{StaticResource BackgroundDark}" CornerRadius="4" Padding="8,4">
+                            <TextBlock x:Name="claudeConfigStatus" Text="Checking..." Foreground="{StaticResource TextSecondary}" FontSize="11"/>
+                        </Border>
+                    </StackPanel>
 
-                <!-- Action Buttons -->
-                <StackPanel Grid.Column="2" Orientation="Horizontal">
-                    <Button x:Name="claudeDownloadButton" Content="Download Claude" Click="ClaudeDownload_Click" Style="{StaticResource LinkButton}" Visibility="Collapsed"/>
-                    <Button x:Name="claudeAddConfigButton" Content="Add to Claude" Click="ClaudeAddConfig_Click" Style="{StaticResource ModernButton}" Visibility="Collapsed" Margin="0,0,8,0"/>
-                    <Button Content="Open Config" Click="ClaudeOpenConfigFolder_Click" Style="{StaticResource LinkButton}"/>
-                </StackPanel>
+                    <!-- Output Folder -->
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <TextBlock Text="Output:" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <TextBox x:Name="outputFileTextBox" Width="300" IsReadOnly="True" Style="{StaticResource ModernTextBox}" 
+                                 Background="{StaticResource BackgroundDark}" FontSize="11"/>
+                        <Button Content="📂 Open" Click="OpenFolder_Click" Style="{StaticResource ModernButton}" Margin="8,0,0,0"/>
+                    </StackPanel>
+
+                    <!-- Action Buttons -->
+                    <StackPanel Grid.Column="2" Orientation="Horizontal">
+                        <Button x:Name="claudeDownloadButton" Content="Download Claude" Click="ClaudeDownload_Click" Style="{StaticResource LinkButton}" Visibility="Collapsed"/>
+                        <Button x:Name="claudeAddConfigButton" Content="Add to Claude" Click="ClaudeAddConfig_Click" Style="{StaticResource ModernButton}" Visibility="Collapsed" Margin="0,0,8,0"/>
+                        <Button Content="Open Config" Click="ClaudeOpenConfigFolder_Click" Style="{StaticResource LinkButton}"/>
+                    </StackPanel>
+                </Grid>
+
+                <!-- Row 2: ChatGPT Desktop Status -->
+                <Border Grid.Row="1" BorderBrush="{StaticResource BorderColor}" BorderThickness="0,1,0,0" Margin="0,12,0,0" Padding="0,12,0,0">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBlock Text="ChatGPT Desktop:" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                            <Border Background="{StaticResource BackgroundDark}" CornerRadius="4" Padding="8,4" Margin="0,0,12,0">
+                                <StackPanel Orientation="Horizontal">
+                                    <Ellipse x:Name="chatGptIndicator" Width="8" Height="8" Fill="#555" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                    <TextBlock x:Name="chatGptStatusText" Text="Stopped" Foreground="{StaticResource TextSecondary}" FontSize="11"/>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="8,0,0,0">
+                            <Button x:Name="chatGptStartButton" Content="▶ Start ChatGPT Server" Click="ChatGptStart_Click" Style="{StaticResource PrimaryButton}"
+                                    ToolTip="Start HTTP server and tunnel for ChatGPT Desktop"/>
+                            <Button x:Name="chatGptStopButton" Content="⏹ Stop" Click="ChatGptStop_Click" Style="{StaticResource ModernButton}" Visibility="Collapsed" Margin="8,0,0,0"
+                                    ToolTip="Stop server and tunnel"/>
+                        </StackPanel>
+
+                        <!-- Public URL -->
+                        <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <TextBlock Text="URL:" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                            <TextBox x:Name="publicUrlTextBox" Width="380" IsReadOnly="True" Style="{StaticResource ModernTextBox}" 
+                                     Background="{StaticResource BackgroundDark}" FontSize="11" Text="Click 'Start ChatGPT Server' to get URL"
+                                     ToolTip="Copy this URL to ChatGPT Desktop → Settings → Apps → Create app → MCP Server URL"/>
+                            <Button x:Name="copyUrlButton" Content="📋 Copy" Click="CopyUrl_Click" Style="{StaticResource ModernButton}" Margin="8,0,0,0" IsEnabled="False"
+                                    ToolTip="Copy URL to clipboard"/>
+                        </StackPanel>
+
+                        <!-- Help -->
+                        <StackPanel Grid.Column="3" Orientation="Horizontal">
+                            <Button x:Name="tunnelHelpButton" Content="?" Click="TunnelHelp_Click" Style="{StaticResource IconButton}" ToolTip="Setup instructions"/>
+                        </StackPanel>
+                    </Grid>
+                </Border>
             </Grid>
         </Border>
 

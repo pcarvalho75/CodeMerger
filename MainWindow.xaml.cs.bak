@@ -25,6 +25,11 @@ namespace CodeMerger
         private readonly DirectoryManager _directoryManager = new DirectoryManager();
         private readonly GitRepositoryManager _gitRepositoryManager = new GitRepositoryManager();
         
+        // ChatGPT Desktop support
+        private TunnelService? _tunnelService;
+        private McpServer? _mcpServerForSse;
+        private bool _isChatGptConnected = false;
+        
         private Workspace? _currentWorkspace => _workspaceManager.CurrentWorkspace;
 
         private string _statusText = string.Empty;
@@ -73,6 +78,9 @@ namespace CodeMerger
             _gitRepositoryManager.OnProgress += msg => Dispatcher.Invoke(() => gitStatusText.Text = msg);
             _gitRepositoryManager.OnError += msg => Dispatcher.Invoke(() => 
                 UpdateStatus(msg, new SolidColorBrush(Color.FromRgb(233, 69, 96))));
+
+            // Wire up file scanner progress
+            _fileScannerService.OnProgress += msg => Dispatcher.Invoke(() => UpdateStatus(msg, Brushes.Gray));
 
             // Wire up workspace manager events
             _workspaceManager.OnWorkspaceChanged += OnWorkspaceChanged;
@@ -258,9 +266,244 @@ namespace CodeMerger
             _claudeDesktopService.OpenConfigFolder();
         }
 
+        #region ChatGPT Desktop / SSE Transport
+
+        private const int DefaultSsePort = 52780;
+
+        private async void ChatGptStart_Click(object sender, RoutedEventArgs e)
+        {
+            if (_currentWorkspace == null)
+            {
+                UpdateStatus("Select a workspace first", new SolidColorBrush(Color.FromRgb(233, 69, 96)));
+                return;
+            }
+
+            chatGptStartButton.IsEnabled = false;
+            UpdateStatus("Starting ChatGPT server...", new SolidColorBrush(Color.FromRgb(100, 200, 255)));
+
+            try
+            {
+                // Create and index McpServer for SSE
+                _mcpServerForSse = new McpServer();
+                _mcpServerForSse.OnLog += msg => Dispatcher.Invoke(() => UpdateStatus(msg, Brushes.Gray));
+
+                var extensions = _currentWorkspace.Extensions
+                    .Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Select(ext => ext.Trim())
+                    .Where(ext => !string.IsNullOrEmpty(ext))
+                    .ToList();
+
+                var ignoredDirs = (_currentWorkspace.IgnoredDirectories + ",.git")
+                    .Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Select(dir => dir.Trim().ToLowerInvariant())
+                    .ToHashSet();
+
+                var activeDirectories = _currentWorkspace.InputDirectories
+                    .Where(dir => !_currentWorkspace.DisabledDirectories.Contains(dir))
+                    .ToList();
+
+                _mcpServerForSse.IndexWorkspace(_currentWorkspace.Name, activeDirectories, extensions, ignoredDirs);
+
+                // Wire up SSE events
+                _mcpServerForSse.OnSseClientConnected += sessionId => Dispatcher.Invoke(() =>
+                {
+                        _isChatGptConnected = true;
+                        chatGptConnectionIndicator.Fill = new SolidColorBrush(Color.FromRgb(16, 163, 127)); // ChatGPT green
+                        chatGptIndicator.Fill = new SolidColorBrush(Color.FromRgb(16, 163, 127));
+                        chatGptStatusText.Text = "Connected";
+                        chatGptStatusText.Foreground = new SolidColorBrush(Color.FromRgb(16, 163, 127));
+                        UpdateStatus($"✓ ChatGPT connected (session: {sessionId})", Brushes.LightGreen);
+                    });
+
+                _mcpServerForSse.OnSseClientDisconnected += sessionId => Dispatcher.Invoke(() =>
+                {
+                        _isChatGptConnected = false;
+                        chatGptConnectionIndicator.Fill = new SolidColorBrush(Color.FromRgb(136, 146, 160));
+                        chatGptIndicator.Fill = new SolidColorBrush(Color.FromRgb(255, 193, 7)); // Yellow - running but no client
+                        chatGptStatusText.Text = "Running";
+                        chatGptStatusText.Foreground = new SolidColorBrush(Color.FromRgb(136, 146, 160));
+                        UpdateStatus($"ChatGPT disconnected (session: {sessionId})", Brushes.Gray);
+                    });
+
+                // Activity flash when ChatGPT makes requests
+                _mcpServerForSse.OnSseMessageReceived += method => Dispatcher.Invoke(async () =>
+                {
+                    _isChatGptConnected = true; // Message received = connected
+                    chatGptConnectionIndicator.Fill = new SolidColorBrush(Color.FromRgb(0, 255, 150));
+                    chatGptIndicator.Fill = new SolidColorBrush(Color.FromRgb(0, 255, 150));
+                    chatGptStatusText.Text = method;
+                    connectionStatusText.Text = $"ChatGPT: {method}";
+                    
+                    await Task.Delay(300);
+                    
+                    if (_isChatGptConnected)
+                    {
+                        chatGptConnectionIndicator.Fill = new SolidColorBrush(Color.FromRgb(16, 163, 127));
+                        chatGptIndicator.Fill = new SolidColorBrush(Color.FromRgb(16, 163, 127));
+                        chatGptStatusText.Text = "Connected";
+                        connectionStatusText.Text = "ChatGPT connected";
+                    }
+                });
+
+                // Start HTTP transport (tunnel will provide HTTPS)
+                _mcpServerForSse.StartSse(DefaultSsePort, useHttps: false);
+
+                // Update UI to show starting state
+                chatGptStatusText.Text = "Starting tunnel...";
+                chatGptIndicator.Fill = new SolidColorBrush(Color.FromRgb(255, 193, 7)); // Yellow
+
+                // Now start the tunnel
+                _tunnelService = new TunnelService();
+                _tunnelService.OnLog += msg => Dispatcher.Invoke(() => UpdateStatus(msg, Brushes.Gray));
+                _tunnelService.OnDownloadProgress += progress => Dispatcher.Invoke(() =>
+                {
+                    progressBar.Visibility = Visibility.Visible;
+                    progressBar.Value = progress;
+                    UpdateStatus($"Downloading cloudflared... {progress}%", new SolidColorBrush(Color.FromRgb(100, 200, 255)));
+                    if (progress >= 100)
+                    {
+                        progressBar.Visibility = Visibility.Collapsed;
+                    }
+                });
+                _tunnelService.OnUrlAvailable += url => Dispatcher.Invoke(() =>
+                {
+                    var sseUrl = _tunnelService.GetSseUrl();
+                    publicUrlTextBox.Text = sseUrl ?? url;
+                    copyUrlButton.IsEnabled = true;
+                    
+                    // Auto-copy to clipboard
+                    if (!string.IsNullOrEmpty(sseUrl))
+                    {
+                        Clipboard.SetText(sseUrl);
+                    }
+                    
+                    chatGptStatusText.Text = "Ready";
+                    chatGptIndicator.Fill = new SolidColorBrush(Color.FromRgb(0, 217, 165)); // Green
+                    UpdateStatus($"✓ ChatGPT server ready! URL copied to clipboard", Brushes.LightGreen);
+                });
+                _tunnelService.OnDisconnected += () => Dispatcher.Invoke(() =>
+                {
+                    // Tunnel disconnected but server may still be running
+                    if (_mcpServerForSse != null && _mcpServerForSse.IsSseRunning)
+                    {
+                        publicUrlTextBox.Text = "Tunnel disconnected - restart server";
+                        copyUrlButton.IsEnabled = false;
+                        chatGptStatusText.Text = "Tunnel lost";
+                        chatGptIndicator.Fill = new SolidColorBrush(Color.FromRgb(233, 69, 96)); // Red
+                        UpdateStatus("Tunnel disconnected. Click Stop then Start again.", new SolidColorBrush(Color.FromRgb(233, 69, 96)));
+                    }
+                });
+                _tunnelService.OnError += msg => Dispatcher.Invoke(() =>
+                {
+                    UpdateStatus(msg, new SolidColorBrush(Color.FromRgb(233, 69, 96)));
+                    // Don't stop server on tunnel error - let user retry
+                    chatGptStatusText.Text = "Tunnel failed";
+                    chatGptIndicator.Fill = new SolidColorBrush(Color.FromRgb(233, 69, 96)); // Red
+                    chatGptStartButton.IsEnabled = false;
+                    chatGptStopButton.Visibility = Visibility.Visible;
+                });
+
+                bool tunnelSuccess = await _tunnelService.StartAsync(DefaultSsePort);
+
+                if (tunnelSuccess)
+                {
+                    // Success - update UI
+                    chatGptStartButton.Visibility = Visibility.Collapsed;
+                    chatGptStopButton.Visibility = Visibility.Visible;
+                }
+                else
+                {
+                    // Tunnel failed - stop everything
+                    StopChatGptServer();
+                    chatGptStartButton.IsEnabled = true;
+                }
+            }
+            catch (Exception ex)
+            {
+                UpdateStatus($"Failed to start: {ex.Message}", new SolidColorBrush(Color.FromRgb(233, 69, 96)));
+                StopChatGptServer();
+                chatGptStartButton.IsEnabled = true;
+            }
+        }
+
+        private void ChatGptStop_Click(object sender, RoutedEventArgs e)
+        {
+            StopChatGptServer();
+        }
+
+        private void StopChatGptServer()
+        {
+            // Stop tunnel first
+            _tunnelService?.Stop();
+            _tunnelService?.Dispose();
+            _tunnelService = null;
+
+            // Stop SSE server
+            _mcpServerForSse?.StopSse();
+            _mcpServerForSse?.Stop();
+            _mcpServerForSse = null;
+
+            // Reset UI
+            chatGptStartButton.Visibility = Visibility.Visible;
+            chatGptStartButton.IsEnabled = true;
+            chatGptStopButton.Visibility = Visibility.Collapsed;
+            chatGptStatusText.Text = "Stopped";
+            chatGptStatusText.Foreground = new SolidColorBrush(Color.FromRgb(136, 146, 160));
+            chatGptIndicator.Fill = new SolidColorBrush(Color.FromRgb(136, 146, 160));
+            chatGptConnectionIndicator.Fill = new SolidColorBrush(Color.FromRgb(136, 146, 160));
+            publicUrlTextBox.Text = "Click 'Start ChatGPT Server' to get URL";
+            copyUrlButton.IsEnabled = false;
+            progressBar.Visibility = Visibility.Collapsed;
+
+            UpdateStatus("ChatGPT server stopped", Brushes.Gray);
+        }
+
+        private void CopyUrl_Click(object sender, RoutedEventArgs e)
+        {
+            var url = publicUrlTextBox.Text;
+            if (!string.IsNullOrEmpty(url) && url.StartsWith("http"))
+            {
+                Clipboard.SetText(url);
+                UpdateStatus($"Copied to clipboard: {url}", Brushes.LightGreen);
+            }
+        }
+
+        private void TunnelHelp_Click(object sender, RoutedEventArgs e)
+        {
+            MessageBox.Show(TunnelService.GetInstallInstructions(), "ChatGPT Desktop Setup", 
+                MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+
+        private void OpenLog_Click(object sender, RoutedEventArgs e)
+        {
+            // Get log file path from the SSE server if available, otherwise use default location
+            var logPath = _mcpServerForSse?.LogFilePath ?? 
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), 
+                    "CodeMerger", "codemerger-mcp.log");
+            
+            if (File.Exists(logPath))
+            {
+                // Open in default text editor
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = logPath,
+                    UseShellExecute = true
+                });
+            }
+            else
+            {
+                MessageBox.Show($"Log file not found at:\n{logPath}\n\nThe log is created when the MCP server starts.", 
+                    "Log File", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+        }
+
+        #endregion
+
         private void MainWindow_Closing(object? sender, CancelEventArgs e)
         {
             _mcpConnectionService.Dispose();
+            _tunnelService?.Dispose();
+            _mcpServerForSse?.Stop();
         }
 
         private void LoadWorkspaceList()
