@@ -901,6 +901,23 @@ namespace CodeMerger.Services.Mcp
                         },
                         { "required", Array.Empty<string>() }
                     }
+                },
+                new
+                {
+                    name = "codemerger_delete_note",
+                    description = "Delete a specific note by line number.\n\n" +
+                        "WHEN TO USE: When you need to remove a single note without clearing the entire section.\n" +
+                        "TIP: Use `get_notes` first to see line numbers.",
+                    inputSchema = new Dictionary<string, object>
+                    {
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>
+                            {
+                                { "lineNumber", new Dictionary<string, object> { { "type", "integer" }, { "description", "Line number of the note to delete (1-indexed, shown in get_notes output)" } } }
+                            }
+                        },
+                        { "required", new[] { "lineNumber" } }
+                    }
                 }
             };
         }

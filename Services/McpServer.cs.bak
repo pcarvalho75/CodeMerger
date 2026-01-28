@@ -852,6 +852,8 @@ namespace CodeMerger.Services
                 return CreateToolResponse(id, HandleNotesTool("update", arguments));
             if (toolName == "codemerger_clear_notes")
                 return CreateToolResponse(id, HandleNotesTool("clear", arguments));
+            if (toolName == "codemerger_delete_note")
+                return CreateToolResponse(id, HandleNotesTool("delete", arguments));
 
             // Git tools
             if (toolName == "codemerger_git_status")
