@@ -554,8 +554,8 @@ namespace CodeMerger
         {
             try
             {
-                var exePath = _claudeDesktopService.GetCurrentExePath();
-                _claudeDesktopService.EnsureConfigured(exePath);
+                _claudeDesktopService.DeployStableCopy();
+                _claudeDesktopService.EnsureConfigured();
             }
             catch
             {

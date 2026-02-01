@@ -192,9 +192,9 @@ namespace CodeMerger
             if (_claudeDesktopService.IsConfigured())
             {
                 var configuredPath = _claudeDesktopService.GetConfiguredExePath();
-                var currentPath = _claudeDesktopService.GetCurrentExePath();
+                var expectedPath = _claudeDesktopService.GetStableExePath();
 
-                if (string.Equals(configuredPath, currentPath, StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(configuredPath, expectedPath, StringComparison.OrdinalIgnoreCase))
                 {
                     var activeWorkspace = _workspaceManager.GetActiveWorkspaceName();
                     claudeConfigStatus.Text = $"Ready ✓";
