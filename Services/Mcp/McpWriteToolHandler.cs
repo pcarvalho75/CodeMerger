@@ -409,7 +409,18 @@ namespace CodeMerger.Services.Mcp
             if (result.Success && !string.IsNullOrEmpty(result.FullPath))
                 _updateFileIndex(result.FullPath);
 
-            return result.ToMarkdown();
+            var response = result.ToMarkdown();
+
+            // Soft warning for large files that may cause memory issues in MCP clients
+            var lineCount = content.Split('\n').Length;
+            if (lineCount > 600)
+            {
+                response += "\n\n⚠️ **Large file warning:** This file was " + lineCount + " lines. " +
+                    "Large write_file calls can cause memory issues in some MCP clients. " +
+                    "Next time, consider writing a small skeleton first, then filling in sections with `str_replace`.";
+            }
+
+            return response;
         }
 
         public string PreviewWriteFile(JsonElement arguments)

@@ -465,7 +465,7 @@
                     </TabItem>
                     
                     <!-- Tab 2: Found Files -->
-                    <TabItem Header="📄 Found Files">
+                    <TabItem x:Name="foundFilesTab" Header="📄 Found Files">
                         <Grid Margin="0,16,0,0">
                             <ListBox x:Name="fileListBox" Style="{StaticResource ModernListBox}" 
                                      HorizontalContentAlignment="Stretch" FontSize="12"/>
@@ -557,6 +557,8 @@
 
                         <!-- Help -->
                         <StackPanel Grid.Column="3" Orientation="Horizontal">
+                            <Button Content="🌐 Lessons" Click="CommunityLessonsSettings_Click" Style="{StaticResource IconButton}" ToolTip="Community Lessons Settings" Margin="0,0,8,0"/>
+                            <Button Content="📄 Log" Click="OpenLog_Click" Style="{StaticResource IconButton}" ToolTip="Open MCP log file" Margin="0,0,8,0"/>
                             <Button x:Name="tunnelHelpButton" Content="?" Click="TunnelHelp_Click" Style="{StaticResource IconButton}" ToolTip="Setup instructions"/>
                         </StackPanel>
                     </Grid>

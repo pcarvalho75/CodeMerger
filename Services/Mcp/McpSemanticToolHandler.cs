@@ -162,14 +162,10 @@ namespace CodeMerger.Services.Mcp
             if (arguments.TryGetProperty("path", out var pathEl))
                 specificPath = pathEl.GetString();
 
-            bool errorsOnly = false;
-            if (arguments.TryGetProperty("errorsOnly", out var errorsEl))
-                errorsOnly = errorsEl.GetBoolean();
-
-            _sendActivity($"Getting diagnostics{(specificPath != null ? $": {specificPath}" : "")}");
+            _sendActivity($"Checking syntax{(specificPath != null ? $": {specificPath}" : "")}");
 
             var sb = new StringBuilder();
-            sb.AppendLine("# Compilation Diagnostics");
+            sb.AppendLine("# Syntax Check");
             sb.AppendLine();
 
             try
@@ -189,19 +185,10 @@ namespace CodeMerger.Services.Mcp
                         return $"Error: File not found: {specificPath}";
                 }
 
-                // MEMORY/TIME OPTIMIZATION: Strict file limit
-                const int MaxFilesForDiagnostics = 15;
-                bool truncated = csFiles.Count > MaxFilesForDiagnostics;
-                if (truncated)
-                {
-                    sb.AppendLine($"⚠️ **Limited analysis:** Checking {MaxFilesForDiagnostics} of {csFiles.Count} files.");
-                    sb.AppendLine($"💡 **Tip:** Use `codemerger_build` for full compilation with all references.");
-                    sb.AppendLine();
-                    csFiles = csFiles.Take(MaxFilesForDiagnostics).ToList();
-                }
+                sb.AppendLine($"**Files checked:** {csFiles.Count}");
+                sb.AppendLine();
 
-                // Parse files into syntax trees (syntax-only, fast)
-                var syntaxTrees = new List<SyntaxTree>();
+                // Syntax-only parse — fast and reliable
                 var parseErrors = new List<string>();
 
                 foreach (var file in csFiles)
@@ -210,9 +197,7 @@ namespace CodeMerger.Services.Mcp
                     {
                         var content = File.ReadAllText(file.FilePath);
                         var tree = CSharpSyntaxTree.ParseText(content, path: file.RelativePath);
-                        syntaxTrees.Add(tree);
 
-                        // Check for syntax errors immediately (fast)
                         var syntaxDiags = tree.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error).ToList();
                         foreach (var diag in syntaxDiags.Take(5))
                         {
@@ -226,89 +211,28 @@ namespace CodeMerger.Services.Mcp
                     }
                 }
 
-                // Report syntax errors first (these are reliable)
                 if (parseErrors.Any())
                 {
-                    sb.AppendLine("## Syntax Errors (reliable)");
+                    sb.AppendLine("## ❌ Syntax Errors Found");
                     sb.AppendLine();
-                    foreach (var err in parseErrors.Take(20))
+                    foreach (var err in parseErrors.Take(30))
                         sb.AppendLine(err);
-                    if (parseErrors.Count > 20)
-                        sb.AppendLine($"- ... and {parseErrors.Count - 20} more");
-                    sb.AppendLine();
-                }
+                    if (parseErrors.Count > 30)
+                        sb.AppendLine($"- ... and {parseErrors.Count - 30} more");
 
-                // Skip semantic analysis if we already have syntax errors
-                if (parseErrors.Any())
-                {
-                    sb.AppendLine("---");
-                    sb.AppendLine("*Skipping semantic analysis due to syntax errors. Fix syntax first.*");
+                    // Return syntax-only — caller (McpServer) will NOT proceed to build
                     return sb.ToString();
                 }
 
-                // Semantic analysis with timeout protection
-                sb.AppendLine("## Semantic Analysis");
+                sb.AppendLine("✅ **Syntax OK** — no parse errors found.");
                 sb.AppendLine();
 
-                var references = new List<MetadataReference>
-                {
-                    MetadataReference.CreateFromFile(typeof(object).Assembly.Location),
-                    MetadataReference.CreateFromFile(typeof(Console).Assembly.Location),
-                    MetadataReference.CreateFromFile(typeof(Enumerable).Assembly.Location),
-                };
-
-                var runtimePath = Path.Combine(Path.GetDirectoryName(typeof(object).Assembly.Location)!, "System.Runtime.dll");
-                if (File.Exists(runtimePath))
-                    references.Add(MetadataReference.CreateFromFile(runtimePath));
-
-                var compilation = CSharpCompilation.Create(
-                    "DiagnosticsCheck",
-                    syntaxTrees,
-                    references,
-                    new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
-
-                // Get diagnostics with a reasonable limit
-                var diagnostics = compilation.GetDiagnostics()
-                    .Where(d => d.Location.IsInSource)
-                    .Where(d => !errorsOnly || d.Severity == DiagnosticSeverity.Error)
-                    // Filter out common false positives from missing references
-                    .Where(d => d.Id != "CS0246" && d.Id != "CS0234" && d.Id != "CS0012")
-                    .OrderByDescending(d => d.Severity)
-                    .Take(30) // Hard limit on results
-                    .ToList();
-
-                if (diagnostics.Count == 0)
-                {
-                    sb.AppendLine("✓ No issues found in analyzed files!");
-                }
-                else
-                {
-                    sb.AppendLine($"**Issues found:** {diagnostics.Count}");
-                    sb.AppendLine();
-
-                    foreach (var diag in diagnostics)
-                    {
-                        var lineSpan = diag.Location.GetLineSpan();
-                        var line = lineSpan.StartLinePosition.Line + 1;
-                        var file = Path.GetFileName(diag.Location.SourceTree?.FilePath ?? "?");
-                        var severity = diag.Severity == DiagnosticSeverity.Error ? "❌" : "⚠️";
-                        sb.AppendLine($"- {severity} `{file}` **Line {line}:** [{diag.Id}] {diag.GetMessage()}");
-                    }
-                }
-
-                sb.AppendLine();
-                sb.AppendLine("---");
-                sb.AppendLine("*⚠️ This uses basic .NET references only. For accurate results with NuGet/WPF/etc, use `codemerger_build`.*");
-
-                return sb.ToString();
+                // Signal to caller that syntax passed — build should follow
+                return "SYNTAX_OK\n" + sb.ToString();
             }
             catch (Exception ex)
             {
-                return $"Error running diagnostics: {ex.Message}\n\n💡 **Tip:** Use `codemerger_build` for reliable compilation.";
-            }
-            finally
-            {
-                GC.Collect(2, GCCollectionMode.Aggressive, blocking: false);
+                return $"Error checking syntax: {ex.Message}";
             }
         }
     }

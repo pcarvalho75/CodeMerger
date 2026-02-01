@@ -110,7 +110,7 @@ namespace CodeMerger.Services.Mcp
                 sb.AppendLine($"**Type:** {lesson.Type}");
                 sb.AppendLine($"**Component:** {lesson.Component}");
                 sb.AppendLine($"**Logged:** {lesson.Timestamp:yyyy-MM-dd HH:mm}");
-                if (lesson.Source == LessonSource.Community && !string.IsNullOrEmpty(lesson.ContributedBy))
+                if (lesson.Source == Models.LessonSource.Community && !string.IsNullOrEmpty(lesson.ContributedBy))
                     sb.AppendLine($"**Contributed by:** {lesson.ContributedBy}");
                 sb.AppendLine();
                 sb.AppendLine($"**Observation:** {lesson.Observation}");

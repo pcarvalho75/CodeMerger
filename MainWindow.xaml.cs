@@ -120,6 +120,28 @@ namespace CodeMerger
 
             RefreshClaudeDesktopStatus();
             _mcpConnectionService.Start();
+
+            // Background sync community lessons (fire-and-forget, non-blocking)
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    var settings = Models.CommunityLessonSettings.Load();
+                    if (!settings.CommunityLessonsEnabled) return;
+                    var lessonService = new LessonService();
+                    var syncService = new CommunityLessonSyncService(lessonService);
+                    var (synced, count, message) = await syncService.SyncIfStaleAsync(ttlHours: settings.SyncIntervalHours);
+                    if (synced)
+                    {
+                        Dispatcher.Invoke(() =>
+                            UpdateStatus($"Community lessons synced: {count} lessons", Brushes.LightBlue));
+                    }
+                }
+                catch
+                {
+                    // Silent failure — community lessons are optional
+                }
+            });
         }
 
         #region MCP Connection Events
@@ -470,6 +492,12 @@ namespace CodeMerger
         {
             MessageBox.Show(TunnelService.GetInstallInstructions(), "ChatGPT Desktop Setup", 
                 MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+
+        private void CommunityLessonsSettings_Click(object sender, RoutedEventArgs e)
+        {
+            var dialog = new CommunityLessonSettingsDialog { Owner = this };
+            dialog.ShowDialog();
         }
 
         private void OpenLog_Click(object sender, RoutedEventArgs e)
@@ -845,6 +873,7 @@ namespace CodeMerger
             _isScanning = true;
 
             FoundFiles.Clear();
+            foundFilesTab.Header = "📄 Found Files";
 
             var selectedDirs = _directoryManager.GetSelectedPaths().ToList();
             var enabledRepos = _gitRepositoryManager.Repositories.Where(r => r.IsEnabled).ToList();
@@ -875,6 +904,7 @@ namespace CodeMerger
                 }
 
                 _estimatedTokens = result.EstimatedTokens;
+                foundFilesTab.Header = $"📄 Found Files ({result.Files.Count})";
                 UpdateStatus($"Found {result.Files.Count} files (~{_estimatedTokens:N0} tokens)", Brushes.Gray);
                 UpdateRecommendation();
             }

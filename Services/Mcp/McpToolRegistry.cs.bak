@@ -337,7 +337,8 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_get_diagnostics",
-                    description = "Get compilation errors and warnings for the project using Roslyn.\n\n" +
+                    description = "Get compilation errors and warnings for the project.\n\n" +
+                        "Two-tier approach: (1) Fast syntax check on all files, (2) Full `dotnet build` if syntax is clean.\n" +
                         "WHEN TO USE: After making changes — verify the code still compiles correctly.\n" +
                         "TIP: Run this after a series of edits to catch any issues before the user tries to build.",
                     inputSchema = new Dictionary<string, object>
@@ -345,8 +346,7 @@ namespace CodeMerger.Services.Mcp
                         { "type", "object" },
                         { "properties", new Dictionary<string, object>
                             {
-                                { "path", new Dictionary<string, string> { { "type", "string" }, { "description", "Optional: specific file path to check. If omitted, checks all C# files." } } },
-                                { "errorsOnly", new Dictionary<string, object> { { "type", "boolean" }, { "description", "If true, only show errors (not warnings). Default: false" }, { "default", false } } }
+                                { "path", new Dictionary<string, string> { { "type", "string" }, { "description", "Optional: specific file path to check. If omitted, checks all C# files." } } }
                             }
                         },
                         { "required", Array.Empty<string>() }
@@ -412,6 +412,12 @@ namespace CodeMerger.Services.Mcp
                         "- Renaming a class/method/property? → Use `rename_symbol` instead\n" +
                         "- Moving a file? → Use `move_file` instead\n" +
                         "- Only use `write_file` for NEW files or when changes are so extensive that str_replace isn't practical.\n\n" +
+                        "⚠️ LARGE FILE WARNING (>600 lines):\n" +
+                        "Writing files over 600 lines in a single call can cause memory issues in some MCP clients.\n" +
+                        "For large files, use an INCREMENTAL approach instead:\n" +
+                        "1. Write a small skeleton/scaffold first (class stub, usings, namespace, empty methods)\n" +
+                        "2. Fill in each method body with separate `str_replace` calls\n" +
+                        "3. This is safer, uses less memory, and easier to debug if something goes wrong.\n\n" +
                         "TIP: Use `preview_write` first to see a diff of what will change.\n\n" +
                         "WORKFLOW - Before making ANY file modifications:\n" +
                         "1. Present a roadmap of all planned changes to the user\n" +
@@ -648,6 +654,10 @@ namespace CodeMerger.Services.Mcp
                 {
                     name = "codemerger_generate_constructor",
                     description = "Generate a constructor that initializes selected fields/properties of a class.\n\n" +
+                        "USE THIS WHEN:\n" +
+                        "- Creating a new class that needs a constructor\n" +
+                        "- Adding dependency injection to a class\n" +
+                        "- User asks to 'add a constructor' or 'initialize fields'\n\n" +
                         "RETURNS: Constructor code — you must insert it into the class using `str_replace`.\n" +
                         "TIP: Use `get_type` first to see available fields/properties.",
                     inputSchema = new Dictionary<string, object>
@@ -823,7 +833,7 @@ namespace CodeMerger.Services.Mcp
                         "- Error handling could be improved\n" +
                         "- A new tool or feature would help\n" +
                         "- Code in CodeMerger itself could be optimized\n\n" +
-                        "LIMIT: Maximum 10 lessons stored. If full, ask user to review and clear lessons.\n" +
+                        "LIMIT: Maximum 100 lessons stored. If full, ask user to review and clear lessons.\n" +
                         "TYPES: description | implementation | new_tool | workflow | performance | error_handling",
                     inputSchema = new Dictionary<string, object>
                     {
@@ -856,19 +866,49 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_delete_lesson",
-                    description = "Delete a specific lesson or all lessons.\n\n" +
+                    description = "Delete a specific lesson or all local lessons.\n\n" +
                         "WHEN TO USE: After improvements have been applied, or if user wants to discard lessons.\n" +
-                        "OPTIONS: Provide 'number' (1-10) to delete one, or 'all: true' to clear all.",
+                        "OPTIONS: Provide 'number' to delete one, or 'all: true' to clear all local lessons. Community lessons cannot be deleted.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
                         { "properties", new Dictionary<string, object>
                             {
-                                { "number", new Dictionary<string, object> { { "type", "integer" }, { "description", "Lesson number to delete (1-10)" } } },
-                                { "all", new Dictionary<string, object> { { "type", "boolean" }, { "description", "Set to true to delete all lessons" } } }
+                                { "number", new Dictionary<string, object> { { "type", "integer" }, { "description", "Lesson number to delete (from get_lessons display)" } } },
+                                { "all", new Dictionary<string, object> { { "type", "boolean" }, { "description", "Set to true to delete all local lessons" } } }
                             }
                         },
                         { "required", Array.Empty<string>() }
+                    }
+                },
+                new
+                {
+                    name = "codemerger_sync_lessons",
+                    description = "Force-sync community lessons from the remote repository.\n\n" +
+                        "WHEN TO USE: When user wants to refresh community lessons, or after submitting a lesson.\n" +
+                        "NOTE: Community lessons auto-sync every 24 hours on GUI startup. This tool forces an immediate refresh.",
+                    inputSchema = new Dictionary<string, object>
+                    {
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>() },
+                        { "required", Array.Empty<string>() }
+                    }
+                },
+                new
+                {
+                    name = "codemerger_submit_lesson",
+                    description = "Submit a local lesson to the community repository as a GitHub Issue for curation.\n\n" +
+                        "WHEN TO USE: When a local lesson is valuable enough to share with all CodeMerger users.\n" +
+                        "REQUIRES: GitHub token configured in CodeMerger Settings > Community Lessons.",
+                    inputSchema = new Dictionary<string, object>
+                    {
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>
+                            {
+                                { "number", new Dictionary<string, object> { { "type", "integer" }, { "description", "Lesson number to submit (from get_lessons display)" } } }
+                            }
+                        },
+                        { "required", new[] { "number" } }
                     }
                 }
             };

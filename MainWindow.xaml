@@ -465,105 +465,194 @@
                     </TabItem>
                     
                     <!-- Tab 2: Found Files -->
-                    <TabItem Header="📄 Found Files">
+                    <TabItem x:Name="foundFilesTab" Header="📄 Found Files">
                         <Grid Margin="0,16,0,0">
                             <ListBox x:Name="fileListBox" Style="{StaticResource ModernListBox}" 
                                      HorizontalContentAlignment="Stretch" FontSize="12"/>
                         </Grid>
                     </TabItem>
+                    
+                    <!-- Tab 3: LLM Connections -->
+                    <TabItem Header="🔌 LLM Connections">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,16,0,0">
+                            <StackPanel>
+
+                                <!-- ═══════════════ CLAUDE DESKTOP SECTION ═══════════════ -->
+                                <Border Background="{StaticResource BackgroundDark}" CornerRadius="8" Padding="20" Margin="0,0,0,16">
+                                    <StackPanel>
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                                            <TextBlock Text="🟣 Claude Desktop" FontSize="16" FontWeight="Bold" Foreground="{StaticResource TextPrimary}" VerticalAlignment="Center"
+                                                       ToolTip="Claude Desktop connects via stdio pipe. CodeMerger registers itself in Claude's MCP config so it auto-starts when Claude opens."/>
+                                            <Border Background="#2a2a4a" CornerRadius="4" Padding="8,3" Margin="12,0,0,0" VerticalAlignment="Center">
+                                                <TextBlock Text="stdio pipe — auto-managed" Foreground="{StaticResource TextSecondary}" FontSize="10"
+                                                           ToolTip="Claude Desktop communicates with CodeMerger over a local stdio pipe. No network ports or tunnels needed. The connection is managed automatically through Claude's MCP configuration file."/>
+                                            </Border>
+                                        </StackPanel>
+
+                                        <!-- Status Row -->
+                                        <Grid Margin="0,0,0,12">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+
+                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                <TextBlock Text="Installation:" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center" Margin="0,0,8,0"
+                                                           ToolTip="Checks whether Claude Desktop is installed on this machine. Download from https://claude.ai/download if not installed."/>
+                                                <Border Background="{StaticResource BackgroundCard}" CornerRadius="4" Padding="8,4" Margin="0,0,16,0">
+                                                    <TextBlock x:Name="claudeInstallStatus" Text="Checking..." Foreground="{StaticResource TextSecondary}" FontSize="11"
+                                                               ToolTip="Shows whether Claude Desktop app was detected. Green = installed, Red = not found."/>
+                                                </Border>
+                                                <TextBlock Text="MCP Config:" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center" Margin="0,0,8,0"
+                                                           ToolTip="Checks if CodeMerger is registered in Claude Desktop's MCP configuration file (claude_desktop_config.json). This file tells Claude which MCP servers to connect to on startup."/>
+                                                <Border Background="{StaticResource BackgroundCard}" CornerRadius="4" Padding="8,4">
+                                                    <TextBlock x:Name="claudeConfigStatus" Text="Checking..." Foreground="{StaticResource TextSecondary}" FontSize="11"
+                                                               ToolTip="Shows whether CodeMerger is registered as an MCP server in Claude's config. Green = configured, Yellow = not yet added."/>
+                                                </Border>
+                                            </StackPanel>
+
+                                            <!-- Action Buttons -->
+                                            <StackPanel Grid.Column="2" Orientation="Horizontal">
+                                                <Button x:Name="claudeDownloadButton" Content="⬇ Download Claude" Click="ClaudeDownload_Click" Style="{StaticResource LinkButton}" Visibility="Collapsed"
+                                                        ToolTip="Opens the Claude Desktop download page (https://claude.ai/download). Install Claude Desktop to use CodeMerger as an MCP server."/>
+                                                <Button x:Name="claudeAddConfigButton" Content="➕ Add to Claude Config" Click="ClaudeAddConfig_Click" Style="{StaticResource ModernButton}" Visibility="Collapsed" Margin="0,0,8,0"
+                                                        ToolTip="Automatically adds CodeMerger to Claude Desktop's MCP configuration. After clicking, restart Claude Desktop for changes to take effect."/>
+                                                <Button Content="📂 Open Config Folder" Click="ClaudeOpenConfigFolder_Click" Style="{StaticResource ModernButton}"
+                                                        ToolTip="Opens the folder containing Claude Desktop's configuration file (claude_desktop_config.json). You can manually edit MCP server settings here."/>
+                                            </StackPanel>
+                                        </Grid>
+
+                                        <!-- Output Folder -->
+                                        <Grid Margin="0,0,0,12">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="Output Folder:" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center" Margin="0,0,8,0"
+                                                       ToolTip="The folder where CodeMerger writes merged output files. Claude Desktop reads from this location when using codemerger tools."/>
+                                            <TextBox x:Name="outputFileTextBox" Grid.Column="1" IsReadOnly="True" Style="{StaticResource ModernTextBox}" 
+                                                     Background="{StaticResource BackgroundCard}" FontSize="11"
+                                                     ToolTip="Read-only path to the output folder. This is set automatically based on your project workspace."/>
+                                            <Button Grid.Column="2" Content="📂 Open" Click="OpenFolder_Click" Style="{StaticResource ModernButton}" Margin="8,0,0,0"
+                                                    ToolTip="Open the output folder in Windows Explorer to view generated files."/>
+                                        </Grid>
+
+                                        <!-- Claude Setup Instructions -->
+                                        <Border Background="{StaticResource BackgroundCard}" CornerRadius="6" Padding="16" Margin="0,4,0,0">
+                                            <StackPanel>
+                                                <TextBlock Text="📋 Setup Instructions" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" Margin="0,0,0,8"/>
+                                                <TextBlock Foreground="{StaticResource TextSecondary}" FontSize="11" TextWrapping="Wrap" LineHeight="20"
+                                                           Text="1. Install Claude Desktop from https://claude.ai/download&#x0a;2. Click 'Add to Claude Config' above (or manually edit claude_desktop_config.json)&#x0a;3. Restart Claude Desktop — CodeMerger will appear as an MCP server&#x0a;4. In Claude Desktop, select a workspace/project from the CodeMerger GUI&#x0a;5. Claude can now use tools like get_file, search_code, str_replace, build, etc."
+                                                           ToolTip="Claude Desktop uses a stdio pipe to communicate with CodeMerger. The connection is automatic — no ports or URLs needed. Just ensure CodeMerger is running and configured."/>
+                                                <TextBlock Foreground="#6c7086" FontSize="10" TextWrapping="Wrap" Margin="0,8,0,0"
+                                                           Text="Tip: The MCP server auto-starts when Claude Desktop opens. If Claude shows 'server disconnected', make sure CodeMerger.exe is accessible and the config path is correct."
+                                                           ToolTip="Common issue: if you move CodeMerger.exe to a different folder, update the path in claude_desktop_config.json accordingly."/>
+                                            </StackPanel>
+                                        </Border>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- ═══════════════ CHATGPT DESKTOP SECTION ═══════════════ -->
+                                <Border Background="{StaticResource BackgroundDark}" CornerRadius="8" Padding="20" Margin="0,0,0,16">
+                                    <StackPanel>
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                                            <TextBlock Text="🟢 ChatGPT Desktop" FontSize="16" FontWeight="Bold" Foreground="{StaticResource TextPrimary}" VerticalAlignment="Center"
+                                                       ToolTip="ChatGPT Desktop connects via Streamable HTTP over a public tunnel. This requires starting an HTTP server and establishing a cloudflared tunnel."/>
+                                            <Border Background="#2a2a4a" CornerRadius="4" Padding="8,3" Margin="12,0,0,0" VerticalAlignment="Center">
+                                                <TextBlock Text="HTTP + cloudflared tunnel" Foreground="{StaticResource TextSecondary}" FontSize="10"
+                                                           ToolTip="ChatGPT Desktop requires a publicly accessible URL. CodeMerger starts a local HTTP server and uses cloudflared to create a secure tunnel, exposing the MCP endpoint to ChatGPT."/>
+                                            </Border>
+                                        </StackPanel>
+
+                                        <!-- Server Status and Controls -->
+                                        <Grid Margin="0,0,0,12">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+
+                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                <TextBlock Text="Server:" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center" Margin="0,0,8,0"
+                                                           ToolTip="Status of the local HTTP server that handles MCP requests from ChatGPT Desktop."/>
+                                                <Border Background="{StaticResource BackgroundCard}" CornerRadius="4" Padding="8,4" Margin="0,0,12,0">
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <Ellipse x:Name="chatGptIndicator" Width="8" Height="8" Fill="#555" VerticalAlignment="Center" Margin="0,0,8,0"
+                                                                 ToolTip="Green = server running and tunnel active. Red = server stopped. Gray = not started."/>
+                                                        <TextBlock x:Name="chatGptStatusText" Text="Stopped" Foreground="{StaticResource TextSecondary}" FontSize="11"
+                                                                   ToolTip="Current status of the ChatGPT MCP server. Shows 'Running on port XXXX' when active."/>
+                                                    </StackPanel>
+                                                </Border>
+                                            </StackPanel>
+
+                                            <!-- Start/Stop Buttons -->
+                                            <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="8,0,0,0">
+                                                <Button x:Name="chatGptStartButton" Content="▶ Start Server" Click="ChatGptStart_Click" Style="{StaticResource PrimaryButton}"
+                                                        ToolTip="Starts a local HTTP server and creates a cloudflared tunnel to expose it publicly. The generated URL can be pasted into ChatGPT Desktop's MCP settings. Requires cloudflared to be installed (will be downloaded automatically if missing)."/>
+                                                <Button x:Name="chatGptStopButton" Content="⏹ Stop" Click="ChatGptStop_Click" Style="{StaticResource ModernButton}" Visibility="Collapsed" Margin="8,0,0,0"
+                                                        ToolTip="Stops the HTTP server and closes the cloudflared tunnel. ChatGPT Desktop will lose the connection until you start again."/>
+                                            </StackPanel>
+
+                                            <!-- Public URL -->
+                                            <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="12,0,0,0">
+                                                <TextBlock Text="Public URL:" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center" Margin="0,0,8,0"
+                                                           ToolTip="The publicly accessible URL created by the cloudflared tunnel. Copy this URL and paste it in ChatGPT Desktop → Settings → Apps → Create app → MCP Server URL."/>
+                                                <TextBox x:Name="publicUrlTextBox" Width="350" IsReadOnly="True" Style="{StaticResource ModernTextBox}" 
+                                                         Background="{StaticResource BackgroundCard}" FontSize="11" Text="Click 'Start Server' to generate URL"
+                                                         ToolTip="This URL is generated dynamically each time you start the server. It changes on every restart, so you'll need to update ChatGPT Desktop's MCP settings accordingly."/>
+                                                <Button x:Name="copyUrlButton" Content="📋 Copy" Click="CopyUrl_Click" Style="{StaticResource ModernButton}" Margin="8,0,0,0" IsEnabled="False"
+                                                        ToolTip="Copy the public tunnel URL to clipboard. Paste it in ChatGPT Desktop → Settings → Apps → Create app → MCP Server URL."/>
+                                            </StackPanel>
+
+                                            <!-- Utility Buttons -->
+                                            <StackPanel Grid.Column="3" Orientation="Horizontal">
+                                                <Button Content="🌐 Lessons" Click="CommunityLessonsSettings_Click" Style="{StaticResource IconButton}" Margin="0,0,4,0"
+                                                        ToolTip="Open Community Lessons settings. Configure the GitHub repository URL, personal access token, and sync interval for sharing lessons across CodeMerger users."/>
+                                                <Button Content="📄 Log" Click="OpenLog_Click" Style="{StaticResource IconButton}" Margin="0,0,4,0"
+                                                        ToolTip="Open the MCP server log file. Useful for debugging connection issues, viewing tool call history, and diagnosing errors."/>
+                                                <Button x:Name="tunnelHelpButton" Content="❓ Help" Click="TunnelHelp_Click" Style="{StaticResource IconButton}"
+                                                        ToolTip="Show detailed setup instructions for connecting ChatGPT Desktop to CodeMerger via the cloudflared tunnel."/>
+                                            </StackPanel>
+                                        </Grid>
+
+                                        <!-- ChatGPT Setup Instructions -->
+                                        <Border Background="{StaticResource BackgroundCard}" CornerRadius="6" Padding="16" Margin="0,4,0,0">
+                                            <StackPanel>
+                                                <TextBlock Text="📋 Setup Instructions" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" Margin="0,0,0,8"/>
+                                                <TextBlock Foreground="{StaticResource TextSecondary}" FontSize="11" TextWrapping="Wrap" LineHeight="20"
+                                                           Text="1. Click 'Start Server' above — this launches a local HTTP server + cloudflared tunnel&#x0a;2. Wait for the public URL to appear (may take a few seconds)&#x0a;3. Copy the URL with the 📋 button&#x0a;4. In ChatGPT Desktop: Settings → Apps → Create app&#x0a;5. Enable 'Developer Mode' (required for MCP)&#x0a;6. Paste the URL as 'MCP Server URL' and save&#x0a;7. ChatGPT can now use all CodeMerger tools"
+                                                           ToolTip="ChatGPT Desktop requires Developer Mode enabled and a publicly accessible MCP server URL. The cloudflared tunnel provides this without opening firewall ports."/>
+                                                <TextBlock Foreground="#6c7086" FontSize="10" TextWrapping="Wrap" Margin="0,8,0,0"
+                                                           Text="Tip: The tunnel URL changes every time you restart. Update the URL in ChatGPT Desktop settings after each restart. cloudflared is downloaded automatically on first use (~30MB)."
+                                                           ToolTip="cloudflared is Cloudflare's tunnel client. It creates a secure tunnel from your local machine to Cloudflare's edge network, making your local server accessible via a public URL without port forwarding."/>
+                                            </StackPanel>
+                                        </Border>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- ═══════════════ CONNECTION STATUS OVERVIEW ═══════════════ -->
+                                <Border Background="{StaticResource BackgroundDark}" CornerRadius="8" Padding="20">
+                                    <StackPanel>
+                                        <TextBlock Text="ℹ️ How MCP Connections Work" FontSize="14" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" Margin="0,0,0,12"
+                                                   ToolTip="Model Context Protocol (MCP) is a standard for connecting AI assistants to external tools. CodeMerger implements an MCP server that exposes code analysis and editing tools."/>
+                                        <TextBlock Foreground="{StaticResource TextSecondary}" FontSize="11" TextWrapping="Wrap" LineHeight="20"
+                                                   Text="CodeMerger acts as an MCP (Model Context Protocol) server that provides AI assistants with tools to navigate, search, edit, and build your codebase. Two connection methods are supported:&#x0a;&#x0a;• Claude Desktop — uses stdio pipes (local only, zero configuration after initial setup, auto-starts with Claude)&#x0a;• ChatGPT Desktop — uses Streamable HTTP over a cloudflared tunnel (requires starting the server each session, URL changes on restart)&#x0a;&#x0a;Both connections provide the same set of tools: get_file, search_code, str_replace, build, get_diagnostics, rename_symbol, and many more. The tools are registered dynamically based on your loaded workspace."
+                                                   ToolTip="MCP tools are context-aware. They operate on whichever workspace/project is currently selected in the CodeMerger GUI. Switching projects in the GUI switches the codebase that AI tools operate on."/>
+                                    </StackPanel>
+                                </Border>
+
+                            </StackPanel>
+                        </ScrollViewer>
+                    </TabItem>
                 </TabControl>
             </Border>
         </Grid>
 
-        <!-- BOTTOM BAR -->
-        <Border Grid.Row="3" Background="{StaticResource BackgroundCard}" Padding="24,16">
-            <Grid>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                </Grid.RowDefinitions>
-
-                <!-- Row 1: Claude Desktop Status -->
-                <Grid>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
-
-                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                        <TextBlock Text="Claude Desktop:" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" VerticalAlignment="Center" Margin="0,0,12,0"/>
-                        <Border Background="{StaticResource BackgroundDark}" CornerRadius="4" Padding="8,4" Margin="0,0,16,0">
-                            <TextBlock x:Name="claudeInstallStatus" Text="Checking..." Foreground="{StaticResource TextSecondary}" FontSize="11"/>
-                        </Border>
-                        <TextBlock Text="Config:" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" VerticalAlignment="Center" Margin="0,0,12,0"/>
-                        <Border Background="{StaticResource BackgroundDark}" CornerRadius="4" Padding="8,4">
-                            <TextBlock x:Name="claudeConfigStatus" Text="Checking..." Foreground="{StaticResource TextSecondary}" FontSize="11"/>
-                        </Border>
-                    </StackPanel>
-
-                    <!-- Output Folder -->
-                    <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
-                        <TextBlock Text="Output:" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                        <TextBox x:Name="outputFileTextBox" Width="300" IsReadOnly="True" Style="{StaticResource ModernTextBox}" 
-                                 Background="{StaticResource BackgroundDark}" FontSize="11"/>
-                        <Button Content="📂 Open" Click="OpenFolder_Click" Style="{StaticResource ModernButton}" Margin="8,0,0,0"/>
-                    </StackPanel>
-
-                    <!-- Action Buttons -->
-                    <StackPanel Grid.Column="2" Orientation="Horizontal">
-                        <Button x:Name="claudeDownloadButton" Content="Download Claude" Click="ClaudeDownload_Click" Style="{StaticResource LinkButton}" Visibility="Collapsed"/>
-                        <Button x:Name="claudeAddConfigButton" Content="Add to Claude" Click="ClaudeAddConfig_Click" Style="{StaticResource ModernButton}" Visibility="Collapsed" Margin="0,0,8,0"/>
-                        <Button Content="Open Config" Click="ClaudeOpenConfigFolder_Click" Style="{StaticResource LinkButton}"/>
-                    </StackPanel>
-                </Grid>
-
-                <!-- Row 2: ChatGPT Desktop Status -->
-                <Border Grid.Row="1" BorderBrush="{StaticResource BorderColor}" BorderThickness="0,1,0,0" Margin="0,12,0,0" Padding="0,12,0,0">
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-
-                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                            <TextBlock Text="ChatGPT Desktop:" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" VerticalAlignment="Center" Margin="0,0,12,0"/>
-                            <Border Background="{StaticResource BackgroundDark}" CornerRadius="4" Padding="8,4" Margin="0,0,12,0">
-                                <StackPanel Orientation="Horizontal">
-                                    <Ellipse x:Name="chatGptIndicator" Width="8" Height="8" Fill="#555" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                                    <TextBlock x:Name="chatGptStatusText" Text="Stopped" Foreground="{StaticResource TextSecondary}" FontSize="11"/>
-                                </StackPanel>
-                            </Border>
-                        </StackPanel>
-
-                        <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="8,0,0,0">
-                            <Button x:Name="chatGptStartButton" Content="▶ Start ChatGPT Server" Click="ChatGptStart_Click" Style="{StaticResource PrimaryButton}"
-                                    ToolTip="Start HTTP server and tunnel for ChatGPT Desktop"/>
-                            <Button x:Name="chatGptStopButton" Content="⏹ Stop" Click="ChatGptStop_Click" Style="{StaticResource ModernButton}" Visibility="Collapsed" Margin="8,0,0,0"
-                                    ToolTip="Stop server and tunnel"/>
-                        </StackPanel>
-
-                        <!-- Public URL -->
-                        <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
-                            <TextBlock Text="URL:" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                            <TextBox x:Name="publicUrlTextBox" Width="380" IsReadOnly="True" Style="{StaticResource ModernTextBox}" 
-                                     Background="{StaticResource BackgroundDark}" FontSize="11" Text="Click 'Start ChatGPT Server' to get URL"
-                                     ToolTip="Copy this URL to ChatGPT Desktop → Settings → Apps → Create app → MCP Server URL"/>
-                            <Button x:Name="copyUrlButton" Content="📋 Copy" Click="CopyUrl_Click" Style="{StaticResource ModernButton}" Margin="8,0,0,0" IsEnabled="False"
-                                    ToolTip="Copy URL to clipboard"/>
-                        </StackPanel>
-
-                        <!-- Help -->
-                        <StackPanel Grid.Column="3" Orientation="Horizontal">
-                            <Button Content="📄 Log" Click="OpenLog_Click" Style="{StaticResource IconButton}" ToolTip="Open MCP log file" Margin="0,0,8,0"/>
-                            <Button x:Name="tunnelHelpButton" Content="?" Click="TunnelHelp_Click" Style="{StaticResource IconButton}" ToolTip="Setup instructions"/>
-                        </StackPanel>
-                    </Grid>
-                </Border>
-            </Grid>
-        </Border>
+        <!-- BOTTOM BAR collapsed — content moved to LLM Connections tab -->
+        <Border Grid.Row="3" Visibility="Collapsed"/>
 
         <!-- STATUS BAR -->
         <Border Grid.Row="4" Background="#12121f" Padding="24,12">
