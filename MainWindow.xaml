@@ -609,8 +609,6 @@
 
                                             <!-- Utility Buttons -->
                                             <StackPanel Grid.Column="3" Orientation="Horizontal">
-                                                <Button Content="🌐 Lessons" Click="CommunityLessonsSettings_Click" Style="{StaticResource IconButton}" Margin="0,0,4,0"
-                                                        ToolTip="Open Community Lessons settings. Configure the GitHub repository URL, personal access token, and sync interval for sharing lessons across CodeMerger users."/>
                                                 <Button Content="📄 Log" Click="OpenLog_Click" Style="{StaticResource IconButton}" Margin="0,0,4,0"
                                                         ToolTip="Open the MCP server log file. Useful for debugging connection issues, viewing tool call history, and diagnosing errors."/>
                                                 <Button x:Name="tunnelHelpButton" Content="❓ Help" Click="TunnelHelp_Click" Style="{StaticResource IconButton}"
@@ -646,6 +644,158 @@
 
                             </StackPanel>
                         </ScrollViewer>
+                    </TabItem>
+
+                    <!-- Tab 4: Lessons -->
+                    <TabItem x:Name="lessonsTab" Header="📚 Lessons">
+                        <Grid Margin="0,16,0,0">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <!-- Action Bar -->
+                            <Grid Grid.Row="0" Margin="0,0,0,12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <StackPanel Orientation="Horizontal">
+                                    <Button x:Name="syncLessonsButton" Content="🔄 Sync Now" Click="SyncLessonsNow_Click" Style="{StaticResource ModernButton}" Margin="0,0,6,0"
+                                            ToolTip="Force-sync community lessons from GitHub"/>
+                                    <Button x:Name="deleteLessonButton" Content="🗑 Delete" Click="DeleteLesson_Click" Style="{StaticResource ModernButton}" Margin="0,0,6,0" IsEnabled="False"
+                                            ToolTip="Delete the selected local lesson"/>
+                                    <Button x:Name="submitLessonButton" Content="📤 Submit" Click="SubmitLesson_Click" Style="{StaticResource ModernButton}" Margin="0,0,6,0" IsEnabled="False"
+                                            ToolTip="Submit the selected local lesson to GitHub for community review"/>
+                                    <Button x:Name="clearLocalLessonsButton" Content="🧹 Clear All Local" Click="ClearLocalLessons_Click" Style="{StaticResource ModernButton}"
+                                            ToolTip="Delete all local lessons"/>
+                                    <Button Content="⚙️ Settings" Click="CommunityLessonsSettings_Click" Style="{StaticResource ModernButton}" Margin="6,0,0,0"
+                                            ToolTip="Open Community Lessons settings (GitHub token, repo URL, sync interval)"/>
+                                </StackPanel>
+
+                                <!-- Sync Status -->
+                                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <TextBlock x:Name="lessonSyncStatusText" Text="" FontSize="11" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Grid>
+
+                            <!-- Lists -->
+                            <Grid Grid.Row="1">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="12"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+
+                                <!-- Left: Local Lessons -->
+                                <Grid Grid.Column="0">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="*"/>
+                                    </Grid.RowDefinitions>
+
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                        <TextBlock Text="📝 Local Lessons" FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" VerticalAlignment="Center"/>
+                                        <TextBlock x:Name="localLessonCountText" Text="" FontSize="11" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                    </StackPanel>
+
+                                    <ListBox x:Name="localLessonsListBox" Grid.Row="1" Style="{StaticResource ModernListBox}"
+                                             HorizontalContentAlignment="Stretch" SelectionChanged="LocalLessonListBox_SelectionChanged">
+                                        <ListBox.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border Padding="8,6" CornerRadius="4" Margin="0,1">
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <Border Background="#2a2a4a" CornerRadius="4" Padding="6,2" VerticalAlignment="Top" Margin="0,0,8,0">
+                                                            <TextBlock Text="{Binding Type}" FontSize="10" Foreground="{StaticResource AccentPrimary}" FontWeight="SemiBold"/>
+                                                        </Border>
+                                                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                                            <TextBlock Text="{Binding Component}" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" TextTrimming="CharacterEllipsis"/>
+                                                            <TextBlock Text="{Binding Observation}" FontSize="10" Foreground="{StaticResource TextSecondary}" TextTrimming="CharacterEllipsis" MaxHeight="32"/>
+                                                        </StackPanel>
+                                                        <TextBlock Grid.Column="2" Text="{Binding Timestamp, StringFormat='{}{0:MM/dd}'}" FontSize="9" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Top" Margin="8,0,0,0"/>
+                                                    </Grid>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ListBox.ItemTemplate>
+                                    </ListBox>
+                                </Grid>
+
+                                <!-- Right: Community Lessons -->
+                                <Grid Grid.Column="2">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="*"/>
+                                    </Grid.RowDefinitions>
+
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                        <TextBlock Text="🌐 Community Lessons" FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" VerticalAlignment="Center"/>
+                                        <TextBlock x:Name="communityLessonCountText" Text="" FontSize="11" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                    </StackPanel>
+
+                                    <ListBox x:Name="communityLessonsListBox" Grid.Row="1" Style="{StaticResource ModernListBox}"
+                                             HorizontalContentAlignment="Stretch" SelectionChanged="CommunityLessonListBox_SelectionChanged">
+                                        <ListBox.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border Padding="8,6" CornerRadius="4" Margin="0,1">
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <Border Background="#1a3a2a" CornerRadius="4" Padding="6,2" VerticalAlignment="Top" Margin="0,0,8,0">
+                                                            <TextBlock Text="{Binding Type}" FontSize="10" Foreground="{StaticResource AccentSuccess}" FontWeight="SemiBold"/>
+                                                        </Border>
+                                                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                                            <TextBlock Text="{Binding Component}" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" TextTrimming="CharacterEllipsis"/>
+                                                            <TextBlock Text="{Binding Observation}" FontSize="10" Foreground="{StaticResource TextSecondary}" TextTrimming="CharacterEllipsis" MaxHeight="32"/>
+                                                        </StackPanel>
+                                                        <StackPanel Grid.Column="2" VerticalAlignment="Top" Margin="8,0,0,0">
+                                                            <TextBlock Text="{Binding ContributedBy}" FontSize="9" Foreground="{StaticResource AccentSuccess}" HorizontalAlignment="Right"/>
+                                                        </StackPanel>
+                                                    </Grid>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ListBox.ItemTemplate>
+                                    </ListBox>
+                                </Grid>
+                            </Grid>
+
+                            <!-- Detail Panel -->
+                            <Border x:Name="lessonDetailPanel" Grid.Row="2" Background="{StaticResource BackgroundDark}" CornerRadius="8" Padding="16" Margin="0,12,0,0" 
+                                    MaxHeight="200" Visibility="Collapsed">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="*"/>
+                                    </Grid.RowDefinitions>
+                                    <Grid Margin="0,0,0,8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Border Background="#2a2a4a" CornerRadius="4" Padding="8,3" Margin="0,0,8,0">
+                                            <TextBlock x:Name="detailTypeText" FontSize="10" Foreground="{StaticResource AccentPrimary}" FontWeight="SemiBold"/>
+                                        </Border>
+                                        <TextBlock x:Name="detailComponentText" Grid.Column="1" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" VerticalAlignment="Center"/>
+                                        <TextBlock x:Name="detailContributorText" Grid.Column="3" FontSize="10" Foreground="{StaticResource AccentSuccess}" VerticalAlignment="Center"/>
+                                    </Grid>
+                                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                                        <TextBlock x:Name="detailContentText" FontSize="11" Foreground="{StaticResource TextSecondary}" TextWrapping="Wrap"/>
+                                    </ScrollViewer>
+                                </Grid>
+                            </Border>
+                        </Grid>
                     </TabItem>
                 </TabControl>
             </Border>

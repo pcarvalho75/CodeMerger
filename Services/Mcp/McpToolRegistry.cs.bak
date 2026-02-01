@@ -384,10 +384,12 @@ namespace CodeMerger.Services.Mcp
                         "If found, preserve the existing version unless explicitly asked to change it.\n\n" +
                         "WORKFLOW - Before making ANY file modifications:\n" +
                         "1. Present a roadmap of all planned changes to the user\n" +
-                        "2. Ask: 'Proceed with AUTOMATIC editing (I'll make all changes), or STEP-BY-STEP (I'll show each change for your approval)?'\n" +
-                        "3. If STEP-BY-STEP: Show the original code and proposed new code in chat, wait for user to say OK before calling this tool\n" +
-                        "4. Only call this tool AFTER user confirms the change\n" +
-                        "5. If AUTOMATIC: Proceed with all changes after initial roadmap approval",
+                        "2. IMPORTANT: By default, pause between each roadmap step and wait for the user to confirm before proceeding to the next step. Inform the user of this at roadmap presentation. Only skip pauses if the user explicitly says to proceed without stopping.\n" +
+                        "3. Ask: 'Proceed with AUTOMATIC editing (I'll make all changes), or STEP-BY-STEP (I'll show each change for your approval)?'\n" +
+                        "4. If STEP-BY-STEP: Show the original code and proposed new code in chat, wait for user to say OK before calling this tool\n" +
+                        "5. Only call this tool AFTER user confirms the change\n" +
+                        "6. If AUTOMATIC: Proceed with all changes after initial roadmap approval\n" +
+                        "7. ALWAYS add a FINAL roadmap step: 'Review & Cleanup' — go back through ALL changes to check for clean code, red flags, loose ends, dead references, and naming inconsistencies. This step is mandatory and must not be skipped.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -899,7 +901,7 @@ namespace CodeMerger.Services.Mcp
                     name = "codemerger_submit_lesson",
                     description = "Submit a local lesson to the community repository as a GitHub Issue for curation.\n\n" +
                         "WHEN TO USE: When a local lesson is valuable enough to share with all CodeMerger users.\n" +
-                        "REQUIRES: GitHub token configured in CodeMerger Settings > Community Lessons.",
+                        "REQUIRES: GitHub sign-in configured in CodeMerger Settings > Community Lessons.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
