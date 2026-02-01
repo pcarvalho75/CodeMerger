@@ -250,8 +250,8 @@ namespace CodeMerger
         {
             try
             {
-                var exePath = _claudeDesktopService.GetCurrentExePath();
-                _claudeDesktopService.EnsureConfigured(exePath);
+                _claudeDesktopService.DeployStableCopy();
+                _claudeDesktopService.EnsureConfigured();
                 UpdateStatus("Added CodeMerger to Claude Desktop config.", Brushes.LightGreen);
                 RefreshClaudeDesktopStatus();
             }
@@ -554,8 +554,8 @@ namespace CodeMerger
         {
             try
             {
-                var exePath = _claudeDesktopService.GetCurrentExePath();
-                _claudeDesktopService.EnsureConfigured(exePath);
+                _claudeDesktopService.DeployStableCopy();
+                _claudeDesktopService.EnsureConfigured();
             }
             catch
             {

@@ -250,8 +250,8 @@ namespace CodeMerger
         {
             try
             {
-                var exePath = _claudeDesktopService.GetCurrentExePath();
-                _claudeDesktopService.EnsureConfigured(exePath);
+                _claudeDesktopService.DeployStableCopy();
+                _claudeDesktopService.EnsureConfigured();
                 UpdateStatus("Added CodeMerger to Claude Desktop config.", Brushes.LightGreen);
                 RefreshClaudeDesktopStatus();
             }
@@ -332,16 +332,14 @@ namespace CodeMerger
                     chatGptConnectionIndicator.Fill = new SolidColorBrush(Color.FromRgb(0, 255, 150));
                     chatGptIndicator.Fill = new SolidColorBrush(Color.FromRgb(0, 255, 150));
                     chatGptStatusText.Text = method;
-                    connectionStatusText.Text = $"ChatGPT: {method}";
-                    
+                
                     await Task.Delay(300);
-                    
+                
                     if (_isChatGptConnected)
                     {
                         chatGptConnectionIndicator.Fill = new SolidColorBrush(Color.FromRgb(16, 163, 127));
                         chatGptIndicator.Fill = new SolidColorBrush(Color.FromRgb(16, 163, 127));
                         chatGptStatusText.Text = "Connected";
-                        connectionStatusText.Text = "ChatGPT connected";
                     }
                 });
 
