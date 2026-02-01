@@ -363,8 +363,18 @@ namespace CodeMerger.Services.Mcp
                 {
                     name = "codemerger_str_replace",
                     description = "Replace a unique string in a file with another string. The oldStr must appear exactly once in the file.\n\n" +
+                        "⚠️ STOP — USE THE RIGHT TOOL FIRST:\n" +
+                        "- Renaming a class/method/property/variable? → Use `rename_symbol` instead (updates ALL references automatically)\n" +
+                        "- Moving/renaming a file? → Use `move_file` instead (updates all using statements)\n" +
+                        "- Adding a parameter to a method? → Use `add_parameter` instead (updates all call sites)\n" +
+                        "- Extracting code into a new method? → Use `extract_method` instead\n" +
+                        "- Only use `str_replace` for edits that DON'T fall into the above categories.\n\n" +
                         "PREFERRED: Use this for surgical edits instead of rewriting entire files with `write_file`.\n" +
                         "DELETE: Set newStr to empty string to delete the match.\n\n" +
+                        "⚠️ SEQUENTIAL EDIT SAFETY:\n" +
+                        "- Making multiple edits to the same file? Do ONE edit at a time.\n" +
+                        "- Verify it compiles (get_diagnostics) before the next edit.\n" +
+                        "- Each str_replace overwrites the .bak, so chaining edits without verification risks corruption.\n\n" +
                         "IF IT FAILS ('not found'):\n" +
                         "1. Call `get_lines` with line numbers from the error to see exact whitespace\n" +
                         "2. Copy the exact content including whitespace\n" +
@@ -397,8 +407,11 @@ namespace CodeMerger.Services.Mcp
                 {
                     name = "codemerger_write_file",
                     description = "Write content to a file (create new or overwrite existing). Creates a .bak backup before overwriting.\n\n" +
-                        "WHEN TO USE: Creating new files, or when changes are so extensive that `str_replace` isn't practical.\n" +
-                        "PREFER: `str_replace` for small/medium changes — it's safer and preserves more context.\n" +
+                        "⚠️ STOP — USE THE RIGHT TOOL FIRST:\n" +
+                        "- Small/medium changes? → Use `str_replace` instead (safer, preserves context)\n" +
+                        "- Renaming a class/method/property? → Use `rename_symbol` instead\n" +
+                        "- Moving a file? → Use `move_file` instead\n" +
+                        "- Only use `write_file` for NEW files or when changes are so extensive that str_replace isn't practical.\n\n" +
                         "TIP: Use `preview_write` first to see a diff of what will change.\n\n" +
                         "WORKFLOW - Before making ANY file modifications:\n" +
                         "1. Present a roadmap of all planned changes to the user\n" +
@@ -475,6 +488,11 @@ namespace CodeMerger.Services.Mcp
                 {
                     name = "codemerger_move_file",
                     description = "Move or rename a file and update all using statements and references across the project.\n\n" +
+                        "USE THIS INSTEAD OF manual file operations WHEN:\n" +
+                        "- Moving a file to a different folder\n" +
+                        "- Renaming a file\n" +
+                        "- Reorganizing project structure\n" +
+                        "This automatically updates ALL using statements and namespace references.\n\n" +
                         "BEFORE USING: Call `get_dependencies` to understand what will be affected.\n" +
                         "PREVIEW FIRST: Always run with preview=true first to see all affected files.\n" +
                         "BACKUPS: Creates backups of all modified files.",
@@ -501,7 +519,12 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_rename_symbol",
-                    description = "Rename a symbol (class, method, variable) across all files in the project.\n\n" +
+                    description = "Rename a symbol (class, method, property, variable) across all files in the project.\n\n" +
+                        "USE THIS INSTEAD OF str_replace WHEN:\n" +
+                        "- Renaming ANY class, method, property, field, or variable\n" +
+                        "- The name appears in multiple files\n" +
+                        "- You need all references updated automatically\n" +
+                        "This is ALWAYS better than manual find-and-replace for renaming.\n\n" +
                         "BEFORE USING: ALWAYS call `get_dependencies` first to understand the scope of impact.\n" +
                         "PREVIEW FIRST: Always run with preview=true to see all affected locations.\n\n" +
                         "WORKFLOW:\n" +
@@ -526,8 +549,13 @@ namespace CodeMerger.Services.Mcp
                 {
                     name = "codemerger_generate_interface",
                     description = "Generate an interface from a class's public members.\n\n" +
+                        "USE THIS WHEN:\n" +
+                        "- Introducing dependency injection for a class\n" +
+                        "- Making a class testable/mockable\n" +
+                        "- User asks to 'extract an interface' or 'add an interface'\n" +
+                        "- Refactoring to program against abstractions\n\n" +
                         "RETURNS: Generated code — you must then write it to a file using `write_file`.\n" +
-                        "NEXT STEP: After creating the interface file, update the class to implement it.",
+                        "NEXT STEP: After creating the interface file, update the class to implement it using `implement_interface`.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -544,6 +572,10 @@ namespace CodeMerger.Services.Mcp
                 {
                     name = "codemerger_extract_method",
                     description = "Extract a range of lines into a new method.\n\n" +
+                        "USE THIS INSTEAD OF manual copy-paste WHEN:\n" +
+                        "- A block of code should become its own method\n" +
+                        "- Reducing method length or complexity\n" +
+                        "- Eliminating duplicate code blocks (pair with `find_duplicates`)\n\n" +
                         "RETURNS: Modified file content — you must then write it using `write_file`.\n" +
                         "TIP: Use `get_lines` first to identify the exact line range to extract.",
                     inputSchema = new Dictionary<string, object>
@@ -564,6 +596,10 @@ namespace CodeMerger.Services.Mcp
                 {
                     name = "codemerger_add_parameter",
                     description = "Add a parameter to a method and update all call sites.\n\n" +
+                        "USE THIS INSTEAD OF str_replace WHEN:\n" +
+                        "- Adding a new parameter to any method\n" +
+                        "- The method is called from multiple places\n" +
+                        "This automatically updates ALL call sites with the default value.\n\n" +
                         "BEFORE USING: Call `get_callers` to see all places that call this method.\n" +
                         "PREVIEW FIRST: Always run with preview=true to see all affected call sites.\n\n" +
                         "WORKFLOW:\n" +
@@ -590,6 +626,10 @@ namespace CodeMerger.Services.Mcp
                 {
                     name = "codemerger_implement_interface",
                     description = "Generate stub implementations for all members of an interface in a class.\n\n" +
+                        "USE THIS WHEN:\n" +
+                        "- A class needs to implement a new interface\n" +
+                        "- After using `generate_interface` to create an interface\n" +
+                        "- Adding interface compliance to an existing class\n\n" +
                         "RETURNS: Code to add — you must insert it into the class using `str_replace`.\n" +
                         "TIP: Use `get_type` on the interface first to see what members will be generated.",
                     inputSchema = new Dictionary<string, object>
@@ -696,6 +736,8 @@ namespace CodeMerger.Services.Mcp
                     name = "codemerger_switch_project",
                     description = "Switch to a different CodeMerger project.\n\n" +
                         "HOT-SWAP: Server re-indexes the new workspace without restarting — no reconnection needed.\n" +
+                        "COMBINE WORKSPACES: Pass comma-separated names (e.g., 'Sequoia, SmartMoney') to merge multiple workspaces into one virtual workspace.\n" +
+                        "Shared directories are deduplicated. Each file tracks its source workspace.\n\n" +
                         "FIRST: Use `list_projects` to see available projects.",
                     inputSchema = new Dictionary<string, object>
                     {
@@ -898,6 +940,23 @@ namespace CodeMerger.Services.Mcp
                             }
                         },
                         { "required", Array.Empty<string>() }
+                    }
+                },
+                new
+                {
+                    name = "codemerger_delete_note",
+                    description = "Delete a specific note by line number.\n\n" +
+                        "WHEN TO USE: When you need to remove a single note without clearing the entire section.\n" +
+                        "TIP: Use `get_notes` first to see line numbers.",
+                    inputSchema = new Dictionary<string, object>
+                    {
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>
+                            {
+                                { "lineNumber", new Dictionary<string, object> { { "type", "integer" }, { "description", "Line number of the note to delete (1-indexed, shown in get_notes output)" } } }
+                            }
+                        },
+                        { "required", new[] { "lineNumber" } }
                     }
                 }
             };
