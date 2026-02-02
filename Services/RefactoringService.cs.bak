@@ -18,19 +18,24 @@ namespace CodeMerger.Services
     {
         private readonly WorkspaceAnalysis _workspaceAnalysis;
         private readonly List<string> _inputDirectories;
+        private readonly WorkspaceSettings _settings;
 
-        public RefactoringService(WorkspaceAnalysis workspaceAnalysis, List<string> inputDirectories)
+        public RefactoringService(WorkspaceAnalysis workspaceAnalysis, List<string> inputDirectories, WorkspaceSettings? settings = null)
         {
             _workspaceAnalysis = workspaceAnalysis;
             _inputDirectories = inputDirectories;
+            _settings = settings ?? WorkspaceSettings.GetDefaultSettings();
         }
 
         /// <summary>
         /// Write content to a file (create or overwrite).
         /// Supports ../ paths to write to sibling projects within the workspace.
         /// </summary>
-        public WriteFileResult WriteFile(string relativePath, string content, bool createBackup = true)
+        public WriteFileResult WriteFile(string relativePath, string content, bool? createBackup = null)
         {
+            // Use settings default if not explicitly specified
+            var shouldBackup = createBackup ?? _settings.CreateBackupFiles;
+            
             var result = new WriteFileResult { RelativePath = relativePath };
 
             try
@@ -86,6 +91,19 @@ namespace CodeMerger.Services
                     f.FilePath.Equals(fullPath, StringComparison.OrdinalIgnoreCase) ||
                     f.RelativePath.Equals(relativePath, StringComparison.OrdinalIgnoreCase) ||
                     f.RelativePath.Replace('\\', '/').Equals(relativePath.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase));
+
+                // SAFETY CHECK: If creating a NEW file with multiple roots and no explicit root prefix,
+                // require explicit project specification to avoid accidentally creating in wrong location
+                if (existingFile == null && matchedRoot == null && _inputDirectories.Count > 1)
+                {
+                    var rootNames = _inputDirectories.Select(d => Path.GetFileName(d.TrimEnd('\\', '/'))).ToList();
+                    result.Success = false;
+                    result.Error = $"Ambiguous target: This workspace has multiple project roots and the path '{relativePath}' doesn't specify which one.\n\n" +
+                                $"**Available roots:** {string.Join(", ", rootNames)}\n\n" +
+                                $"**Please prefix your path with the target project**, e.g.:\n" +
+                                string.Join("\n", rootNames.Take(3).Select(r => $"- `{r}/{relativePath}`"));
+                    return result;
+                }
 
                 if (existingFile != null)
                 {
@@ -267,8 +285,9 @@ namespace CodeMerger.Services
 
                         if (!preview)
                         {
-                            // Create backup
-                            File.Copy(file.FilePath, file.FilePath + ".bak", overwrite: true);
+                            // Create backup only if settings allow
+                            if (_settings.CreateBackupFiles)
+                                File.Copy(file.FilePath, file.FilePath + ".bak", overwrite: true);
                             File.WriteAllText(file.FilePath, newContent);
                         }
                     }

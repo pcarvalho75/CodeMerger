@@ -308,7 +308,7 @@ namespace CodeMerger.Services.Mcp
             }
             finally
             {
-                GC.Collect(2, GCCollectionMode.Aggressive, blocking: false);
+                GC.Collect(2, GCCollectionMode.Optimized, blocking: false);
             }
         }
     }

@@ -18,6 +18,7 @@ namespace CodeMerger.Services.Mcp
         private readonly RefactoringService _refactoringService;
         private readonly FilePathResolver _pathResolver;
         private readonly List<string> _inputDirectories;
+        private readonly WorkspaceSettings _settings;
         private readonly Action<string> _updateFileIndex;
         private readonly Action<string> _sendActivity;
         private readonly Action<string> _log;
@@ -26,6 +27,7 @@ namespace CodeMerger.Services.Mcp
             WorkspaceAnalysis workspaceAnalysis,
             RefactoringService refactoringService,
             List<string> inputDirectories,
+            WorkspaceSettings settings,
             Action<string> updateFileIndex,
             Action<string> sendActivity,
             Action<string> log)
@@ -34,6 +36,7 @@ namespace CodeMerger.Services.Mcp
             _refactoringService = refactoringService;
             _pathResolver = new FilePathResolver(workspaceAnalysis, inputDirectories);
             _inputDirectories = inputDirectories;
+            _settings = settings;
             _updateFileIndex = updateFileIndex;
             _sendActivity = sendActivity;
             _log = log;
@@ -51,7 +54,8 @@ namespace CodeMerger.Services.Mcp
             var oldStr = oldStrEl.GetString() ?? "";
             var newStr = arguments.TryGetProperty("newStr", out var newStrEl) ? newStrEl.GetString() ?? "" : "";
 
-            var createBackup = true;
+            // Use settings default, but allow override from arguments
+            var createBackup = _settings.CreateBackupFiles;
             if (arguments.TryGetProperty("createBackup", out var backupEl))
                 createBackup = backupEl.GetBoolean();
 
@@ -398,7 +402,8 @@ namespace CodeMerger.Services.Mcp
 
             _sendActivity($"Writing: {path}");
 
-            var createBackup = true;
+            // Use settings default, but allow override from arguments
+            var createBackup = _settings.CreateBackupFiles;
             if (arguments.TryGetProperty("createBackup", out var backupEl))
                 createBackup = backupEl.GetBoolean();
 
@@ -445,9 +450,13 @@ namespace CodeMerger.Services.Mcp
 
             try
             {
-                // Create backup before deleting
-                var backupPath = file.FilePath + ".bak";
-                File.Copy(file.FilePath, backupPath, true);
+                // Create backup before deleting (respects settings)
+                string? backupPath = null;
+                if (_settings.CreateBackupFiles)
+                {
+                    backupPath = file.FilePath + ".bak";
+                    File.Copy(file.FilePath, backupPath, true);
+                }
 
                 // Delete the file
                 File.Delete(file.FilePath);
@@ -460,9 +469,17 @@ namespace CodeMerger.Services.Mcp
                 sb.AppendLine();
                 sb.AppendLine($"**File:** `{file.RelativePath}`");
                 sb.AppendLine($"**Status:** Deleted");
-                sb.AppendLine($"**Backup:** `{backupPath}`");
-                sb.AppendLine();
-                sb.AppendLine("*Use `codemerger_undo` to restore this file if needed.*");
+                if (backupPath != null)
+                {
+                    sb.AppendLine($"**Backup:** `{backupPath}`");
+                    sb.AppendLine();
+                    sb.AppendLine("*Use `codemerger_undo` to restore this file if needed.*");
+                }
+                else
+                {
+                    sb.AppendLine();
+                    sb.AppendLine("*No backup created (backups disabled in settings).*");
+                }
 
                 return sb.ToString();
             }
@@ -549,7 +566,7 @@ namespace CodeMerger.Services.Mcp
 
             _sendActivity($"MoveFile: {oldPath} -> {newPath}");
 
-            var (file, findError) = FindFile(oldPath);
+            var (file, findError) = _pathResolver.FindFile(oldPath);
             if (file == null)
                 return findError!;
 

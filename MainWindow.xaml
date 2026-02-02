@@ -471,6 +471,122 @@
                                      HorizontalContentAlignment="Stretch" FontSize="12"/>
                         </Grid>
                     </TabItem>
+
+                    <!-- Tab 3: Parameters -->
+                    <TabItem Header="⚙️ Parameters">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,16,0,0">
+                            <StackPanel>
+                                <!-- Backup Settings Section -->
+                                <Border Background="{StaticResource BackgroundDark}" CornerRadius="8" Padding="20" Margin="0,0,0,16">
+                                    <StackPanel>
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,16">
+                                            <TextBlock Text="📦" FontSize="18" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                            <TextBlock Text="BACKUP SETTINGS" FontSize="14" FontWeight="SemiBold" 
+                                                       Foreground="{StaticResource TextPrimary}" VerticalAlignment="Center"/>
+                                        </StackPanel>
+
+                                        <!-- Create Backup Files -->
+                                        <CheckBox x:Name="createBackupFilesCheckBox" Margin="0,0,0,8"
+                                                  Foreground="{StaticResource TextPrimary}" FontSize="13"
+                                                  Checked="CreateBackupFiles_Changed" Unchecked="CreateBackupFiles_Changed">
+                                            <TextBlock Text="Create .bak backup files" TextWrapping="Wrap"/>
+                                        </CheckBox>
+                                        <TextBlock Text="When enabled, CodeMerger creates .bak files before modifying or deleting files. Provides safety but can clutter workspace."
+                                                   Foreground="{StaticResource TextSecondary}" FontSize="11" TextWrapping="Wrap" Margin="24,0,0,16"/>
+
+                                        <!-- Auto-cleanup -->
+                                        <CheckBox x:Name="autoCleanupCheckBox" Margin="0,0,0,8"
+                                                  Foreground="{StaticResource TextPrimary}" FontSize="13"
+                                                  Checked="AutoCleanup_Changed" Unchecked="AutoCleanup_Changed">
+                                            <TextBlock Text="Auto-cleanup old backups" TextWrapping="Wrap"/>
+                                        </CheckBox>
+                                        <StackPanel Orientation="Horizontal" Margin="24,0,0,16">
+                                            <TextBlock Text="Delete .bak files older than" Foreground="{StaticResource TextSecondary}" 
+                                                       FontSize="12" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                            <TextBox x:Name="backupRetentionTextBox" Width="60" Style="{StaticResource ModernTextBox}"
+                                                     Text="24" FontSize="12" TextChanged="BackupRetention_TextChanged"
+                                                     ToolTip="Hours (1-720)"/>
+                                            <TextBlock Text="hours" Foreground="{StaticResource TextSecondary}" 
+                                                       FontSize="12" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                        </StackPanel>
+
+                                        <!-- Max backups per file -->
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,16">
+                                            <TextBlock Text="Max backups per file:" Foreground="{StaticResource TextPrimary}" 
+                                                       FontSize="13" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                            <TextBox x:Name="maxBackupsTextBox" Width="60" Style="{StaticResource ModernTextBox}"
+                                                     Text="1" FontSize="12" TextChanged="MaxBackups_TextChanged"
+                                                     ToolTip="Keep only N most recent .bak files per original (1-100)"/>
+                                        </StackPanel>
+
+                                        <!-- Cleanup buttons -->
+                                        <StackPanel Orientation="Horizontal">
+                                            <Button Content="🗑 Clean All Backups" Click="CleanAllBackups_Click" 
+                                                    Style="{StaticResource ModernButton}" Margin="0,0,12,0"
+                                                    ToolTip="Delete all .bak files in this workspace"/>
+                                            <Button Content="📊 Show Backup Stats" Click="ShowBackupStats_Click" 
+                                                    Style="{StaticResource ModernButton}"
+                                                    ToolTip="Show current backup file statistics"/>
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- MCP Activity Settings Section -->
+                                <Border Background="{StaticResource BackgroundDark}" CornerRadius="8" Padding="20" Margin="0,0,0,16">
+                                    <StackPanel>
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,16">
+                                            <TextBlock Text="⚡" FontSize="18" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                            <TextBlock Text="MCP ACTIVITY SETTINGS" FontSize="14" FontWeight="SemiBold" 
+                                                       Foreground="{StaticResource TextPrimary}" VerticalAlignment="Center"/>
+                                        </StackPanel>
+
+                                        <!-- Timeout threshold -->
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                            <TextBlock Text="Timeout threshold:" Foreground="{StaticResource TextPrimary}" 
+                                                       FontSize="13" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                            <TextBox x:Name="timeoutThresholdTextBox" Width="60" Style="{StaticResource ModernTextBox}"
+                                                     Text="45" FontSize="12" TextChanged="TimeoutThreshold_TextChanged"
+                                                     ToolTip="Seconds before showing timeout warning (5-300)"/>
+                                            <TextBlock Text="seconds" Foreground="{StaticResource TextSecondary}" 
+                                                       FontSize="12" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                        </StackPanel>
+                                        <TextBlock Text="Show timeout warning when Claude doesn't respond after this many seconds."
+                                                   Foreground="{StaticResource TextSecondary}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,16"/>
+
+                                        <!-- Show session statistics -->
+                                        <CheckBox x:Name="showSessionStatsCheckBox" IsChecked="True"
+                                                  Foreground="{StaticResource TextPrimary}" FontSize="13"
+                                                  Checked="ShowSessionStats_Changed" Unchecked="ShowSessionStats_Changed">
+                                            <TextBlock Text="Show session statistics" TextWrapping="Wrap"/>
+                                        </CheckBox>
+                                        <TextBlock Text="Display call count, timing, and timeout info in the bottom status bar."
+                                                   Foreground="{StaticResource TextSecondary}" FontSize="11" TextWrapping="Wrap" Margin="24,0,0,0"/>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- Settings Restart Banner -->
+                                <Border x:Name="settingsRestartBanner" Background="#3a2a1a" CornerRadius="8" Padding="16" 
+                                        Margin="0,0,0,16" Visibility="Collapsed">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="⚠️" FontSize="16" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                                        <TextBlock Grid.Column="1" Text="Settings saved. MCP server restart required for backup settings to take effect."
+                                                   Foreground="{StaticResource AccentWarning}" FontSize="12" VerticalAlignment="Center" TextWrapping="Wrap"/>
+                                        <Button Grid.Column="2" Content="Restart Server" Click="RestartMcpServer_Click" 
+                                                Style="{StaticResource ModernButton}" Margin="12,0,0,0"/>
+                                    </Grid>
+                                </Border>
+
+                                <!-- Info footer -->
+                                <TextBlock Text="ℹ️  Changes are saved automatically per workspace. Some settings require MCP server restart."
+                                           Foreground="{StaticResource TextSecondary}" FontSize="11" FontStyle="Italic"/>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </TabItem>
                 </TabControl>
             </Border>
         </Grid>
@@ -479,6 +595,7 @@
         <Border Grid.Row="3" Background="{StaticResource BackgroundCard}" Padding="24,16">
             <Grid>
                 <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
@@ -518,8 +635,35 @@
                     </StackPanel>
                 </Grid>
 
-                <!-- Row 2: ChatGPT Desktop Status -->
+                <!-- Row 2: MCP Activity Status -->
                 <Border Grid.Row="1" BorderBrush="{StaticResource BorderColor}" BorderThickness="0,1,0,0" Margin="0,12,0,0" Padding="0,12,0,0">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBlock Text="MCP Activity:" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                            <Border x:Name="mcpActivityBorder" Background="{StaticResource BackgroundDark}" CornerRadius="4" Padding="12,6" MinWidth="300">
+                                <StackPanel Orientation="Horizontal">
+                                    <Ellipse x:Name="mcpActivityIndicator" Width="10" Height="10" Fill="#555" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                    <TextBlock x:Name="mcpActivityText" Text="Idle" Foreground="{StaticResource TextSecondary}" FontSize="12" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+
+                        <!-- Session Stats -->
+                        <StackPanel x:Name="sessionStatsPanel" Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                            <TextBlock x:Name="mcpStatsText" Text="No activity this session" Foreground="{StaticResource TextSecondary}" FontSize="11" VerticalAlignment="Center"/>
+                            <Button x:Name="resetStatsButton" Content="🔄" Click="ResetStats_Click" Style="{StaticResource IconButton}" 
+                                    ToolTip="Reset session statistics" Margin="8,0,0,0" FontSize="12"/>
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
+                <!-- Row 3: ChatGPT Desktop Status -->
+                <Border Grid.Row="2" BorderBrush="{StaticResource BorderColor}" BorderThickness="0,1,0,0" Margin="0,12,0,0" Padding="0,12,0,0">
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto"/>

@@ -64,8 +64,14 @@ namespace CodeMerger.Services
         private readonly LessonService _lessonService;
         private readonly McpLogger _logger;
 
+        // Workspace settings
+        private WorkspaceSettings _workspaceSettings = WorkspaceSettings.GetDefaultSettings();
+
         // HTTP Transport for ChatGPT Desktop (Streamable HTTP)
         private McpHttpTransport? _httpTransport;
+
+        // Stdio transport for notifications
+        private StreamWriter? _stdioWriter;
 
         // Memory management
         private int _toolCallsSinceGC = 0;
@@ -105,7 +111,7 @@ namespace CodeMerger.Services
         /// </summary>
         public string LogFilePath => _logger.LogFilePath;
 
-        public void IndexWorkspace(string workspaceName, List<string> inputDirectories, List<string> extensions, HashSet<string> ignoredDirs)
+        public void IndexWorkspace(string workspaceName, List<string> inputDirectories, List<string> extensions, HashSet<string> ignoredDirs, string? settingsPath = null)
         {
             _logger.LogSeparator($"INDEX: {workspaceName}");
             
@@ -113,6 +119,16 @@ namespace CodeMerger.Services
             _inputDirectories = inputDirectories;
             _extensions = extensions;
             _ignoredDirs = ignoredDirs;
+
+            // Load workspace settings
+            if (!string.IsNullOrEmpty(settingsPath))
+            {
+                _workspaceSettings = WorkspaceSettings.LoadFromWorkspace(settingsPath, Log);
+            }
+            else
+            {
+                _workspaceSettings = WorkspaceSettings.GetDefaultSettings();
+            }
 
             PerformIndexing();
         }
@@ -154,6 +170,11 @@ namespace CodeMerger.Services
 
             _logger.LogSeparator($"SWITCH: {workspaceName}");
             Log($"Switching to workspace: {workspaceName}");
+
+            // Load workspace settings from workspace folder
+            var workspaceFolder = _workspaceService.GetWorkspaceFolder(workspaceName);
+            _workspaceSettings = WorkspaceSettings.LoadFromWorkspace(workspaceFolder, Log);
+            Log($"Settings loaded: CreateBackupFiles={_workspaceSettings.CreateBackupFiles}");
 
             // Parse extensions
             var extensions = workspace.Extensions
@@ -229,6 +250,11 @@ namespace CodeMerger.Services
                 }
                 workspaces.Add((name, ws));
             }
+
+            // Load settings from first workspace (merged mode uses first workspace's settings)
+            var firstWorkspaceFolder = _workspaceService.GetWorkspaceFolder(workspaceNames[0]);
+            _workspaceSettings = WorkspaceSettings.LoadFromWorkspace(firstWorkspaceFolder, Log);
+            Log($"Settings loaded from {workspaceNames[0]}: CreateBackupFiles={_workspaceSettings.CreateBackupFiles}");
 
             // Combine extensions from all workspaces
             var allExtensions = workspaces
@@ -384,7 +410,7 @@ namespace CodeMerger.Services
                 _workspaceAnalysis = _indexGenerator.BuildWorkspaceAnalysis(_workspaceName, fileAnalyses, chunks);
 
                 // Initialize services and handlers
-                _refactoringService = new RefactoringService(_workspaceAnalysis, _inputDirectories);
+                _refactoringService = new RefactoringService(_workspaceAnalysis, _inputDirectories, _workspaceSettings);
                 InitializeHandlers();
 
                 LogWithMemory($"Indexed {fileAnalyses.Count} files, {_workspaceAnalysis.TypeHierarchy.Count} types, {_callSites.Count} call sites");
@@ -506,9 +532,9 @@ namespace CodeMerger.Services
             if (_workspaceAnalysis == null || _refactoringService == null) return;
 
             _readHandler = new McpReadToolHandler(_workspaceAnalysis, _callSites, _inputDirectories, SendActivity);
-            _writeHandler = new McpWriteToolHandler(_workspaceAnalysis, _refactoringService, _inputDirectories, UpdateSingleFileAsync, SendActivity, Log);
+            _writeHandler = new McpWriteToolHandler(_workspaceAnalysis, _refactoringService, _inputDirectories, _workspaceSettings, UpdateSingleFileAsync, SendActivity, Log);
             _semanticHandler = new McpSemanticToolHandler(_workspaceAnalysis, _callSites, SendActivity);
-            _refactoringHandler = new McpRefactoringToolHandler(_workspaceAnalysis, _refactoringService, _callSites, SendActivity, Log);
+            _refactoringHandler = new McpRefactoringToolHandler(_workspaceAnalysis, _refactoringService, _callSites, _workspaceSettings, SendActivity, Log);
             _maintenanceHandler = new McpMaintenanceToolHandler(_workspaceAnalysis, _inputDirectories, SendActivity);
             _workspaceHandler = new McpWorkspaceToolHandler(
                 _workspaceService,
@@ -547,7 +573,7 @@ namespace CodeMerger.Services
             _serverTask = Task.Run(async () =>
             {
                 using var reader = new StreamReader(inputStream, Encoding.UTF8);
-                using var writer = new StreamWriter(outputStream, new UTF8Encoding(false)) { AutoFlush = true };
+                _stdioWriter = new StreamWriter(outputStream, new UTF8Encoding(false)) { AutoFlush = true };
 
                 while (!token.IsCancellationRequested)
                 {
@@ -567,7 +593,7 @@ namespace CodeMerger.Services
                         var response = ProcessMessage(line);
                         if (response != null)
                         {
-                            await writer.WriteLineAsync(response);
+                            await _stdioWriter.WriteLineAsync(response);
                         }
                     }
                     catch (OperationCanceledException)
@@ -580,6 +606,8 @@ namespace CodeMerger.Services
                     }
                 }
 
+                _stdioWriter?.Dispose();
+                _stdioWriter = null;
                 Log("MCP Server stopped.");
             }, token);
 
@@ -808,7 +836,6 @@ namespace CodeMerger.Services
             var arguments = paramsEl.TryGetProperty("arguments", out var argsEl) ? argsEl : default;
 
             Log($"Tool call: {toolName}");
-            SendActivity($"Tool: {toolName}");
 
             // Periodic memory cleanup
             _toolCallsSinceGC++;
@@ -880,48 +907,69 @@ namespace CodeMerger.Services
         {
             // Note: No lock here - read operations are safe, write operations
             // trigger PerformIndexing() which has its own lock for state mutation
-            return toolName switch
+            
+            var sw = Stopwatch.StartNew();
+            SendActivity($"STARTED|{toolName}|");
+            SendNotification("info", $"🔧 Processing {toolName}...");
+
+            try
             {
-                // Read tools
-                "codemerger_get_project_overview" => _readHandler!.GetWorkspaceOverview(),
-                "codemerger_list_files" => _readHandler!.ListFiles(arguments),
-                "codemerger_get_file" => _readHandler!.GetFile(arguments),
-                "codemerger_search_code" => _readHandler!.SearchCode(arguments),
-                "codemerger_get_type" => _readHandler!.GetType(arguments),
-                "codemerger_get_dependencies" => _readHandler!.GetDependencies(arguments),
-                "codemerger_get_type_hierarchy" => _readHandler!.GetTypeHierarchy(),
-                "codemerger_grep" => _readHandler!.Grep(arguments),
-                "codemerger_get_context" => _readHandler!.GetContext(arguments),
-                "codemerger_get_lines" => _readHandler!.GetLines(arguments),
+                var result = toolName switch
+                {
+                    // Read tools
+                    "codemerger_get_project_overview" => _readHandler!.GetWorkspaceOverview(),
+                    "codemerger_list_files" => _readHandler!.ListFiles(arguments),
+                    "codemerger_get_file" => _readHandler!.GetFile(arguments),
+                    "codemerger_search_code" => _readHandler!.SearchCode(arguments),
+                    "codemerger_get_type" => _readHandler!.GetType(arguments),
+                    "codemerger_get_dependencies" => _readHandler!.GetDependencies(arguments),
+                    "codemerger_get_type_hierarchy" => _readHandler!.GetTypeHierarchy(),
+                    "codemerger_grep" => _readHandler!.Grep(arguments),
+                    "codemerger_get_context" => _readHandler!.GetContext(arguments),
+                    "codemerger_get_lines" => _readHandler!.GetLines(arguments),
 
-                // Semantic tools
-                "codemerger_find_references" => _semanticHandler!.FindReferences(arguments),
-                "codemerger_get_callers" => _semanticHandler!.GetCallers(arguments),
-                "codemerger_get_callees" => _semanticHandler!.GetCallees(arguments),
-                "codemerger_get_diagnostics" => _semanticHandler!.GetDiagnostics(arguments),
+                    // Semantic tools
+                    "codemerger_find_references" => _semanticHandler!.FindReferences(arguments),
+                    "codemerger_get_callers" => _semanticHandler!.GetCallers(arguments),
+                    "codemerger_get_callees" => _semanticHandler!.GetCallees(arguments),
+                    "codemerger_get_diagnostics" => _semanticHandler!.GetDiagnostics(arguments),
 
-                // Write tools
-                "codemerger_str_replace" => _writeHandler!.StrReplace(arguments),
-                "codemerger_write_file" => _writeHandler!.WriteFile(arguments),
-                "codemerger_preview_write" => _writeHandler!.PreviewWriteFile(arguments),
-                "codemerger_delete_file" => _writeHandler!.DeleteFile(arguments),
-                "codemerger_undo" => _writeHandler!.Undo(arguments),
-                "codemerger_move_file" => _writeHandler!.MoveFile(arguments),
+                    // Write tools
+                    "codemerger_str_replace" => _writeHandler!.StrReplace(arguments),
+                    "codemerger_write_file" => _writeHandler!.WriteFile(arguments),
+                    "codemerger_preview_write" => _writeHandler!.PreviewWriteFile(arguments),
+                    "codemerger_delete_file" => _writeHandler!.DeleteFile(arguments),
+                    "codemerger_undo" => _writeHandler!.Undo(arguments),
+                    "codemerger_move_file" => _writeHandler!.MoveFile(arguments),
 
-                // Refactoring tools
-                "codemerger_rename_symbol" => _refactoringHandler!.RenameSymbol(arguments),
-                "codemerger_generate_interface" => _refactoringHandler!.GenerateInterface(arguments),
-                "codemerger_extract_method" => _refactoringHandler!.ExtractMethod(arguments),
-                "codemerger_add_parameter" => _refactoringHandler!.AddParameter(arguments),
-                "codemerger_implement_interface" => _refactoringHandler!.ImplementInterface(arguments),
-                "codemerger_generate_constructor" => _refactoringHandler!.GenerateConstructor(arguments),
+                    // Refactoring tools
+                    "codemerger_rename_symbol" => _refactoringHandler!.RenameSymbol(arguments),
+                    "codemerger_generate_interface" => _refactoringHandler!.GenerateInterface(arguments),
+                    "codemerger_extract_method" => _refactoringHandler!.ExtractMethod(arguments),
+                    "codemerger_add_parameter" => _refactoringHandler!.AddParameter(arguments),
+                    "codemerger_implement_interface" => _refactoringHandler!.ImplementInterface(arguments),
+                    "codemerger_generate_constructor" => _refactoringHandler!.GenerateConstructor(arguments),
 
-                // Maintenance tools
-                "codemerger_clean_backups" => _maintenanceHandler!.CleanBackups(arguments),
-                "codemerger_find_duplicates" => _maintenanceHandler!.FindDuplicates(arguments),
+                    // Maintenance tools
+                    "codemerger_clean_backups" => _maintenanceHandler!.CleanBackups(arguments),
+                    "codemerger_find_duplicates" => _maintenanceHandler!.FindDuplicates(arguments),
 
-                _ => $"Unknown tool: {toolName}"
-            };
+                    _ => $"Unknown tool: {toolName}"
+                };
+
+                sw.Stop();
+                SendActivity($"COMPLETED|{toolName}|{sw.ElapsedMilliseconds}ms");
+                SendNotification("info", $"✅ {toolName} completed ({sw.ElapsedMilliseconds}ms)");
+                
+                return result;
+            }
+            catch (Exception ex)
+            {
+                sw.Stop();
+                SendActivity($"ERROR|{toolName}|{ex.Message}");
+                SendNotification("error", $"❌ {toolName} failed: {ex.Message}");
+                throw;
+            }
         }
 
         // Fallbacks for when handlers aren't initialized
@@ -1094,6 +1142,51 @@ namespace CodeMerger.Services
                 }
                 catch { }
             });
+        }
+
+        /// <summary>
+        /// Send MCP notification to Claude Desktop (or other MCP client).
+        /// Supports both stdio and SSE transports.
+        /// </summary>
+        private void SendNotification(string level, string message)
+        {
+            var notification = new
+            {
+                jsonrpc = "2.0",
+                method = "notifications/message",
+                @params = new
+                {
+                    level = level,  // debug, info, notice, warning, error
+                    logger = "codemerger",
+                    data = message
+                }
+            };
+
+            var json = JsonSerializer.Serialize(notification, JsonOptions);
+
+            // Send via stdio if available
+            if (_stdioWriter != null)
+            {
+                try
+                {
+                    lock (_stdioWriter)
+                    {
+                        _stdioWriter.WriteLine(json);
+                    }
+                }
+                catch { }
+            }
+
+            // Send via SSE if available
+            if (_httpTransport?.IsRunning == true)
+            {
+                try
+                {
+                    // SSE transport handles broadcasting to all connected clients
+                    _httpTransport.BroadcastNotification(json);
+                }
+                catch { }
+            }
         }
 
         private void SendDisconnect()

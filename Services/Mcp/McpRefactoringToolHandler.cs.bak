@@ -233,8 +233,7 @@ namespace CodeMerger.Services.Mcp
 
                             if (!preview)
                             {
-                                if (_settings.CreateBackupFiles)
-                                    File.Copy(fileGroup.Key, fileGroup.Key + ".bak", true);
+                                File.Copy(fileGroup.Key, fileGroup.Key + ".bak", true);
                                 File.WriteAllText(fileGroup.Key, newContent);
                             }
                         }

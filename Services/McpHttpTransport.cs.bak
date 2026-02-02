@@ -371,18 +371,6 @@ namespace CodeMerger.Services
             OnLog?.Invoke($"[MCP] {message}");
         }
 
-        /// <summary>
-        /// Broadcast notification to all connected SSE clients.
-        /// In Streamable HTTP, notifications can be sent via SSE if clients subscribe.
-        /// </summary>
-        public void BroadcastNotification(string json)
-        {
-            // TODO: Implement notification broadcasting via SSE stream
-            // For now, notifications are only sent via stdio transport
-            // SSE notification support requires maintaining active SSE connections
-            Log($"Notification (SSE not implemented): {json.Substring(0, Math.Min(100, json.Length))}...");
-        }
-
         public void Dispose()
         {
             if (_disposed) return;

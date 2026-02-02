@@ -24,11 +24,23 @@ namespace CodeMerger
         private readonly FileScannerService _fileScannerService = new FileScannerService();
         private readonly DirectoryManager _directoryManager = new DirectoryManager();
         private readonly GitRepositoryManager _gitRepositoryManager = new GitRepositoryManager();
+        private readonly WorkspaceSettingsService _settingsService;
+        private readonly BackupCleanupService _backupCleanupService = new BackupCleanupService();
         
         // ChatGPT Desktop support
         private TunnelService? _tunnelService;
         private McpServer? _mcpServerForSse;
         private bool _isChatGptConnected = false;
+        
+        // MCP Activity timeout detection
+        private System.Windows.Threading.DispatcherTimer? _claudeResponseTimer;
+        private DateTime _lastCompletedTime;
+        private int ClaudeTimeoutSeconds => _settingsService?.CurrentSettings?.TimeoutThresholdSeconds ?? 45;
+        private bool _timeoutRecorded = false; // Track if current timeout has been recorded
+        
+        // MCP Session statistics
+        private readonly McpSessionStats _sessionStats = new();
+        private System.Windows.Threading.DispatcherTimer? _statsUpdateTimer;
         
         private Workspace? _currentWorkspace => _workspaceManager.CurrentWorkspace;
 
@@ -62,6 +74,9 @@ namespace CodeMerger
             DataContext = this;
             FoundFiles = new ObservableCollection<string>();
 
+            // Initialize settings service
+            _settingsService = new WorkspaceSettingsService(msg => Debug.WriteLine($"[Settings] {msg}"));
+
             inputDirListBox.ItemsSource = _directoryManager.Directories;
             fileListBox.ItemsSource = FoundFiles;
             gitRepoListBox.ItemsSource = _gitRepositoryManager.Repositories;
@@ -90,7 +105,19 @@ namespace CodeMerger
             _mcpConnectionService.OnConnected += OnMcpConnected;
             _mcpConnectionService.OnDisconnected += OnMcpDisconnected;
             _mcpConnectionService.OnActivity += OnMcpActivity;
+            _mcpConnectionService.OnActivityParsed += OnMcpActivityParsed;
             _mcpConnectionService.OnError += OnMcpConnectionError;
+
+            // Initialize Claude response timeout timer
+            _claudeResponseTimer = new System.Windows.Threading.DispatcherTimer();
+            _claudeResponseTimer.Interval = TimeSpan.FromSeconds(1); // Check every second
+            _claudeResponseTimer.Tick += ClaudeResponseTimer_Tick;
+
+            // Initialize stats update timer
+            _statsUpdateTimer = new System.Windows.Threading.DispatcherTimer();
+            _statsUpdateTimer.Interval = TimeSpan.FromSeconds(3); // Update every 3 seconds
+            _statsUpdateTimer.Tick += StatsUpdateTimer_Tick;
+            _statsUpdateTimer.Start();
 
             UpdateStatus("Ready", Brushes.Gray);
             Loaded += MainWindow_Loaded;
@@ -164,12 +191,205 @@ namespace CodeMerger
             });
         }
 
+        private void OnMcpActivityParsed(string workspaceName, McpActivityMessage activityMsg)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                // Update connection status
+                connectionIndicator.Fill = new SolidColorBrush(Color.FromRgb(0, 217, 165)); // AccentSuccess
+                connectionStatusText.Text = $"Connected: {workspaceName}";
+                connectionStatusText.Foreground = new SolidColorBrush(Color.FromRgb(0, 217, 165));
+                stopServerButton.Visibility = Visibility.Visible;
+
+                // Update MCP Activity UI based on state
+                switch (activityMsg.Type)
+                {
+                    case McpActivityType.STARTED:
+                        // Yellow - Processing
+                        mcpActivityIndicator.Fill = new SolidColorBrush(Color.FromRgb(255, 193, 7)); // AccentWarning
+                        mcpActivityText.Text = $"🔧 Processing {activityMsg.ToolName}...";
+                        mcpActivityText.Foreground = new SolidColorBrush(Color.FromRgb(255, 193, 7));
+                        mcpActivityBorder.BorderBrush = new SolidColorBrush(Color.FromRgb(255, 193, 7));
+                        mcpActivityBorder.BorderThickness = new Thickness(1);
+                        
+                        // Stop timeout timer - server is working
+                        _claudeResponseTimer?.Stop();
+                        _timeoutRecorded = false; // Reset timeout flag for new activity
+                        break;
+
+                    case McpActivityType.COMPLETED:
+                        // Green - Done, waiting for Claude
+                        mcpActivityIndicator.Fill = new SolidColorBrush(Color.FromRgb(0, 217, 165)); // AccentSuccess
+                        mcpActivityText.Text = $"✅ {activityMsg.ToolName} done ({activityMsg.Details}) — waiting for Claude...";
+                        mcpActivityText.Foreground = new SolidColorBrush(Color.FromRgb(0, 217, 165));
+                        mcpActivityBorder.BorderBrush = new SolidColorBrush(Color.FromRgb(0, 217, 165));
+                        mcpActivityBorder.BorderThickness = new Thickness(1);
+                        
+                        // Record statistics - parse duration from Details (e.g., "12ms")
+                        if (activityMsg.Details.EndsWith("ms") && 
+                            long.TryParse(activityMsg.Details.Replace("ms", ""), out long durationMs))
+                        {
+                            _sessionStats.RecordToolCall(activityMsg.ToolName, durationMs);
+                            UpdateStatsDisplay();
+                        }
+                        
+                        // Start timeout timer - ball is in Claude's court
+                        _lastCompletedTime = DateTime.Now;
+                        _timeoutRecorded = false; // Reset timeout flag
+                        _claudeResponseTimer?.Start();
+                        break;
+
+                    case McpActivityType.ERROR:
+                        // Red - Error
+                        mcpActivityIndicator.Fill = new SolidColorBrush(Color.FromRgb(233, 69, 96)); // AccentPrimary (red)
+                        mcpActivityText.Text = $"❌ {activityMsg.ToolName} failed: {activityMsg.Details}";
+                        mcpActivityText.Foreground = new SolidColorBrush(Color.FromRgb(233, 69, 96));
+                        mcpActivityBorder.BorderBrush = new SolidColorBrush(Color.FromRgb(233, 69, 96));
+                        mcpActivityBorder.BorderThickness = new Thickness(1);
+                        
+                        // Record error statistics
+                        _sessionStats.RecordError();
+                        UpdateStatsDisplay();
+
+                        // Stop timeout timer
+                        _claudeResponseTimer?.Stop();
+                        _timeoutRecorded = false;
+                        
+                        // Auto-reset to idle after 5 seconds
+                        Task.Delay(5000).ContinueWith(_ =>
+                        {
+                            Dispatcher.Invoke(() =>
+                            {
+                                if (mcpActivityText.Text.StartsWith("❌"))
+                                {
+                                    mcpActivityIndicator.Fill = new SolidColorBrush(Color.FromRgb(136, 146, 160)); // Gray
+                                    mcpActivityText.Text = "Idle";
+                                    mcpActivityText.Foreground = new SolidColorBrush(Color.FromRgb(136, 146, 160));
+                                    mcpActivityBorder.BorderBrush = Brushes.Transparent;
+                                    mcpActivityBorder.BorderThickness = new Thickness(0);
+                                }
+                            });
+                        });
+                        break;
+                }
+            });
+        }
+
+        private void ClaudeResponseTimer_Tick(object? sender, EventArgs e)
+        {
+            var elapsed = (DateTime.Now - _lastCompletedTime).TotalSeconds;
+            
+            if (elapsed >= ClaudeTimeoutSeconds)
+            {
+                // Timeout reached - Claude hasn't responded
+                mcpActivityIndicator.Fill = new SolidColorBrush(Color.FromRgb(255, 152, 0)); // Orange
+                mcpActivityText.Text = $"⏳ Claude hasn't responded in {(int)elapsed}s (timeout threshold: {ClaudeTimeoutSeconds}s)";
+                mcpActivityText.Foreground = new SolidColorBrush(Color.FromRgb(255, 152, 0));
+                mcpActivityBorder.BorderBrush = new SolidColorBrush(Color.FromRgb(255, 152, 0));
+                mcpActivityBorder.BorderThickness = new Thickness(2); // Thicker border for emphasis
+                
+                // Record timeout statistics (only once per timeout)
+                if (!_timeoutRecorded)
+                {
+                    _sessionStats.RecordTimeout();
+                    _timeoutRecorded = true;
+                    UpdateStatsDisplay();
+                }
+            }
+            else
+            {
+                // Update elapsed time while waiting
+                mcpActivityText.Text = $"✅ Tool completed — waiting for Claude... ({(int)elapsed}s)";
+            }
+        }
+
         private void OnMcpConnectionError(string errorMessage)
         {
             Dispatcher.Invoke(() =>
             {
                 UpdateStatus(errorMessage, new SolidColorBrush(Color.FromRgb(255, 193, 7)));
             });
+        }
+
+        private void StatsUpdateTimer_Tick(object? sender, EventArgs e)
+        {
+            UpdateStatsDisplay();
+        }
+
+        private void UpdateStatsDisplay()
+        {
+            var summary = _sessionStats.GetSummary();
+            var duration = _sessionStats.GetSessionDuration();
+            
+            // Add session duration to the summary
+            if (_sessionStats.TotalToolCalls > 0 || _sessionStats.TotalErrors > 0 || _sessionStats.TotalTimeouts > 0)
+            {
+                mcpStatsText.Text = $"{summary} | Session: {duration}";
+            }
+            else
+            {
+                mcpStatsText.Text = $"No activity this session | Session: {duration}";
+            }
+
+            // Build detailed tooltip
+            var tooltipText = new System.Text.StringBuilder();
+            tooltipText.AppendLine($"Session Duration: {duration}");
+            tooltipText.AppendLine($"Total Calls: {_sessionStats.TotalToolCalls}");
+            
+            if (_sessionStats.TotalToolCalls > 0)
+            {
+                tooltipText.AppendLine($"Average Response: {_sessionStats.AverageResponseTime:F1}ms");
+            }
+            
+            var slowest = _sessionStats.GetSlowestTool();
+            if (slowest.HasValue)
+            {
+                tooltipText.AppendLine($"Slowest Tool: {slowest.Value.ToolName} ({slowest.Value.DurationMs}ms)");
+            }
+            
+            if (_sessionStats.TotalTimeouts > 0)
+            {
+                tooltipText.AppendLine($"Timeouts: {_sessionStats.TotalTimeouts}");
+            }
+            
+            if (_sessionStats.TotalErrors > 0)
+            {
+                tooltipText.AppendLine($"Errors: {_sessionStats.TotalErrors}");
+            }
+            
+            tooltipText.AppendLine();
+            tooltipText.AppendLine("Click 🔄 to reset statistics");
+            
+            mcpStatsText.ToolTip = tooltipText.ToString().TrimEnd();
+
+            // Color-code based on health
+            if (_sessionStats.TotalErrors > 0)
+            {
+                // Red if there are errors
+                mcpStatsText.Foreground = new SolidColorBrush(Color.FromRgb(233, 69, 96)); // AccentPrimary (red)
+            }
+            else if (_sessionStats.TotalTimeouts > 0)
+            {
+                // Yellow/Orange if there are timeouts
+                mcpStatsText.Foreground = new SolidColorBrush(Color.FromRgb(255, 193, 7)); // AccentWarning (yellow)
+            }
+            else if (_sessionStats.TotalToolCalls > 0)
+            {
+                // Green if active with no issues
+                mcpStatsText.Foreground = new SolidColorBrush(Color.FromRgb(0, 217, 165)); // AccentSuccess (green)
+            }
+            else
+            {
+                // Gray if no activity
+                mcpStatsText.Foreground = new SolidColorBrush(Color.FromRgb(136, 146, 160)); // TextSecondary (gray)
+            }
+        }
+
+        private void ResetStats_Click(object sender, RoutedEventArgs e)
+        {
+            _sessionStats.Reset();
+            UpdateStatsDisplay();
+            UpdateStatus("Session statistics reset", Brushes.Gray);
         }
 
         #endregion
@@ -499,6 +719,8 @@ namespace CodeMerger
 
         private void MainWindow_Closing(object? sender, CancelEventArgs e)
         {
+            _claudeResponseTimer?.Stop();
+            _statsUpdateTimer?.Stop();
             _mcpConnectionService.Dispose();
             _tunnelService?.Dispose();
             _mcpServerForSse?.Stop();
@@ -543,6 +765,9 @@ namespace CodeMerger
 
             string workspaceFolder = _workspaceManager.GetWorkspaceFolder(workspace.Name);
             _gitRepositoryManager.SetWorkspaceFolder(workspaceFolder);
+
+            // Load workspace settings
+            LoadWorkspaceSettings(workspaceFolder);
 
             await LoadWorkspaceDataAsync(workspace);
 
@@ -920,5 +1145,198 @@ namespace CodeMerger
                 progressBar.Value = 0;
             }
         }
+
+        #region Parameters Tab Event Handlers
+
+        private bool _isLoadingSettings = false;
+
+        private void LoadWorkspaceSettings(string workspaceFolder)
+        {
+            _isLoadingSettings = true;
+            try
+            {
+                var settings = _settingsService.LoadSettings(workspaceFolder);
+                
+                // Update UI to reflect loaded settings
+                createBackupFilesCheckBox.IsChecked = settings.CreateBackupFiles;
+                autoCleanupCheckBox.IsChecked = settings.AutoCleanupEnabled;
+                backupRetentionTextBox.Text = settings.BackupRetentionHours.ToString();
+                maxBackupsTextBox.Text = settings.MaxBackupsPerFile.ToString();
+                timeoutThresholdTextBox.Text = settings.TimeoutThresholdSeconds.ToString();
+                showSessionStatsCheckBox.IsChecked = settings.ShowSessionStatistics;
+                sessionStatsPanel.Visibility = settings.ShowSessionStatistics ? Visibility.Visible : Visibility.Collapsed;
+
+                // Hide restart banner when loading new workspace
+                settingsRestartBanner.Visibility = Visibility.Collapsed;
+
+                // Run auto-cleanup if enabled
+                if (settings.AutoCleanupEnabled && _currentWorkspace != null)
+                {
+                    var activeDirectories = _currentWorkspace.InputDirectories
+                        .Where(dir => !_currentWorkspace.DisabledDirectories.Contains(dir))
+                        .ToList();
+
+                    var (deleted, bytesFreed) = _backupCleanupService.RunAutoCleanup(activeDirectories, settings);
+                    if (deleted > 0)
+                    {
+                        UpdateStatus($"Auto-cleanup: removed {deleted} old backup files ({bytesFreed / 1024.0:F1} KB freed)", Brushes.LightYellow);
+                    }
+                }
+            }
+            finally
+            {
+                _isLoadingSettings = false;
+            }
+        }
+
+        private void CreateBackupFiles_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_isLoadingSettings || _settingsService == null || !_settingsService.HasWorkspace) return;
+
+            _settingsService.UpdateSetting(s => s.CreateBackupFiles = createBackupFilesCheckBox.IsChecked == true);
+            ShowSettingsRestartBanner();
+        }
+
+        private void AutoCleanup_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_isLoadingSettings || _settingsService == null || !_settingsService.HasWorkspace) return;
+
+            _settingsService.UpdateSetting(s => s.AutoCleanupEnabled = autoCleanupCheckBox.IsChecked == true);
+        }
+
+        private void BackupRetention_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            if (_isLoadingSettings || _settingsService == null || !_settingsService.HasWorkspace) return;
+
+            if (int.TryParse(backupRetentionTextBox.Text, out int hours))
+            {
+                _settingsService.UpdateSetting(s => s.BackupRetentionHours = hours);
+            }
+        }
+
+        private void MaxBackups_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            if (_isLoadingSettings || _settingsService == null || !_settingsService.HasWorkspace) return;
+
+            if (int.TryParse(maxBackupsTextBox.Text, out int max))
+            {
+                _settingsService.UpdateSetting(s => s.MaxBackupsPerFile = max);
+            }
+        }
+
+        private void TimeoutThreshold_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            if (_isLoadingSettings || _settingsService == null || !_settingsService.HasWorkspace) return;
+
+            if (int.TryParse(timeoutThresholdTextBox.Text, out int seconds))
+            {
+                _settingsService.UpdateSetting(s => s.TimeoutThresholdSeconds = seconds);
+            }
+        }
+
+        private void ShowSessionStats_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_isLoadingSettings || _settingsService == null || !_settingsService.HasWorkspace) return;
+
+            var show = showSessionStatsCheckBox.IsChecked == true;
+            _settingsService.UpdateSetting(s => s.ShowSessionStatistics = show);
+            sessionStatsPanel.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        private void CleanAllBackups_Click(object sender, RoutedEventArgs e)
+        {
+            if (_currentWorkspace == null) return;
+
+            var activeDirectories = _currentWorkspace.InputDirectories
+                .Where(dir => !_currentWorkspace.DisabledDirectories.Contains(dir))
+                .ToList();
+
+            var stats = _backupCleanupService.GetStatistics(activeDirectories);
+
+            if (stats.TotalCount == 0)
+            {
+                MessageBox.Show("No backup files found in this workspace.", "Cleanup", 
+                    MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var result = MessageBox.Show(
+                $"Found {stats.TotalCount} backup files ({stats.TotalSizeMB:F2} MB).\n\nThis will permanently delete all .bak files in this workspace.\n\nContinue?",
+                "Confirm Cleanup",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning);
+
+            if (result != MessageBoxResult.Yes) return;
+
+            var (deleted, bytesFreed) = _backupCleanupService.CleanupAll(activeDirectories);
+            UpdateStatus($"Deleted {deleted} backup files ({bytesFreed / (1024.0 * 1024.0):F2} MB freed)", Brushes.LightGreen);
+        }
+
+        private void ShowBackupStats_Click(object sender, RoutedEventArgs e)
+        {
+            if (_currentWorkspace == null) return;
+
+            var activeDirectories = _currentWorkspace.InputDirectories
+                .Where(dir => !_currentWorkspace.DisabledDirectories.Contains(dir))
+                .ToList();
+
+            var stats = _backupCleanupService.GetStatistics(activeDirectories);
+
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine($"Backup File Statistics\n");
+            sb.AppendLine($"Total files: {stats.TotalCount}");
+            sb.AppendLine($"Total size: {stats.TotalSizeMB:F2} MB");
+            
+            if (stats.OldestBackup.HasValue)
+                sb.AppendLine($"Oldest backup: {stats.OldestBackup.Value:g}");
+
+            if (stats.ByDirectory.Count > 0)
+            {
+                sb.AppendLine($"\nBy directory:");
+                foreach (var kv in stats.ByDirectory.OrderByDescending(x => x.Value.Size))
+                {
+                    sb.AppendLine($"  {kv.Key}: {kv.Value.Count} files ({kv.Value.Size / 1024.0:F1} KB)");
+                }
+            }
+
+            MessageBox.Show(sb.ToString(), "Backup Statistics", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+
+        private void ShowSettingsRestartBanner()
+        {
+            if (_mcpConnectionService.IsConnected)
+            {
+                settingsRestartBanner.Visibility = Visibility.Visible;
+            }
+        }
+
+        private void RestartMcpServer_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                int killed = _mcpConnectionService.KillServerProcesses();
+                settingsRestartBanner.Visibility = Visibility.Collapsed;
+
+                if (killed > 0)
+                {
+                    UpdateStatus("MCP server stopped. Settings will apply on next connection.", Brushes.LightGreen);
+                }
+                else
+                {
+                    UpdateStatus("Settings saved. Will apply on next MCP connection.", Brushes.Gray);
+                }
+
+                connectionIndicator.Fill = new SolidColorBrush(Color.FromRgb(136, 146, 160));
+                connectionStatusText.Text = "Restarting...";
+                connectionStatusText.Foreground = new SolidColorBrush(Color.FromRgb(136, 146, 160));
+                stopServerButton.Visibility = Visibility.Collapsed;
+            }
+            catch (Exception ex)
+            {
+                UpdateStatus($"Failed to restart: {ex.Message}", new SolidColorBrush(Color.FromRgb(233, 69, 96)));
+            }
+        }
+
+        #endregion
     }
 }

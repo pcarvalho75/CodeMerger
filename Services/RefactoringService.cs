@@ -18,19 +18,24 @@ namespace CodeMerger.Services
     {
         private readonly WorkspaceAnalysis _workspaceAnalysis;
         private readonly List<string> _inputDirectories;
+        private readonly WorkspaceSettings _settings;
 
-        public RefactoringService(WorkspaceAnalysis workspaceAnalysis, List<string> inputDirectories)
+        public RefactoringService(WorkspaceAnalysis workspaceAnalysis, List<string> inputDirectories, WorkspaceSettings? settings = null)
         {
             _workspaceAnalysis = workspaceAnalysis;
             _inputDirectories = inputDirectories;
+            _settings = settings ?? WorkspaceSettings.GetDefaultSettings();
         }
 
         /// <summary>
         /// Write content to a file (create or overwrite).
         /// Supports ../ paths to write to sibling projects within the workspace.
         /// </summary>
-        public WriteFileResult WriteFile(string relativePath, string content, bool createBackup = true)
+        public WriteFileResult WriteFile(string relativePath, string content, bool? createBackup = null)
         {
+            // Use settings default if not explicitly specified
+            var shouldBackup = createBackup ?? _settings.CreateBackupFiles;
+            
             var result = new WriteFileResult { RelativePath = relativePath };
 
             try
@@ -106,7 +111,7 @@ namespace CodeMerger.Services
                     result.IsNewFile = false;
 
                     // Create backup
-                    if (createBackup && File.Exists(fullPath))
+                    if (shouldBackup && File.Exists(fullPath))
                     {
                         var backupPath = fullPath + ".bak";
                         File.Copy(fullPath, backupPath, overwrite: true);
@@ -280,8 +285,9 @@ namespace CodeMerger.Services
 
                         if (!preview)
                         {
-                            // Create backup
-                            File.Copy(file.FilePath, file.FilePath + ".bak", overwrite: true);
+                            // Create backup only if settings allow
+                            if (_settings.CreateBackupFiles)
+                                File.Copy(file.FilePath, file.FilePath + ".bak", overwrite: true);
                             File.WriteAllText(file.FilePath, newContent);
                         }
                     }
