@@ -1,0 +1,148 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Net.Http;
+using System.Text.Json;
+using System.Threading.Tasks;
+using CodeMerger.Models;
+
+namespace CodeMerger.Services
+{
+    /// <summary>
+    /// Handles syncing community lessons from a remote GitHub repository.
+    /// Caches locally and respects a TTL to avoid excessive fetches.
+    /// </summary>
+    public class CommunityLessonSyncService
+    {
+        private const string DefaultRepoUrl = "https://raw.githubusercontent.com/pcarvalho75/CodeMerger/master/community-lessons/community-lessons.json";
+        private const string MetaFileName = "community-lessons-meta.json";
+        private const int DefaultTtlHours = 24;
+
+        private static readonly string AppDataFolder = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "CodeMerger");
+
+        private static readonly HttpClient _httpClient = new HttpClient
+        {
+            Timeout = TimeSpan.FromSeconds(10)
+        };
+
+        private static readonly JsonSerializerOptions JsonOptions = new()
+        {
+            WriteIndented = true,
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+        };
+
+        private readonly LessonService _lessonService;
+        private readonly Action<string>? _log;
+
+        public CommunityLessonSyncService(LessonService lessonService, Action<string>? log = null)
+        {
+            _lessonService = lessonService;
+            _log = log;
+        }
+
+        /// <summary>
+        /// Syncs community lessons if the cache is stale (older than TTL).
+        /// Returns true if new data was fetched, false if cache was fresh or fetch failed.
+        /// </summary>
+        public async Task<(bool synced, int count, string message)> SyncIfStaleAsync(string? repoUrl = null, int ttlHours = DefaultTtlHours)
+        {
+            var meta = LoadMeta();
+
+            if (meta != null && (DateTime.UtcNow - meta.LastFetched).TotalHours < ttlHours)
+            {
+                var cachedCount = _lessonService.GetCommunityLessons().Count;
+                return (false, cachedCount, $"Cache is fresh ({meta.LastFetched:yyyy-MM-dd HH:mm} UTC). Use sync_lessons to force refresh.");
+            }
+
+            return await FetchAndCacheAsync(repoUrl);
+        }
+
+        /// <summary>
+        /// Forces a sync regardless of TTL. Used by sync_lessons MCP tool.
+        /// </summary>
+        public async Task<(bool synced, int count, string message)> ForceSyncAsync(string? repoUrl = null)
+        {
+            return await FetchAndCacheAsync(repoUrl);
+        }
+
+        private async Task<(bool synced, int count, string message)> FetchAndCacheAsync(string? repoUrl)
+        {
+            var url = repoUrl ?? DefaultRepoUrl;
+
+            try
+            {
+                _log?.Invoke($"Fetching community lessons from {url}");
+
+                var response = await _httpClient.GetAsync(url);
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    _log?.Invoke($"Community lessons fetch failed: {response.StatusCode}");
+                    var cachedCount = _lessonService.GetCommunityLessons().Count;
+                    return (false, cachedCount, $"Fetch failed: HTTP {(int)response.StatusCode}. Using cached data ({cachedCount} lessons).");
+                }
+
+                var json = await response.Content.ReadAsStringAsync();
+                var lessons = JsonSerializer.Deserialize<List<Lesson>>(json, JsonOptions);
+
+                if (lessons == null)
+                {
+                    return (false, 0, "Fetch succeeded but JSON was empty or invalid.");
+                }
+
+                _lessonService.SaveCommunityLessons(lessons);
+                SaveMeta(new SyncMeta { LastFetched = DateTime.UtcNow, SourceUrl = url });
+
+                _log?.Invoke($"Community lessons synced: {lessons.Count} lessons");
+                return (true, lessons.Count, $"Synced {lessons.Count} community lessons.");
+            }
+            catch (TaskCanceledException)
+            {
+                var cachedCount = _lessonService.GetCommunityLessons().Count;
+                _log?.Invoke("Community lessons fetch timed out");
+                return (false, cachedCount, $"Fetch timed out (10s). Using cached data ({cachedCount} lessons).");
+            }
+            catch (Exception ex)
+            {
+                var cachedCount = _lessonService.GetCommunityLessons().Count;
+                _log?.Invoke($"Community lessons fetch error: {ex.Message}");
+                return (false, cachedCount, $"Fetch error: {ex.Message}. Using cached data ({cachedCount} lessons).");
+            }
+        }
+
+        private SyncMeta? LoadMeta()
+        {
+            var path = Path.Combine(AppDataFolder, MetaFileName);
+            if (!File.Exists(path))
+                return null;
+
+            try
+            {
+                var json = File.ReadAllText(path);
+                return JsonSerializer.Deserialize<SyncMeta>(json, JsonOptions);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private void SaveMeta(SyncMeta meta)
+        {
+            if (!Directory.Exists(AppDataFolder))
+                Directory.CreateDirectory(AppDataFolder);
+
+            var path = Path.Combine(AppDataFolder, MetaFileName);
+            var json = JsonSerializer.Serialize(meta, JsonOptions);
+            File.WriteAllText(path, json);
+        }
+
+        private class SyncMeta
+        {
+            public DateTime LastFetched { get; set; }
+            public string SourceUrl { get; set; } = string.Empty;
+        }
+    }
+}

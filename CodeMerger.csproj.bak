@@ -9,7 +9,6 @@
     <ApplicationIcon></ApplicationIcon>
     <AssemblyName>CodeMerger</AssemblyName>
     <RootNamespace>CodeMerger</RootNamespace>
-    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
   </PropertyGroup>
 
   <ItemGroup>

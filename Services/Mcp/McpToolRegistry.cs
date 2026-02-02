@@ -337,7 +337,8 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_get_diagnostics",
-                    description = "Get compilation errors and warnings for the project using Roslyn.\n\n" +
+                    description = "Get compilation errors and warnings for the project.\n\n" +
+                        "Two-tier approach: (1) Fast syntax check on all files, (2) Full `dotnet build` if syntax is clean.\n" +
                         "WHEN TO USE: After making changes — verify the code still compiles correctly.\n" +
                         "TIP: Run this after a series of edits to catch any issues before the user tries to build.",
                     inputSchema = new Dictionary<string, object>
@@ -345,8 +346,7 @@ namespace CodeMerger.Services.Mcp
                         { "type", "object" },
                         { "properties", new Dictionary<string, object>
                             {
-                                { "path", new Dictionary<string, string> { { "type", "string" }, { "description", "Optional: specific file path to check. If omitted, checks all C# files." } } },
-                                { "errorsOnly", new Dictionary<string, object> { { "type", "boolean" }, { "description", "If true, only show errors (not warnings). Default: false" }, { "default", false } } }
+                                { "path", new Dictionary<string, string> { { "type", "string" }, { "description", "Optional: specific file path to check. If omitted, checks all C# files." } } }
                             }
                         },
                         { "required", Array.Empty<string>() }
@@ -363,8 +363,18 @@ namespace CodeMerger.Services.Mcp
                 {
                     name = "codemerger_str_replace",
                     description = "Replace a unique string in a file with another string. The oldStr must appear exactly once in the file.\n\n" +
+                        "⚠️ STOP — USE THE RIGHT TOOL FIRST:\n" +
+                        "- Renaming a class/method/property/variable? → Use `rename_symbol` instead (updates ALL references automatically)\n" +
+                        "- Moving/renaming a file? → Use `move_file` instead (updates all using statements)\n" +
+                        "- Adding a parameter to a method? → Use `add_parameter` instead (updates all call sites)\n" +
+                        "- Extracting code into a new method? → Use `extract_method` instead\n" +
+                        "- Only use `str_replace` for edits that DON'T fall into the above categories.\n\n" +
                         "PREFERRED: Use this for surgical edits instead of rewriting entire files with `write_file`.\n" +
                         "DELETE: Set newStr to empty string to delete the match.\n\n" +
+                        "⚠️ SEQUENTIAL EDIT SAFETY:\n" +
+                        "- Making multiple edits to the same file? Do ONE edit at a time.\n" +
+                        "- Verify it compiles (get_diagnostics) before the next edit.\n" +
+                        "- Each str_replace overwrites the .bak, so chaining edits without verification risks corruption.\n\n" +
                         "IF IT FAILS ('not found'):\n" +
                         "1. Call `get_lines` with line numbers from the error to see exact whitespace\n" +
                         "2. Copy the exact content including whitespace\n" +
@@ -374,10 +384,12 @@ namespace CodeMerger.Services.Mcp
                         "If found, preserve the existing version unless explicitly asked to change it.\n\n" +
                         "WORKFLOW - Before making ANY file modifications:\n" +
                         "1. Present a roadmap of all planned changes to the user\n" +
-                        "2. Ask: 'Proceed with AUTOMATIC editing (I'll make all changes), or STEP-BY-STEP (I'll show each change for your approval)?'\n" +
-                        "3. If STEP-BY-STEP: Show the original code and proposed new code in chat, wait for user to say OK before calling this tool\n" +
-                        "4. Only call this tool AFTER user confirms the change\n" +
-                        "5. If AUTOMATIC: Proceed with all changes after initial roadmap approval",
+                        "2. IMPORTANT: By default, pause between each roadmap step and wait for the user to confirm before proceeding to the next step. Inform the user of this at roadmap presentation. Only skip pauses if the user explicitly says to proceed without stopping.\n" +
+                        "3. Ask: 'Proceed with AUTOMATIC editing (I'll make all changes), or STEP-BY-STEP (I'll show each change for your approval)?'\n" +
+                        "4. If STEP-BY-STEP: Show the original code and proposed new code in chat, wait for user to say OK before calling this tool\n" +
+                        "5. Only call this tool AFTER user confirms the change\n" +
+                        "6. If AUTOMATIC: Proceed with all changes after initial roadmap approval\n" +
+                        "7. ALWAYS add a FINAL roadmap step: 'Review & Cleanup' — go back through ALL changes to check for clean code, red flags, loose ends, dead references, and naming inconsistencies. This step is mandatory and must not be skipped.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -397,15 +409,26 @@ namespace CodeMerger.Services.Mcp
                 {
                     name = "codemerger_write_file",
                     description = "Write content to a file (create new or overwrite existing). Creates a .bak backup before overwriting.\n\n" +
-                        "WHEN TO USE: Creating new files, or when changes are so extensive that `str_replace` isn't practical.\n" +
-                        "PREFER: `str_replace` for small/medium changes — it's safer and preserves more context.\n" +
+                        "⚠️ STOP — USE THE RIGHT TOOL FIRST:\n" +
+                        "- Small/medium changes? → Use `str_replace` instead (safer, preserves context)\n" +
+                        "- Renaming a class/method/property? → Use `rename_symbol` instead\n" +
+                        "- Moving a file? → Use `move_file` instead\n" +
+                        "- Only use `write_file` for NEW files or when changes are so extensive that str_replace isn't practical.\n\n" +
+                        "⚠️ LARGE FILE WARNING (>600 lines):\n" +
+                        "Writing files over 600 lines in a single call can cause memory issues in some MCP clients.\n" +
+                        "For large files, use an INCREMENTAL approach instead:\n" +
+                        "1. Write a small skeleton/scaffold first (class stub, usings, namespace, empty methods)\n" +
+                        "2. Fill in each method body with separate `str_replace` calls\n" +
+                        "3. This is safer, uses less memory, and easier to debug if something goes wrong.\n\n" +
                         "TIP: Use `preview_write` first to see a diff of what will change.\n\n" +
                         "WORKFLOW - Before making ANY file modifications:\n" +
                         "1. Present a roadmap of all planned changes to the user\n" +
-                        "2. Ask: 'Proceed with AUTOMATIC editing (I'll make all changes), or STEP-BY-STEP (I'll show each change for your approval)?'\n" +
-                        "3. If STEP-BY-STEP: Show the proposed file content in chat, wait for user to say OK before calling this tool\n" +
-                        "4. Only call this tool AFTER user confirms the change\n" +
-                        "5. If AUTOMATIC: Proceed with all changes after initial roadmap approval",
+                        "2. IMPORTANT: By default, pause between each roadmap step and wait for the user to confirm before proceeding to the next step. Inform the user of this at roadmap presentation. Only skip pauses if the user explicitly says to proceed without stopping.\n" +
+                        "3. Ask: 'Proceed with AUTOMATIC editing (I'll make all changes), or STEP-BY-STEP (I'll show each change for your approval)?'\n" +
+                        "4. If STEP-BY-STEP: Show the proposed file content in chat, wait for user to say OK before calling this tool\n" +
+                        "5. Only call this tool AFTER user confirms the change\n" +
+                        "6. If AUTOMATIC: Proceed with all changes after initial roadmap approval\n" +
+                        "7. ALWAYS add a FINAL roadmap step: 'Review & Cleanup' — go back through ALL changes to check for clean code, red flags, loose ends, dead references, and naming inconsistencies. This step is mandatory and must not be skipped.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -475,6 +498,11 @@ namespace CodeMerger.Services.Mcp
                 {
                     name = "codemerger_move_file",
                     description = "Move or rename a file and update all using statements and references across the project.\n\n" +
+                        "USE THIS INSTEAD OF manual file operations WHEN:\n" +
+                        "- Moving a file to a different folder\n" +
+                        "- Renaming a file\n" +
+                        "- Reorganizing project structure\n" +
+                        "This automatically updates ALL using statements and namespace references.\n\n" +
                         "BEFORE USING: Call `get_dependencies` to understand what will be affected.\n" +
                         "PREVIEW FIRST: Always run with preview=true first to see all affected files.\n" +
                         "BACKUPS: Creates backups of all modified files.",
@@ -501,7 +529,12 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_rename_symbol",
-                    description = "Rename a symbol (class, method, variable) across all files in the project.\n\n" +
+                    description = "Rename a symbol (class, method, property, variable) across all files in the project.\n\n" +
+                        "USE THIS INSTEAD OF str_replace WHEN:\n" +
+                        "- Renaming ANY class, method, property, field, or variable\n" +
+                        "- The name appears in multiple files\n" +
+                        "- You need all references updated automatically\n" +
+                        "This is ALWAYS better than manual find-and-replace for renaming.\n\n" +
                         "BEFORE USING: ALWAYS call `get_dependencies` first to understand the scope of impact.\n" +
                         "PREVIEW FIRST: Always run with preview=true to see all affected locations.\n\n" +
                         "WORKFLOW:\n" +
@@ -526,8 +559,13 @@ namespace CodeMerger.Services.Mcp
                 {
                     name = "codemerger_generate_interface",
                     description = "Generate an interface from a class's public members.\n\n" +
+                        "USE THIS WHEN:\n" +
+                        "- Introducing dependency injection for a class\n" +
+                        "- Making a class testable/mockable\n" +
+                        "- User asks to 'extract an interface' or 'add an interface'\n" +
+                        "- Refactoring to program against abstractions\n\n" +
                         "RETURNS: Generated code — you must then write it to a file using `write_file`.\n" +
-                        "NEXT STEP: After creating the interface file, update the class to implement it.",
+                        "NEXT STEP: After creating the interface file, update the class to implement it using `implement_interface`.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -544,6 +582,10 @@ namespace CodeMerger.Services.Mcp
                 {
                     name = "codemerger_extract_method",
                     description = "Extract a range of lines into a new method.\n\n" +
+                        "USE THIS INSTEAD OF manual copy-paste WHEN:\n" +
+                        "- A block of code should become its own method\n" +
+                        "- Reducing method length or complexity\n" +
+                        "- Eliminating duplicate code blocks (pair with `find_duplicates`)\n\n" +
                         "RETURNS: Modified file content — you must then write it using `write_file`.\n" +
                         "TIP: Use `get_lines` first to identify the exact line range to extract.",
                     inputSchema = new Dictionary<string, object>
@@ -564,6 +606,10 @@ namespace CodeMerger.Services.Mcp
                 {
                     name = "codemerger_add_parameter",
                     description = "Add a parameter to a method and update all call sites.\n\n" +
+                        "USE THIS INSTEAD OF str_replace WHEN:\n" +
+                        "- Adding a new parameter to any method\n" +
+                        "- The method is called from multiple places\n" +
+                        "This automatically updates ALL call sites with the default value.\n\n" +
                         "BEFORE USING: Call `get_callers` to see all places that call this method.\n" +
                         "PREVIEW FIRST: Always run with preview=true to see all affected call sites.\n\n" +
                         "WORKFLOW:\n" +
@@ -590,6 +636,10 @@ namespace CodeMerger.Services.Mcp
                 {
                     name = "codemerger_implement_interface",
                     description = "Generate stub implementations for all members of an interface in a class.\n\n" +
+                        "USE THIS WHEN:\n" +
+                        "- A class needs to implement a new interface\n" +
+                        "- After using `generate_interface` to create an interface\n" +
+                        "- Adding interface compliance to an existing class\n\n" +
                         "RETURNS: Code to add — you must insert it into the class using `str_replace`.\n" +
                         "TIP: Use `get_type` on the interface first to see what members will be generated.",
                     inputSchema = new Dictionary<string, object>
@@ -608,6 +658,10 @@ namespace CodeMerger.Services.Mcp
                 {
                     name = "codemerger_generate_constructor",
                     description = "Generate a constructor that initializes selected fields/properties of a class.\n\n" +
+                        "USE THIS WHEN:\n" +
+                        "- Creating a new class that needs a constructor\n" +
+                        "- Adding dependency injection to a class\n" +
+                        "- User asks to 'add a constructor' or 'initialize fields'\n\n" +
                         "RETURNS: Constructor code — you must insert it into the class using `str_replace`.\n" +
                         "TIP: Use `get_type` first to see available fields/properties.",
                     inputSchema = new Dictionary<string, object>
@@ -783,7 +837,7 @@ namespace CodeMerger.Services.Mcp
                         "- Error handling could be improved\n" +
                         "- A new tool or feature would help\n" +
                         "- Code in CodeMerger itself could be optimized\n\n" +
-                        "LIMIT: Maximum 10 lessons stored. If full, ask user to review and clear lessons.\n" +
+                        "LIMIT: Maximum 100 lessons stored. If full, ask user to review and clear lessons.\n" +
                         "TYPES: description | implementation | new_tool | workflow | performance | error_handling",
                     inputSchema = new Dictionary<string, object>
                     {
@@ -816,19 +870,49 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_delete_lesson",
-                    description = "Delete a specific lesson or all lessons.\n\n" +
+                    description = "Delete a specific lesson or all local lessons.\n\n" +
                         "WHEN TO USE: After improvements have been applied, or if user wants to discard lessons.\n" +
-                        "OPTIONS: Provide 'number' (1-10) to delete one, or 'all: true' to clear all.",
+                        "OPTIONS: Provide 'number' to delete one, or 'all: true' to clear all local lessons. Community lessons cannot be deleted.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
                         { "properties", new Dictionary<string, object>
                             {
-                                { "number", new Dictionary<string, object> { { "type", "integer" }, { "description", "Lesson number to delete (1-10)" } } },
-                                { "all", new Dictionary<string, object> { { "type", "boolean" }, { "description", "Set to true to delete all lessons" } } }
+                                { "number", new Dictionary<string, object> { { "type", "integer" }, { "description", "Lesson number to delete (from get_lessons display)" } } },
+                                { "all", new Dictionary<string, object> { { "type", "boolean" }, { "description", "Set to true to delete all local lessons" } } }
                             }
                         },
                         { "required", Array.Empty<string>() }
+                    }
+                },
+                new
+                {
+                    name = "codemerger_sync_lessons",
+                    description = "Force-sync community lessons from the remote repository.\n\n" +
+                        "WHEN TO USE: When user wants to refresh community lessons, or after submitting a lesson.\n" +
+                        "NOTE: Community lessons auto-sync every 24 hours on GUI startup. This tool forces an immediate refresh.",
+                    inputSchema = new Dictionary<string, object>
+                    {
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>() },
+                        { "required", Array.Empty<string>() }
+                    }
+                },
+                new
+                {
+                    name = "codemerger_submit_lesson",
+                    description = "Submit a local lesson to the community repository as a GitHub Issue for curation.\n\n" +
+                        "WHEN TO USE: When a local lesson is valuable enough to share with all CodeMerger users.\n" +
+                        "REQUIRES: GitHub sign-in configured in CodeMerger Settings > Community Lessons.",
+                    inputSchema = new Dictionary<string, object>
+                    {
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>
+                            {
+                                { "number", new Dictionary<string, object> { { "type", "integer" }, { "description", "Lesson number to submit (from get_lessons display)" } } }
+                            }
+                        },
+                        { "required", new[] { "number" } }
                     }
                 }
             };

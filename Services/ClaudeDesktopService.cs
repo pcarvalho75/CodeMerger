@@ -31,6 +31,25 @@ namespace CodeMerger.Services
                 "Claude", "claude_desktop_config.json");
         }
 
+        /// <summary>
+        /// Gets the stable directory where CodeMerger deploys itself.
+        /// This path never changes, unlike ClickOnce's random Apps\2.0\ paths.
+        /// </summary>
+        public string GetStableDirectory()
+        {
+            return Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "CodeMerger", "current");
+        }
+
+        /// <summary>
+        /// Gets the stable EXE path that Claude Desktop should always point to.
+        /// </summary>
+        public string GetStableExePath()
+        {
+            return Path.Combine(GetStableDirectory(), "CodeMerger.exe");
+        }
+
         public bool IsClaudeDesktopInstalled()
         {
             return ConfigExists();
@@ -104,6 +123,15 @@ namespace CodeMerger.Services
 
         /// <summary>
         /// Ensures CodeMerger is configured in Claude Desktop.
+        /// Always points to the stable path so it survives ClickOnce updates.
+        /// </summary>
+        public void EnsureConfigured()
+        {
+            EnsureConfigured(GetStableExePath());
+        }
+
+        /// <summary>
+        /// Ensures CodeMerger is configured in Claude Desktop with a specific path.
         /// Uses fixed entry name "codemerger" with no project-specific args.
         /// The active project is determined by ProjectService.GetActiveProject().
         /// </summary>
@@ -158,29 +186,97 @@ namespace CodeMerger.Services
         }
 
         /// <summary>
-        /// Checks if configured path matches current EXE and updates if needed.
-        /// Returns true if config was updated.
+        /// Copies the running application and all its dependencies to the stable directory.
+        /// Returns true if files were copied (new or updated).
+        /// </summary>
+        public bool DeployStableCopy()
+        {
+            var currentExePath = GetCurrentExePath();
+            var sourceDir = Path.GetDirectoryName(currentExePath);
+            var stableDir = GetStableDirectory();
+            var stableExePath = GetStableExePath();
+
+            if (string.IsNullOrEmpty(sourceDir)) return false;
+
+            // Skip if we're already running from the stable directory
+            if (sourceDir.Equals(stableDir, StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            // Check if an update is needed by comparing the EXE write times
+            if (File.Exists(stableExePath))
+            {
+                var sourceTime = File.GetLastWriteTimeUtc(currentExePath);
+                var stableTime = File.GetLastWriteTimeUtc(stableExePath);
+                if (sourceTime <= stableTime)
+                    return false; // Stable copy is up to date
+            }
+
+            // Create stable directory
+            Directory.CreateDirectory(stableDir);
+
+            // Copy all files from source directory (EXE, DLLs, configs, etc.)
+            var filesToCopy = Directory.GetFiles(sourceDir, "*", SearchOption.AllDirectories);
+            int copied = 0;
+
+            foreach (var sourceFile in filesToCopy)
+            {
+                var relativePath = Path.GetRelativePath(sourceDir, sourceFile);
+                var destFile = Path.Combine(stableDir, relativePath);
+                var destDir = Path.GetDirectoryName(destFile);
+
+                if (!string.IsNullOrEmpty(destDir) && !Directory.Exists(destDir))
+                    Directory.CreateDirectory(destDir);
+
+                try
+                {
+                    File.Copy(sourceFile, destFile, overwrite: true);
+                    copied++;
+                }
+                catch
+                {
+                    // File might be locked (e.g., another MCP instance running) — skip it
+                }
+            }
+
+            return copied > 0;
+        }
+
+        /// <summary>
+        /// Deploys to stable directory and ensures Claude Desktop config points there.
+        /// Returns true if anything was updated.
         /// </summary>
         public bool SelfHeal()
         {
-            var currentExePath = GetCurrentExePath();
+            bool changed = false;
+
+            // Step 1: Deploy stable copy
+            try
+            {
+                changed = DeployStableCopy();
+            }
+            catch
+            {
+                // Deploy failed — continue to fix config anyway
+            }
+
+            // Step 2: Ensure Claude Desktop config points to stable path
+            var stableExePath = GetStableExePath();
             var configuredPath = GetConfiguredExePath();
 
             if (configuredPath == null)
             {
-                // Not configured at all - configure it
-                EnsureConfigured(currentExePath);
-                return true;
+                // Not configured at all
+                EnsureConfigured(stableExePath);
+                changed = true;
             }
-
-            if (!string.Equals(configuredPath, currentExePath, StringComparison.OrdinalIgnoreCase))
+            else if (!string.Equals(configuredPath, stableExePath, StringComparison.OrdinalIgnoreCase))
             {
-                // Path mismatch - update it
-                EnsureConfigured(currentExePath);
-                return true;
+                // Points to wrong path (old ClickOnce path, or anything else)
+                EnsureConfigured(stableExePath);
+                changed = true;
             }
 
-            return false;
+            return changed;
         }
 
         public string GetCurrentExePath()

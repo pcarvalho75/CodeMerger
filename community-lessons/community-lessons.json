@@ -1,0 +1,29 @@
+[
+  {
+    "type": "workflow",
+    "component": "General",
+    "observation": "When making multiple edits to the same file, doing them all at once can cause str_replace failures if earlier edits change the content that later edits target.",
+    "proposal": "Make one edit at a time, verify with get_diagnostics or build between edits, then proceed to the next.",
+    "suggestedCode": "",
+    "timestamp": "2025-01-01T00:00:00",
+    "contributedBy": "CodeMerger Team"
+  },
+  {
+    "type": "workflow",
+    "component": "General",
+    "observation": "Before renaming any symbol, it's critical to understand the blast radius — how many files and call sites will be affected.",
+    "proposal": "Always call get_dependencies before rename_symbol, then run rename_symbol with preview=true first.",
+    "suggestedCode": "",
+    "timestamp": "2025-01-01T00:00:00",
+    "contributedBy": "CodeMerger Team"
+  },
+  {
+    "type": "description",
+    "component": "str_replace",
+    "observation": "str_replace fails with 'not found' when whitespace (tabs vs spaces, trailing spaces) doesn't match exactly.",
+    "proposal": "When str_replace fails, use get_lines to see the exact whitespace at those line numbers, then copy the exact content.",
+    "suggestedCode": "",
+    "timestamp": "2025-01-01T00:00:00",
+    "contributedBy": "CodeMerger Team"
+  }
+]

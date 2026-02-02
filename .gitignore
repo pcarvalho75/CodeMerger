@@ -361,3 +361,10 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+/Models/CommunityLessonSettings.cs.bak
+/Services/Mcp/McpLessonToolHandler.cs.bak
+/Services/Mcp/McpSemanticToolHandler.cs.bak
+/Services/Mcp/McpToolRegistry.cs.bak
+/Services/Mcp/McpWriteToolHandler.cs.bak
+/Services/CommunityLessonSyncService.cs.bak
+/Services/ClaudeDesktopService.cs.bak

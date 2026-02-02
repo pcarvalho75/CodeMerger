@@ -14,13 +14,5 @@ namespace CodeMerger.Models
         public string Observation { get; set; } = string.Empty;
         public string Proposal { get; set; } = string.Empty;
         public string? SuggestedCode { get; set; }
-        public LessonSource Source { get; set; } = LessonSource.Local;
-        public string? ContributedBy { get; set; }
-    }
-
-    public enum LessonSource
-    {
-        Local,
-        Community
     }
 }

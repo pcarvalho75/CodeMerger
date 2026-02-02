@@ -465,127 +465,11 @@
                     </TabItem>
                     
                     <!-- Tab 2: Found Files -->
-                    <TabItem Header="📄 Found Files">
+                    <TabItem x:Name="foundFilesTab" Header="📄 Found Files">
                         <Grid Margin="0,16,0,0">
                             <ListBox x:Name="fileListBox" Style="{StaticResource ModernListBox}" 
                                      HorizontalContentAlignment="Stretch" FontSize="12"/>
                         </Grid>
-                    </TabItem>
-
-                    <!-- Tab 3: Parameters -->
-                    <TabItem Header="⚙️ Parameters">
-                        <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,16,0,0">
-                            <StackPanel>
-                                <!-- Backup Settings Section -->
-                                <Border Background="{StaticResource BackgroundDark}" CornerRadius="8" Padding="20" Margin="0,0,0,16">
-                                    <StackPanel>
-                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,16">
-                                            <TextBlock Text="📦" FontSize="18" VerticalAlignment="Center" Margin="0,0,10,0"/>
-                                            <TextBlock Text="BACKUP SETTINGS" FontSize="14" FontWeight="SemiBold" 
-                                                       Foreground="{StaticResource TextPrimary}" VerticalAlignment="Center"/>
-                                        </StackPanel>
-
-                                        <!-- Create Backup Files -->
-                                        <CheckBox x:Name="createBackupFilesCheckBox" Margin="0,0,0,8"
-                                                  Foreground="{StaticResource TextPrimary}" FontSize="13"
-                                                  Checked="CreateBackupFiles_Changed" Unchecked="CreateBackupFiles_Changed">
-                                            <TextBlock Text="Create .bak backup files" TextWrapping="Wrap"/>
-                                        </CheckBox>
-                                        <TextBlock Text="When enabled, CodeMerger creates .bak files before modifying or deleting files. Provides safety but can clutter workspace."
-                                                   Foreground="{StaticResource TextSecondary}" FontSize="11" TextWrapping="Wrap" Margin="24,0,0,16"/>
-
-                                        <!-- Auto-cleanup -->
-                                        <CheckBox x:Name="autoCleanupCheckBox" Margin="0,0,0,8"
-                                                  Foreground="{StaticResource TextPrimary}" FontSize="13"
-                                                  Checked="AutoCleanup_Changed" Unchecked="AutoCleanup_Changed">
-                                            <TextBlock Text="Auto-cleanup old backups" TextWrapping="Wrap"/>
-                                        </CheckBox>
-                                        <StackPanel Orientation="Horizontal" Margin="24,0,0,16">
-                                            <TextBlock Text="Delete .bak files older than" Foreground="{StaticResource TextSecondary}" 
-                                                       FontSize="12" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                                            <TextBox x:Name="backupRetentionTextBox" Width="60" Style="{StaticResource ModernTextBox}"
-                                                     Text="24" FontSize="12" TextChanged="BackupRetention_TextChanged"
-                                                     ToolTip="Hours (1-720)"/>
-                                            <TextBlock Text="hours" Foreground="{StaticResource TextSecondary}" 
-                                                       FontSize="12" VerticalAlignment="Center" Margin="8,0,0,0"/>
-                                        </StackPanel>
-
-                                        <!-- Max backups per file -->
-                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,16">
-                                            <TextBlock Text="Max backups per file:" Foreground="{StaticResource TextPrimary}" 
-                                                       FontSize="13" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                                            <TextBox x:Name="maxBackupsTextBox" Width="60" Style="{StaticResource ModernTextBox}"
-                                                     Text="1" FontSize="12" TextChanged="MaxBackups_TextChanged"
-                                                     ToolTip="Keep only N most recent .bak files per original (1-100)"/>
-                                        </StackPanel>
-
-                                        <!-- Cleanup buttons -->
-                                        <StackPanel Orientation="Horizontal">
-                                            <Button Content="🗑 Clean All Backups" Click="CleanAllBackups_Click" 
-                                                    Style="{StaticResource ModernButton}" Margin="0,0,12,0"
-                                                    ToolTip="Delete all .bak files in this workspace"/>
-                                            <Button Content="📊 Show Backup Stats" Click="ShowBackupStats_Click" 
-                                                    Style="{StaticResource ModernButton}"
-                                                    ToolTip="Show current backup file statistics"/>
-                                        </StackPanel>
-                                    </StackPanel>
-                                </Border>
-
-                                <!-- MCP Activity Settings Section -->
-                                <Border Background="{StaticResource BackgroundDark}" CornerRadius="8" Padding="20" Margin="0,0,0,16">
-                                    <StackPanel>
-                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,16">
-                                            <TextBlock Text="⚡" FontSize="18" VerticalAlignment="Center" Margin="0,0,10,0"/>
-                                            <TextBlock Text="MCP ACTIVITY SETTINGS" FontSize="14" FontWeight="SemiBold" 
-                                                       Foreground="{StaticResource TextPrimary}" VerticalAlignment="Center"/>
-                                        </StackPanel>
-
-                                        <!-- Timeout threshold -->
-                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                                            <TextBlock Text="Timeout threshold:" Foreground="{StaticResource TextPrimary}" 
-                                                       FontSize="13" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                                            <TextBox x:Name="timeoutThresholdTextBox" Width="60" Style="{StaticResource ModernTextBox}"
-                                                     Text="45" FontSize="12" TextChanged="TimeoutThreshold_TextChanged"
-                                                     ToolTip="Seconds before showing timeout warning (5-300)"/>
-                                            <TextBlock Text="seconds" Foreground="{StaticResource TextSecondary}" 
-                                                       FontSize="12" VerticalAlignment="Center" Margin="8,0,0,0"/>
-                                        </StackPanel>
-                                        <TextBlock Text="Show timeout warning when Claude doesn't respond after this many seconds."
-                                                   Foreground="{StaticResource TextSecondary}" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,16"/>
-
-                                        <!-- Show session statistics -->
-                                        <CheckBox x:Name="showSessionStatsCheckBox" IsChecked="True"
-                                                  Foreground="{StaticResource TextPrimary}" FontSize="13"
-                                                  Checked="ShowSessionStats_Changed" Unchecked="ShowSessionStats_Changed">
-                                            <TextBlock Text="Show session statistics" TextWrapping="Wrap"/>
-                                        </CheckBox>
-                                        <TextBlock Text="Display call count, timing, and timeout info in the bottom status bar."
-                                                   Foreground="{StaticResource TextSecondary}" FontSize="11" TextWrapping="Wrap" Margin="24,0,0,0"/>
-                                    </StackPanel>
-                                </Border>
-
-                                <!-- Settings Restart Banner -->
-                                <Border x:Name="settingsRestartBanner" Background="#3a2a1a" CornerRadius="8" Padding="16" 
-                                        Margin="0,0,0,16" Visibility="Collapsed">
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="Auto"/>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock Text="⚠️" FontSize="16" VerticalAlignment="Center" Margin="0,0,12,0"/>
-                                        <TextBlock Grid.Column="1" Text="Settings saved. MCP server restart required for backup settings to take effect."
-                                                   Foreground="{StaticResource AccentWarning}" FontSize="12" VerticalAlignment="Center" TextWrapping="Wrap"/>
-                                        <Button Grid.Column="2" Content="Restart Server" Click="RestartMcpServer_Click" 
-                                                Style="{StaticResource ModernButton}" Margin="12,0,0,0"/>
-                                    </Grid>
-                                </Border>
-
-                                <!-- Info footer -->
-                                <TextBlock Text="ℹ️  Changes are saved automatically per workspace. Some settings require MCP server restart."
-                                           Foreground="{StaticResource TextSecondary}" FontSize="11" FontStyle="Italic"/>
-                            </StackPanel>
-                        </ScrollViewer>
                     </TabItem>
                 </TabControl>
             </Border>
@@ -597,117 +481,292 @@
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
 
-                <!-- Row 1: Claude Desktop Status -->
-                <Grid>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
+                                <!-- ═══════════════ CLAUDE DESKTOP SECTION ═══════════════ -->
+                                <Border Background="{StaticResource BackgroundDark}" CornerRadius="8" Padding="20" Margin="0,0,0,16">
+                                    <StackPanel>
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                                            <TextBlock Text="🟣 Claude Desktop" FontSize="16" FontWeight="Bold" Foreground="{StaticResource TextPrimary}" VerticalAlignment="Center"
+                                                       ToolTip="Claude Desktop connects via stdio pipe. CodeMerger registers itself in Claude's MCP config so it auto-starts when Claude opens."/>
+                                            <Border Background="#2a2a4a" CornerRadius="4" Padding="8,3" Margin="12,0,0,0" VerticalAlignment="Center">
+                                                <TextBlock Text="stdio pipe — auto-managed" Foreground="{StaticResource TextSecondary}" FontSize="10"
+                                                           ToolTip="Claude Desktop communicates with CodeMerger over a local stdio pipe. No network ports or tunnels needed. The connection is managed automatically through Claude's MCP configuration file."/>
+                                            </Border>
+                                        </StackPanel>
 
-                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                        <TextBlock Text="Claude Desktop:" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" VerticalAlignment="Center" Margin="0,0,12,0"/>
-                        <Border Background="{StaticResource BackgroundDark}" CornerRadius="4" Padding="8,4" Margin="0,0,16,0">
-                            <TextBlock x:Name="claudeInstallStatus" Text="Checking..." Foreground="{StaticResource TextSecondary}" FontSize="11"/>
-                        </Border>
-                        <TextBlock Text="Config:" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" VerticalAlignment="Center" Margin="0,0,12,0"/>
-                        <Border Background="{StaticResource BackgroundDark}" CornerRadius="4" Padding="8,4">
-                            <TextBlock x:Name="claudeConfigStatus" Text="Checking..." Foreground="{StaticResource TextSecondary}" FontSize="11"/>
-                        </Border>
-                    </StackPanel>
+                                        <!-- Status Row -->
+                                        <Grid Margin="0,0,0,12">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
 
-                    <!-- Output Folder -->
-                    <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
-                        <TextBlock Text="Output:" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                        <TextBox x:Name="outputFileTextBox" Width="300" IsReadOnly="True" Style="{StaticResource ModernTextBox}" 
-                                 Background="{StaticResource BackgroundDark}" FontSize="11"/>
-                        <Button Content="📂 Open" Click="OpenFolder_Click" Style="{StaticResource ModernButton}" Margin="8,0,0,0"/>
-                    </StackPanel>
+                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                <TextBlock Text="Installation:" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center" Margin="0,0,8,0"
+                                                           ToolTip="Checks whether Claude Desktop is installed on this machine. Download from https://claude.ai/download if not installed."/>
+                                                <Border Background="{StaticResource BackgroundCard}" CornerRadius="4" Padding="8,4" Margin="0,0,16,0">
+                                                    <TextBlock x:Name="claudeInstallStatus" Text="Checking..." Foreground="{StaticResource TextSecondary}" FontSize="11"
+                                                               ToolTip="Shows whether Claude Desktop app was detected. Green = installed, Red = not found."/>
+                                                </Border>
+                                                <TextBlock Text="MCP Config:" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center" Margin="0,0,8,0"
+                                                           ToolTip="Checks if CodeMerger is registered in Claude Desktop's MCP configuration file (claude_desktop_config.json). This file tells Claude which MCP servers to connect to on startup."/>
+                                                <Border Background="{StaticResource BackgroundCard}" CornerRadius="4" Padding="8,4">
+                                                    <TextBlock x:Name="claudeConfigStatus" Text="Checking..." Foreground="{StaticResource TextSecondary}" FontSize="11"
+                                                               ToolTip="Shows whether CodeMerger is registered as an MCP server in Claude's config. Green = configured, Yellow = not yet added."/>
+                                                </Border>
+                                            </StackPanel>
 
-                    <!-- Action Buttons -->
-                    <StackPanel Grid.Column="2" Orientation="Horizontal">
-                        <Button x:Name="claudeDownloadButton" Content="Download Claude" Click="ClaudeDownload_Click" Style="{StaticResource LinkButton}" Visibility="Collapsed"/>
-                        <Button x:Name="claudeAddConfigButton" Content="Add to Claude" Click="ClaudeAddConfig_Click" Style="{StaticResource ModernButton}" Visibility="Collapsed" Margin="0,0,8,0"/>
-                        <Button Content="Open Config" Click="ClaudeOpenConfigFolder_Click" Style="{StaticResource LinkButton}"/>
-                    </StackPanel>
-                </Grid>
+                                            <!-- Action Buttons -->
+                                            <StackPanel Grid.Column="2" Orientation="Horizontal">
+                                                <Button x:Name="claudeDownloadButton" Content="⬇ Download Claude" Click="ClaudeDownload_Click" Style="{StaticResource LinkButton}" Visibility="Collapsed"
+                                                        ToolTip="Opens the Claude Desktop download page (https://claude.ai/download). Install Claude Desktop to use CodeMerger as an MCP server."/>
+                                                <Button x:Name="claudeAddConfigButton" Content="➕ Add to Claude Config" Click="ClaudeAddConfig_Click" Style="{StaticResource ModernButton}" Visibility="Collapsed" Margin="0,0,8,0"
+                                                        ToolTip="Automatically adds CodeMerger to Claude Desktop's MCP configuration. After clicking, restart Claude Desktop for changes to take effect."/>
+                                                <Button Content="📂 Open Config Folder" Click="ClaudeOpenConfigFolder_Click" Style="{StaticResource ModernButton}"
+                                                        ToolTip="Opens the folder containing Claude Desktop's configuration file (claude_desktop_config.json). You can manually edit MCP server settings here."/>
+                                            </StackPanel>
+                                        </Grid>
 
-                <!-- Row 2: MCP Activity Status -->
+                <!-- Row 2: ChatGPT Desktop Status -->
                 <Border Grid.Row="1" BorderBrush="{StaticResource BorderColor}" BorderThickness="0,1,0,0" Margin="0,12,0,0" Padding="0,12,0,0">
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="*"/>
-                        </Grid.ColumnDefinitions>
-
-                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                            <TextBlock Text="MCP Activity:" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" VerticalAlignment="Center" Margin="0,0,12,0"/>
-                            <Border x:Name="mcpActivityBorder" Background="{StaticResource BackgroundDark}" CornerRadius="4" Padding="12,6" MinWidth="300">
-                                <StackPanel Orientation="Horizontal">
-                                    <Ellipse x:Name="mcpActivityIndicator" Width="10" Height="10" Fill="#555" VerticalAlignment="Center" Margin="0,0,10,0"/>
-                                    <TextBlock x:Name="mcpActivityText" Text="Idle" Foreground="{StaticResource TextSecondary}" FontSize="12" VerticalAlignment="Center"/>
-                                </StackPanel>
-                            </Border>
-                        </StackPanel>
-
-                        <!-- Session Stats -->
-                        <StackPanel x:Name="sessionStatsPanel" Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                            <TextBlock x:Name="mcpStatsText" Text="No activity this session" Foreground="{StaticResource TextSecondary}" FontSize="11" VerticalAlignment="Center"/>
-                            <Button x:Name="resetStatsButton" Content="🔄" Click="ResetStats_Click" Style="{StaticResource IconButton}" 
-                                    ToolTip="Reset session statistics" Margin="8,0,0,0" FontSize="12"/>
-                        </StackPanel>
-                    </Grid>
-                </Border>
-
-                <!-- Row 3: ChatGPT Desktop Status -->
-                <Border Grid.Row="2" BorderBrush="{StaticResource BorderColor}" BorderThickness="0,1,0,0" Margin="0,12,0,0" Padding="0,12,0,0">
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
 
-                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                            <TextBlock Text="ChatGPT Desktop:" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" VerticalAlignment="Center" Margin="0,0,12,0"/>
-                            <Border Background="{StaticResource BackgroundDark}" CornerRadius="4" Padding="8,4" Margin="0,0,12,0">
+                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                <TextBlock Text="Server:" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center" Margin="0,0,8,0"
+                                                           ToolTip="Status of the local HTTP server that handles MCP requests from ChatGPT Desktop."/>
+                                                <Border Background="{StaticResource BackgroundCard}" CornerRadius="4" Padding="8,4" Margin="0,0,12,0">
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <Ellipse x:Name="chatGptIndicator" Width="8" Height="8" Fill="#555" VerticalAlignment="Center" Margin="0,0,8,0"
+                                                                 ToolTip="Green = server running and tunnel active. Red = server stopped. Gray = not started."/>
+                                                        <TextBlock x:Name="chatGptStatusText" Text="Stopped" Foreground="{StaticResource TextSecondary}" FontSize="11"
+                                                                   ToolTip="Current status of the ChatGPT MCP server. Shows 'Running on port XXXX' when active."/>
+                                                    </StackPanel>
+                                                </Border>
+                                            </StackPanel>
+
+                                            <!-- Start/Stop Buttons -->
+                                            <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="8,0,0,0">
+                                                <Button x:Name="chatGptStartButton" Content="▶ Start Server" Click="ChatGptStart_Click" Style="{StaticResource PrimaryButton}"
+                                                        ToolTip="Starts a local HTTP server and creates a cloudflared tunnel to expose it publicly. The generated URL can be pasted into ChatGPT Desktop's MCP settings. Requires cloudflared to be installed (will be downloaded automatically if missing)."/>
+                                                <Button x:Name="chatGptStopButton" Content="⏹ Stop" Click="ChatGptStop_Click" Style="{StaticResource ModernButton}" Visibility="Collapsed" Margin="8,0,0,0"
+                                                        ToolTip="Stops the HTTP server and closes the cloudflared tunnel. ChatGPT Desktop will lose the connection until you start again."/>
+                                            </StackPanel>
+
+                                            <!-- Public URL -->
+                                            <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="12,0,0,0">
+                                                <TextBlock Text="Public URL:" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center" Margin="0,0,8,0"
+                                                           ToolTip="The publicly accessible URL created by the cloudflared tunnel. Copy this URL and paste it in ChatGPT Desktop → Settings → Apps → Create app → MCP Server URL."/>
+                                                <TextBox x:Name="publicUrlTextBox" Width="350" IsReadOnly="True" Style="{StaticResource ModernTextBox}" 
+                                                         Background="{StaticResource BackgroundCard}" FontSize="11" Text="Click 'Start Server' to generate URL"
+                                                         ToolTip="This URL is generated dynamically each time you start the server. It changes on every restart, so you'll need to update ChatGPT Desktop's MCP settings accordingly."/>
+                                                <Button x:Name="copyUrlButton" Content="📋 Copy" Click="CopyUrl_Click" Style="{StaticResource ModernButton}" Margin="8,0,0,0" IsEnabled="False"
+                                                        ToolTip="Copy the public tunnel URL to clipboard. Paste it in ChatGPT Desktop → Settings → Apps → Create app → MCP Server URL."/>
+                                            </StackPanel>
+
+                                            <!-- Utility Buttons -->
+                                            <StackPanel Grid.Column="3" Orientation="Horizontal">
+                                                <Button Content="📄 Log" Click="OpenLog_Click" Style="{StaticResource IconButton}" Margin="0,0,4,0"
+                                                        ToolTip="Open the MCP server log file. Useful for debugging connection issues, viewing tool call history, and diagnosing errors."/>
+                                                <Button x:Name="tunnelHelpButton" Content="❓ Help" Click="TunnelHelp_Click" Style="{StaticResource IconButton}"
+                                                        ToolTip="Show detailed setup instructions for connecting ChatGPT Desktop to CodeMerger via the cloudflared tunnel."/>
+                                            </StackPanel>
+                                        </Grid>
+
+                                        <!-- ChatGPT Setup Instructions -->
+                                        <Border Background="{StaticResource BackgroundCard}" CornerRadius="6" Padding="16" Margin="0,4,0,0">
+                                            <StackPanel>
+                                                <TextBlock Text="📋 Setup Instructions" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" Margin="0,0,0,8"/>
+                                                <TextBlock Foreground="{StaticResource TextSecondary}" FontSize="11" TextWrapping="Wrap" LineHeight="20"
+                                                           Text="1. Click 'Start Server' above — this launches a local HTTP server + cloudflared tunnel&#x0a;2. Wait for the public URL to appear (may take a few seconds)&#x0a;3. Copy the URL with the 📋 button&#x0a;4. In ChatGPT Desktop: Settings → Apps → Create app&#x0a;5. Enable 'Developer Mode' (required for MCP)&#x0a;6. Paste the URL as 'MCP Server URL' and save&#x0a;7. ChatGPT can now use all CodeMerger tools"
+                                                           ToolTip="ChatGPT Desktop requires Developer Mode enabled and a publicly accessible MCP server URL. The cloudflared tunnel provides this without opening firewall ports."/>
+                                                <TextBlock Foreground="#6c7086" FontSize="10" TextWrapping="Wrap" Margin="0,8,0,0"
+                                                           Text="Tip: The tunnel URL changes every time you restart. Update the URL in ChatGPT Desktop settings after each restart. cloudflared is downloaded automatically on first use (~30MB)."
+                                                           ToolTip="cloudflared is Cloudflare's tunnel client. It creates a secure tunnel from your local machine to Cloudflare's edge network, making your local server accessible via a public URL without port forwarding."/>
+                                            </StackPanel>
+                                        </Border>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- ═══════════════ CONNECTION STATUS OVERVIEW ═══════════════ -->
+                                <Border Background="{StaticResource BackgroundDark}" CornerRadius="8" Padding="20">
+                                    <StackPanel>
+                                        <TextBlock Text="ℹ️ How MCP Connections Work" FontSize="14" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" Margin="0,0,0,12"
+                                                   ToolTip="Model Context Protocol (MCP) is a standard for connecting AI assistants to external tools. CodeMerger implements an MCP server that exposes code analysis and editing tools."/>
+                                        <TextBlock Foreground="{StaticResource TextSecondary}" FontSize="11" TextWrapping="Wrap" LineHeight="20"
+                                                   Text="CodeMerger acts as an MCP (Model Context Protocol) server that provides AI assistants with tools to navigate, search, edit, and build your codebase. Two connection methods are supported:&#x0a;&#x0a;• Claude Desktop — uses stdio pipes (local only, zero configuration after initial setup, auto-starts with Claude)&#x0a;• ChatGPT Desktop — uses Streamable HTTP over a cloudflared tunnel (requires starting the server each session, URL changes on restart)&#x0a;&#x0a;Both connections provide the same set of tools: get_file, search_code, str_replace, build, get_diagnostics, rename_symbol, and many more. The tools are registered dynamically based on your loaded workspace."
+                                                   ToolTip="MCP tools are context-aware. They operate on whichever workspace/project is currently selected in the CodeMerger GUI. Switching projects in the GUI switches the codebase that AI tools operate on."/>
+                                    </StackPanel>
+                                </Border>
+
+                            </StackPanel>
+                        </ScrollViewer>
+                    </TabItem>
+
+                    <!-- Tab 4: Lessons -->
+                    <TabItem x:Name="lessonsTab" Header="📚 Lessons">
+                        <Grid Margin="0,16,0,0">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <!-- Action Bar -->
+                            <Grid Grid.Row="0" Margin="0,0,0,12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
                                 <StackPanel Orientation="Horizontal">
-                                    <Ellipse x:Name="chatGptIndicator" Width="8" Height="8" Fill="#555" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                                    <TextBlock x:Name="chatGptStatusText" Text="Stopped" Foreground="{StaticResource TextSecondary}" FontSize="11"/>
+                                    <Button x:Name="syncLessonsButton" Content="🔄 Sync Now" Click="SyncLessonsNow_Click" Style="{StaticResource ModernButton}" Margin="0,0,6,0"
+                                            ToolTip="Force-sync community lessons from GitHub"/>
+                                    <Button x:Name="deleteLessonButton" Content="🗑 Delete" Click="DeleteLesson_Click" Style="{StaticResource ModernButton}" Margin="0,0,6,0" IsEnabled="False"
+                                            ToolTip="Delete the selected local lesson"/>
+                                    <Button x:Name="submitLessonButton" Content="📤 Submit" Click="SubmitLesson_Click" Style="{StaticResource ModernButton}" Margin="0,0,6,0" IsEnabled="False"
+                                            ToolTip="Submit the selected local lesson to GitHub for community review"/>
+                                    <Button x:Name="clearLocalLessonsButton" Content="🧹 Clear All Local" Click="ClearLocalLessons_Click" Style="{StaticResource ModernButton}"
+                                            ToolTip="Delete all local lessons"/>
+                                    <Button Content="⚙️ Settings" Click="CommunityLessonsSettings_Click" Style="{StaticResource ModernButton}" Margin="6,0,0,0"
+                                            ToolTip="Open Community Lessons settings (GitHub token, repo URL, sync interval)"/>
                                 </StackPanel>
+
+                                <!-- Sync Status -->
+                                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <TextBlock x:Name="lessonSyncStatusText" Text="" FontSize="11" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Grid>
+
+                            <!-- Lists -->
+                            <Grid Grid.Row="1">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="12"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+
+                                <!-- Left: Local Lessons -->
+                                <Grid Grid.Column="0">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="*"/>
+                                    </Grid.RowDefinitions>
+
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                        <TextBlock Text="📝 Local Lessons" FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" VerticalAlignment="Center"/>
+                                        <TextBlock x:Name="localLessonCountText" Text="" FontSize="11" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                    </StackPanel>
+
+                                    <ListBox x:Name="localLessonsListBox" Grid.Row="1" Style="{StaticResource ModernListBox}"
+                                             HorizontalContentAlignment="Stretch" SelectionChanged="LocalLessonListBox_SelectionChanged">
+                                        <ListBox.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border Padding="8,6" CornerRadius="4" Margin="0,1">
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <Border Background="#2a2a4a" CornerRadius="4" Padding="6,2" VerticalAlignment="Top" Margin="0,0,8,0">
+                                                            <TextBlock Text="{Binding Type}" FontSize="10" Foreground="{StaticResource AccentPrimary}" FontWeight="SemiBold"/>
+                                                        </Border>
+                                                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                                            <TextBlock Text="{Binding Component}" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" TextTrimming="CharacterEllipsis"/>
+                                                            <TextBlock Text="{Binding Observation}" FontSize="10" Foreground="{StaticResource TextSecondary}" TextTrimming="CharacterEllipsis" MaxHeight="32"/>
+                                                        </StackPanel>
+                                                        <TextBlock Grid.Column="2" Text="{Binding Timestamp, StringFormat='{}{0:MM/dd}'}" FontSize="9" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Top" Margin="8,0,0,0"/>
+                                                    </Grid>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ListBox.ItemTemplate>
+                                    </ListBox>
+                                </Grid>
+
+                                <!-- Right: Community Lessons -->
+                                <Grid Grid.Column="2">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="*"/>
+                                    </Grid.RowDefinitions>
+
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                        <TextBlock Text="🌐 Community Lessons" FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" VerticalAlignment="Center"/>
+                                        <TextBlock x:Name="communityLessonCountText" Text="" FontSize="11" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                    </StackPanel>
+
+                                    <ListBox x:Name="communityLessonsListBox" Grid.Row="1" Style="{StaticResource ModernListBox}"
+                                             HorizontalContentAlignment="Stretch" SelectionChanged="CommunityLessonListBox_SelectionChanged">
+                                        <ListBox.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border Padding="8,6" CornerRadius="4" Margin="0,1">
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <Border Background="#1a3a2a" CornerRadius="4" Padding="6,2" VerticalAlignment="Top" Margin="0,0,8,0">
+                                                            <TextBlock Text="{Binding Type}" FontSize="10" Foreground="{StaticResource AccentSuccess}" FontWeight="SemiBold"/>
+                                                        </Border>
+                                                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                                            <TextBlock Text="{Binding Component}" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" TextTrimming="CharacterEllipsis"/>
+                                                            <TextBlock Text="{Binding Observation}" FontSize="10" Foreground="{StaticResource TextSecondary}" TextTrimming="CharacterEllipsis" MaxHeight="32"/>
+                                                        </StackPanel>
+                                                        <StackPanel Grid.Column="2" VerticalAlignment="Top" Margin="8,0,0,0">
+                                                            <TextBlock Text="{Binding ContributedBy}" FontSize="9" Foreground="{StaticResource AccentSuccess}" HorizontalAlignment="Right"/>
+                                                        </StackPanel>
+                                                    </Grid>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ListBox.ItemTemplate>
+                                    </ListBox>
+                                </Grid>
+                            </Grid>
+
+                            <!-- Detail Panel -->
+                            <Border x:Name="lessonDetailPanel" Grid.Row="2" Background="{StaticResource BackgroundDark}" CornerRadius="8" Padding="16" Margin="0,12,0,0" 
+                                    MaxHeight="200" Visibility="Collapsed">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="*"/>
+                                    </Grid.RowDefinitions>
+                                    <Grid Margin="0,0,0,8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Border Background="#2a2a4a" CornerRadius="4" Padding="8,3" Margin="0,0,8,0">
+                                            <TextBlock x:Name="detailTypeText" FontSize="10" Foreground="{StaticResource AccentPrimary}" FontWeight="SemiBold"/>
+                                        </Border>
+                                        <TextBlock x:Name="detailComponentText" Grid.Column="1" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" VerticalAlignment="Center"/>
+                                        <TextBlock x:Name="detailContributorText" Grid.Column="3" FontSize="10" Foreground="{StaticResource AccentSuccess}" VerticalAlignment="Center"/>
+                                    </Grid>
+                                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                                        <TextBlock x:Name="detailContentText" FontSize="11" Foreground="{StaticResource TextSecondary}" TextWrapping="Wrap"/>
+                                    </ScrollViewer>
+                                </Grid>
                             </Border>
-                        </StackPanel>
+                        </Grid>
+                    </TabItem>
+                </TabControl>
+            </Border>
+        </Grid>
 
-                        <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="8,0,0,0">
-                            <Button x:Name="chatGptStartButton" Content="▶ Start ChatGPT Server" Click="ChatGptStart_Click" Style="{StaticResource PrimaryButton}"
-                                    ToolTip="Start HTTP server and tunnel for ChatGPT Desktop"/>
-                            <Button x:Name="chatGptStopButton" Content="⏹ Stop" Click="ChatGptStop_Click" Style="{StaticResource ModernButton}" Visibility="Collapsed" Margin="8,0,0,0"
-                                    ToolTip="Stop server and tunnel"/>
-                        </StackPanel>
-
-                        <!-- Public URL -->
-                        <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
-                            <TextBlock Text="URL:" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                            <TextBox x:Name="publicUrlTextBox" Width="380" IsReadOnly="True" Style="{StaticResource ModernTextBox}" 
-                                     Background="{StaticResource BackgroundDark}" FontSize="11" Text="Click 'Start ChatGPT Server' to get URL"
-                                     ToolTip="Copy this URL to ChatGPT Desktop → Settings → Apps → Create app → MCP Server URL"/>
-                            <Button x:Name="copyUrlButton" Content="📋 Copy" Click="CopyUrl_Click" Style="{StaticResource ModernButton}" Margin="8,0,0,0" IsEnabled="False"
-                                    ToolTip="Copy URL to clipboard"/>
-                        </StackPanel>
-
-                        <!-- Help -->
-                        <StackPanel Grid.Column="3" Orientation="Horizontal">
-                            <Button Content="📄 Log" Click="OpenLog_Click" Style="{StaticResource IconButton}" ToolTip="Open MCP log file" Margin="0,0,8,0"/>
-                            <Button x:Name="tunnelHelpButton" Content="?" Click="TunnelHelp_Click" Style="{StaticResource IconButton}" ToolTip="Setup instructions"/>
-                        </StackPanel>
-                    </Grid>
-                </Border>
-            </Grid>
-        </Border>
+        <!-- BOTTOM BAR collapsed — content moved to LLM Connections tab -->
+        <Border Grid.Row="3" Visibility="Collapsed"/>
 
         <!-- STATUS BAR -->
         <Border Grid.Row="4" Background="#12121f" Padding="24,12">

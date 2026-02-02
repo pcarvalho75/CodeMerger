@@ -147,6 +147,33 @@ namespace CodeMerger
 
             RefreshClaudeDesktopStatus();
             _mcpConnectionService.Start();
+
+            // Background sync community lessons (fire-and-forget, non-blocking)
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    var settings = Models.CommunityLessonSettings.Load();
+                    if (!settings.CommunityLessonsEnabled)
+                    {
+                        Dispatcher.Invoke(() => RefreshLessonsTab());
+                        return;
+                    }
+                    var lessonService = new LessonService();
+                    var syncService = new CommunityLessonSyncService(lessonService);
+                    var (synced, count, message) = await syncService.SyncIfStaleAsync(ttlHours: settings.SyncIntervalHours);
+                    Dispatcher.Invoke(() =>
+                    {
+                        if (synced)
+                            UpdateStatus($"Community lessons synced: {count} lessons", Brushes.LightBlue);
+                        RefreshLessonsTab();
+                    });
+                }
+                catch
+                {
+                    Dispatcher.Invoke(() => RefreshLessonsTab());
+                }
+            });
         }
 
         #region MCP Connection Events
@@ -412,9 +439,9 @@ namespace CodeMerger
             if (_claudeDesktopService.IsConfigured())
             {
                 var configuredPath = _claudeDesktopService.GetConfiguredExePath();
-                var currentPath = _claudeDesktopService.GetCurrentExePath();
+                var expectedPath = _claudeDesktopService.GetStableExePath();
 
-                if (string.Equals(configuredPath, currentPath, StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(configuredPath, expectedPath, StringComparison.OrdinalIgnoreCase))
                 {
                     var activeWorkspace = _workspaceManager.GetActiveWorkspaceName();
                     claudeConfigStatus.Text = $"Ready ✓";
@@ -470,8 +497,8 @@ namespace CodeMerger
         {
             try
             {
-                var exePath = _claudeDesktopService.GetCurrentExePath();
-                _claudeDesktopService.EnsureConfigured(exePath);
+                _claudeDesktopService.DeployStableCopy();
+                _claudeDesktopService.EnsureConfigured();
                 UpdateStatus("Added CodeMerger to Claude Desktop config.", Brushes.LightGreen);
                 RefreshClaudeDesktopStatus();
             }
@@ -692,6 +719,252 @@ namespace CodeMerger
                 MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
+        private void CommunityLessonsSettings_Click(object sender, RoutedEventArgs e)
+        {
+            var dialog = new CommunityLessonSettingsDialog { Owner = this };
+            dialog.ShowDialog();
+            RefreshLessonsTab();
+        }
+
+        private void RefreshLessonsTab()
+        {
+            try
+            {
+                var service = new LessonService();
+                var local = service.GetLocalLessons();
+                var community = service.GetCommunityLessons();
+
+                localLessonsListBox.ItemsSource = local;
+                communityLessonsListBox.ItemsSource = community;
+                localLessonCountText.Text = $"({local.Count}/100)";
+                communityLessonCountText.Text = $"({community.Count})";
+
+                // Reset button states
+                deleteLessonButton.IsEnabled = false;
+                submitLessonButton.IsEnabled = false;
+                lessonDetailPanel.Visibility = Visibility.Collapsed;
+            }
+            catch (Exception ex)
+            {
+                UpdateStatus($"Failed to load lessons: {ex.Message}", Brushes.OrangeRed);
+            }
+        }
+
+        private void ShowLessonDetail(Models.Lesson lesson)
+        {
+            detailTypeText.Text = lesson.Type;
+            detailComponentText.Text = lesson.Component;
+            detailContributorText.Text = lesson.ContributedBy ?? "";
+
+            var content = $"Observation:\n{lesson.Observation}\n\nProposal:\n{lesson.Proposal}";
+            if (!string.IsNullOrEmpty(lesson.SuggestedCode))
+                content += $"\n\nSuggested Code:\n{lesson.SuggestedCode}";
+
+            detailContentText.Text = content;
+            lessonDetailPanel.Visibility = Visibility.Visible;
+        }
+
+        private bool _isLessonSelectionChanging;
+
+        private void LocalLessonListBox_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+        {
+            if (_isLessonSelectionChanging) return;
+            _isLessonSelectionChanging = true;
+
+            communityLessonsListBox.SelectedItem = null;
+            if (localLessonsListBox.SelectedItem is Models.Lesson lesson)
+            {
+                deleteLessonButton.IsEnabled = true;
+                submitLessonButton.IsEnabled = true;
+                ShowLessonDetail(lesson);
+            }
+            else
+            {
+                deleteLessonButton.IsEnabled = false;
+                submitLessonButton.IsEnabled = false;
+                lessonDetailPanel.Visibility = Visibility.Collapsed;
+            }
+
+            _isLessonSelectionChanging = false;
+        }
+
+        private void CommunityLessonListBox_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+        {
+            if (_isLessonSelectionChanging) return;
+            _isLessonSelectionChanging = true;
+
+            localLessonsListBox.SelectedItem = null;
+            deleteLessonButton.IsEnabled = false;
+            submitLessonButton.IsEnabled = false;
+            if (communityLessonsListBox.SelectedItem is Models.Lesson lesson)
+            {
+                ShowLessonDetail(lesson);
+            }
+            else
+            {
+                lessonDetailPanel.Visibility = Visibility.Collapsed;
+            }
+
+            _isLessonSelectionChanging = false;
+        }
+
+        private async void SyncLessonsNow_Click(object sender, RoutedEventArgs e)
+        {
+            syncLessonsButton.IsEnabled = false;
+            lessonSyncStatusText.Text = "⏳ Syncing...";
+            lessonSyncStatusText.Foreground = Brushes.LightBlue;
+
+            try
+            {
+                var lessonService = new LessonService();
+                var syncService = new CommunityLessonSyncService(lessonService);
+                var (synced, count, message) = await syncService.ForceSyncAsync();
+
+                lessonSyncStatusText.Text = synced ? $"✅ Synced {count} lessons" : $"ℹ️ {message}";
+                lessonSyncStatusText.Foreground = synced ? Brushes.LightGreen : Brushes.Orange;
+                RefreshLessonsTab();
+            }
+            catch (Exception ex)
+            {
+                lessonSyncStatusText.Text = $"❌ {ex.Message}";
+                lessonSyncStatusText.Foreground = Brushes.OrangeRed;
+            }
+            finally
+            {
+                syncLessonsButton.IsEnabled = true;
+            }
+        }
+
+        private void DeleteLesson_Click(object sender, RoutedEventArgs e)
+        {
+            if (localLessonsListBox.SelectedItem is not Models.Lesson lesson) return;
+
+            var result = MessageBox.Show($"Delete lesson '{lesson.Component}'?\n\n{lesson.Observation}",
+                "Delete Lesson", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            if (result != MessageBoxResult.Yes) return;
+
+            var service = new LessonService();
+            // Find the lesson's index among all lessons (local come first)
+            var all = service.GetLessons();
+            var match = all.FindIndex(l => l.Timestamp == lesson.Timestamp && l.Observation == lesson.Observation);
+            if (match >= 0)
+            {
+                var (success, message) = service.DeleteLesson(match + 1);
+                lessonSyncStatusText.Text = success ? $"✅ {message}" : $"❌ {message}";
+                lessonSyncStatusText.Foreground = success ? Brushes.LightGreen : Brushes.OrangeRed;
+            }
+
+            lessonDetailPanel.Visibility = Visibility.Collapsed;
+            RefreshLessonsTab();
+        }
+
+        private async void SubmitLesson_Click(object sender, RoutedEventArgs e)
+        {
+            if (localLessonsListBox.SelectedItem is not Models.Lesson lesson) return;
+
+            var settings = Models.CommunityLessonSettings.Load();
+            if (string.IsNullOrEmpty(settings.GitHubToken))
+            {
+                lessonSyncStatusText.Text = "❌ GitHub sign-in required — open Settings";
+                lessonSyncStatusText.Foreground = Brushes.OrangeRed;
+                return;
+            }
+
+            var confirm = MessageBox.Show($"Submit lesson '{lesson.Component}' to GitHub as an issue?\n\n{lesson.Observation}",
+                "Submit Lesson", MessageBoxButton.YesNo, MessageBoxImage.Question);
+            if (confirm != MessageBoxResult.Yes) return;
+
+            submitLessonButton.IsEnabled = false;
+            lessonSyncStatusText.Text = "⏳ Submitting to GitHub...";
+            lessonSyncStatusText.Foreground = Brushes.LightBlue;
+
+            try
+            {
+                var repoOwner = "pcarvalho75";
+                var repoName = "CodeMerger";
+
+                if (!string.IsNullOrEmpty(settings.RepoUrl))
+                {
+                    var uri = settings.RepoUrl.TrimEnd('/');
+                    var parts = uri.Split('/');
+                    if (parts.Length >= 2)
+                    {
+                        repoOwner = parts[parts.Length - 2];
+                        repoName = parts[parts.Length - 1];
+                    }
+                }
+
+                var contributor = !string.IsNullOrEmpty(settings.GitHubUsername)
+                    ? $"@{settings.GitHubUsername}" : "Anonymous";
+
+                var title = $"[Lesson] {lesson.Type}: {lesson.Component}";
+                var body = $"## Observation\n{lesson.Observation}\n\n" +
+                           $"## Proposal\n{lesson.Proposal}\n\n" +
+                           $"**Type:** {lesson.Type}\n" +
+                           $"**Component:** {lesson.Component}\n" +
+                           $"**Contributed by:** {contributor}\n" +
+                           $"**Logged:** {lesson.Timestamp:yyyy-MM-dd HH:mm}\n";
+
+                if (!string.IsNullOrEmpty(lesson.SuggestedCode))
+                    body += $"\n## Suggested Code\n```csharp\n{lesson.SuggestedCode}\n```\n";
+
+                using var client = new System.Net.Http.HttpClient();
+                client.DefaultRequestHeaders.Add("Authorization", $"token {settings.GitHubToken}");
+                client.DefaultRequestHeaders.Add("User-Agent", "CodeMerger");
+                client.DefaultRequestHeaders.Add("Accept", "application/vnd.github.v3+json");
+
+                var payload = System.Text.Json.JsonSerializer.Serialize(new { title, body, labels = new[] { "lesson", lesson.Type } });
+                var content = new System.Net.Http.StringContent(payload, System.Text.Encoding.UTF8, "application/json");
+                var response = await client.PostAsync($"https://api.github.com/repos/{repoOwner}/{repoName}/issues", content);
+
+                if (response.IsSuccessStatusCode)
+                {
+                    var responseJson = await response.Content.ReadAsStringAsync();
+                    using var doc = System.Text.Json.JsonDocument.Parse(responseJson);
+                    var issueUrl = doc.RootElement.GetProperty("html_url").GetString();
+                    lessonSyncStatusText.Text = $"✅ Submitted — {issueUrl}";
+                    lessonSyncStatusText.Foreground = Brushes.LightGreen;
+                }
+                else
+                {
+                    var errorBody = await response.Content.ReadAsStringAsync();
+                    lessonSyncStatusText.Text = $"❌ HTTP {(int)response.StatusCode}";
+                    lessonSyncStatusText.Foreground = Brushes.OrangeRed;
+                }
+            }
+            catch (Exception ex)
+            {
+                lessonSyncStatusText.Text = $"❌ {ex.Message}";
+                lessonSyncStatusText.Foreground = Brushes.OrangeRed;
+            }
+            finally
+            {
+                submitLessonButton.IsEnabled = true;
+            }
+        }
+
+        private void ClearLocalLessons_Click(object sender, RoutedEventArgs e)
+        {
+            var service = new LessonService();
+            var count = service.GetLessonCount();
+            if (count == 0)
+            {
+                lessonSyncStatusText.Text = "ℹ️ No local lessons to clear";
+                lessonSyncStatusText.Foreground = Brushes.Orange;
+                return;
+            }
+
+            var result = MessageBox.Show($"Delete all {count} local lessons? This cannot be undone.",
+                "Clear Local Lessons", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            if (result != MessageBoxResult.Yes) return;
+
+            service.ClearAllLessons();
+            lessonSyncStatusText.Text = $"✅ Cleared {count} local lessons";
+            lessonSyncStatusText.Foreground = Brushes.LightGreen;
+            lessonDetailPanel.Visibility = Visibility.Collapsed;
+            RefreshLessonsTab();
+        }
+
         private void OpenLog_Click(object sender, RoutedEventArgs e)
         {
             // Get log file path from the SSE server if available, otherwise use default location
@@ -779,8 +1052,8 @@ namespace CodeMerger
         {
             try
             {
-                var exePath = _claudeDesktopService.GetCurrentExePath();
-                _claudeDesktopService.EnsureConfigured(exePath);
+                _claudeDesktopService.DeployStableCopy();
+                _claudeDesktopService.EnsureConfigured();
             }
             catch
             {
@@ -1070,6 +1343,7 @@ namespace CodeMerger
             _isScanning = true;
 
             FoundFiles.Clear();
+            foundFilesTab.Header = "📄 Found Files";
 
             var selectedDirs = _directoryManager.GetSelectedPaths().ToList();
             var enabledRepos = _gitRepositoryManager.Repositories.Where(r => r.IsEnabled).ToList();
@@ -1100,6 +1374,7 @@ namespace CodeMerger
                 }
 
                 _estimatedTokens = result.EstimatedTokens;
+                foundFilesTab.Header = $"📄 Found Files ({result.Files.Count})";
                 UpdateStatus($"Found {result.Files.Count} files (~{_estimatedTokens:N0} tokens)", Brushes.Gray);
                 UpdateRecommendation();
             }

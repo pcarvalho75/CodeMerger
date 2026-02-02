@@ -1,6 +1,7 @@
 using System;
 using System.Text;
 using System.Text.Json;
+using CodeMerger.Models;
 
 namespace CodeMerger.Services.Mcp
 {
@@ -47,7 +48,7 @@ namespace CodeMerger.Services.Mcp
             {
                 var count = _lessonService.GetLessonCount();
                 return $"# Lesson Not Logged\n\n" +
-                       $"**Reason:** Lesson storage is full ({count}/10).\n\n" +
+                       $"**Reason:** Local lesson storage is full ({count}/100).\n\n" +
                        $"Ask the user to review lessons with `get_lessons` and either apply improvements or clear lessons with `delete_lesson`.";
             }
 
@@ -66,7 +67,7 @@ namespace CodeMerger.Services.Mcp
             sb.AppendLine($"**Component:** {component}");
             sb.AppendLine($"**Observation:** {observation}");
             sb.AppendLine();
-            sb.AppendLine($"*Lessons stored: {newCount}/10*");
+            sb.AppendLine($"*Local lessons stored: {newCount}/100*");
 
             return sb.ToString();
         }
@@ -91,20 +92,26 @@ namespace CodeMerger.Services.Mcp
                        "- New tool ideas";
             }
 
+            var localCount = _lessonService.GetLessonCount();
+            var communityCount = _lessonService.GetCommunityLessons().Count;
+
             var sb = new StringBuilder();
             sb.AppendLine("# Self-Improvement Lessons");
             sb.AppendLine();
-            sb.AppendLine($"*{lessons.Count}/10 lessons logged*");
+            sb.AppendLine($"*Local: {localCount}/100 | Community: {communityCount}*");
             sb.AppendLine();
 
             foreach (var lesson in lessons)
             {
+                var sourceTag = lesson.Source == LessonSource.Community ? " 🌐" : " 📌";
                 sb.AppendLine($"---");
-                sb.AppendLine($"## Lesson #{lesson.Number}");
+                sb.AppendLine($"## Lesson #{lesson.Number}{sourceTag}");
                 sb.AppendLine();
                 sb.AppendLine($"**Type:** {lesson.Type}");
                 sb.AppendLine($"**Component:** {lesson.Component}");
                 sb.AppendLine($"**Logged:** {lesson.Timestamp:yyyy-MM-dd HH:mm}");
+                if (lesson.Source == LessonSource.Community && !string.IsNullOrEmpty(lesson.ContributedBy))
+                    sb.AppendLine($"**Contributed by:** {lesson.ContributedBy}");
                 sb.AppendLine();
                 sb.AppendLine($"**Observation:** {lesson.Observation}");
                 sb.AppendLine();
@@ -124,14 +131,14 @@ namespace CodeMerger.Services.Mcp
 
             sb.AppendLine("---");
             sb.AppendLine();
-            sb.AppendLine("*To apply improvements, review each lesson and use the code editing tools to implement changes.*");
-            sb.AppendLine("*After improvements are applied, use `delete_lesson` to clear individual lessons or all lessons.*");
+            sb.AppendLine("*📌 = Local lesson (deletable) | 🌐 = Community lesson (read-only)*");
 
             return sb.ToString();
         }
 
         /// <summary>
-        /// Deletes a specific lesson or all lessons.
+        /// Deletes a specific lesson or all local lessons.
+        /// Community lessons cannot be deleted.
         /// </summary>
         public string DeleteLesson(JsonElement arguments)
         {
@@ -142,27 +149,23 @@ namespace CodeMerger.Services.Mcp
             {
                 var count = _lessonService.GetLessonCount();
                 _lessonService.ClearAllLessons();
-                return $"# Lessons Cleared\n\n**Deleted:** {count} lesson(s)\n\n*Lesson storage is now empty.*";
+                return $"# Local Lessons Cleared\n\n**Deleted:** {count} local lesson(s)\n\n*Community lessons are not affected.*";
             }
 
-            // Otherwise, delete by number
+            // Otherwise, delete by displayed number
             if (!arguments.TryGetProperty("number", out var numberEl))
-                return "Error: Either 'number' (1-10) or 'all: true' parameter is required.";
+                return "Error: Either 'number' or 'all: true' parameter is required.";
 
             var number = numberEl.GetInt32();
-
-            if (number < 1 || number > 10)
-                return "Error: Lesson number must be between 1 and 10.";
-
-            var success = _lessonService.DeleteLesson(number);
+            var (success, message) = _lessonService.DeleteLesson(number);
 
             if (!success)
             {
-                return $"# Lesson Not Found\n\n**Number:** {number}\n\n*Use `get_lessons` to see available lessons.*";
+                return $"# Lesson Not Deleted\n\n{message}\n\n*Use `get_lessons` to see available lessons.*";
             }
 
             var remaining = _lessonService.GetLessonCount();
-            return $"# Lesson Deleted\n\n**Number:** {number}\n**Remaining:** {remaining}/10";
+            return $"# Lesson Deleted\n\n{message}\n**Remaining local:** {remaining}/100";
         }
     }
 }
