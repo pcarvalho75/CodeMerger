@@ -9,8 +9,8 @@ namespace CodeMerger.Services
 {
     public class ClaudeDesktopService
     {
-        // Fixed entry name - no longer includes project name
-        private const string EntryName = "codemerger";
+        // Fixed entry name - Claude Desktop requires "mcpsrv_" prefix or UUID
+        private const string EntryName = "mcpsrv_codemerger";
 
         private static readonly JsonSerializerOptions JsonOptions = new JsonSerializerOptions
         {
@@ -149,9 +149,9 @@ namespace CodeMerger.Services
 
             var mcpServers = mcpServersNode.AsObject();
 
-            // Remove any old codemerger-* entries (migration from old format)
+            // Remove any old entries (migration from old formats)
             var oldEntries = mcpServers
-                .Where(kv => kv.Key.StartsWith("codemerger-"))
+                .Where(kv => kv.Key.StartsWith("codemerger-") || kv.Key == "codemerger")
                 .Select(kv => kv.Key)
                 .ToList();
 
