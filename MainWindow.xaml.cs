@@ -147,9 +147,11 @@ namespace CodeMerger
                 bool healed = (bool)Application.Current.Properties["ConfigHealed"];
                 if (healed)
                 {
-                    string message = _claudeDesktopService.IsClickOnceDeployment()
-                        ? "ClickOnce update detected. Updated Claude Desktop config."
-                        : "Updated Claude Desktop config to match current installation.";
+                    string message = _claudeDesktopService.IsDebugRun()
+                        ? "Debug run detected. Claude Desktop config updated to use debug exe."
+                        : _claudeDesktopService.IsClickOnceDeployment()
+                            ? "ClickOnce update detected. Updated Claude Desktop config."
+                            : "Updated Claude Desktop config to match current installation.";
                     UpdateStatus(message, Brushes.LightGreen);
                 }
             }
@@ -500,12 +502,17 @@ namespace CodeMerger
             if (_claudeDesktopService.IsConfigured())
             {
                 var configuredPath = _claudeDesktopService.GetConfiguredExePath();
-                var expectedPath = _claudeDesktopService.GetStableExePath();
+                var currentExePath = _claudeDesktopService.GetCurrentExePath();
+                var stableExePath = _claudeDesktopService.GetStableExePath();
 
-                if (string.Equals(configuredPath, expectedPath, StringComparison.OrdinalIgnoreCase))
+                // Config is correct if it points to either the current exe or the stable path
+                bool isCorrect = string.Equals(configuredPath, currentExePath, StringComparison.OrdinalIgnoreCase) ||
+                                 string.Equals(configuredPath, stableExePath, StringComparison.OrdinalIgnoreCase);
+
+                if (isCorrect)
                 {
-                    var activeWorkspace = _workspaceManager.GetActiveWorkspaceName();
-                    claudeConfigStatus.Text = $"Ready ✓";
+                    bool isDebug = _claudeDesktopService.IsDebugRun();
+                    claudeConfigStatus.Text = isDebug ? "Ready ✓ (Debug)" : "Ready ✓";
                     claudeConfigStatus.Foreground = new SolidColorBrush(Color.FromRgb(0, 217, 165));
                 }
                 else
@@ -558,8 +565,7 @@ namespace CodeMerger
         {
             try
             {
-                _claudeDesktopService.DeployStableCopy();
-                _claudeDesktopService.EnsureConfigured();
+                _claudeDesktopService.SelfHeal();
                 UpdateStatus("Added CodeMerger to Claude Desktop config.", Brushes.LightGreen);
                 RefreshClaudeDesktopStatus();
             }
@@ -1115,8 +1121,7 @@ namespace CodeMerger
         {
             try
             {
-                _claudeDesktopService.DeployStableCopy();
-                _claudeDesktopService.EnsureConfigured();
+                _claudeDesktopService.SelfHeal();
             }
             catch
             {

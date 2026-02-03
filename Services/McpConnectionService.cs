@@ -63,8 +63,30 @@ namespace CodeMerger.Services
         {
             if (_disposed) throw new ObjectDisposedException(nameof(McpConnectionService));
 
+            // Flush any stale pipes left by dead processes
+            FlushStalePipe(_handshakePipeName);
+            FlushStalePipe(_activityPipeName);
+
             StartHandshakeListener();
             StartActivityListener();
+        }
+
+        /// <summary>
+        /// Attempts to connect to a stale pipe server as a client to release it.
+        /// If no server exists, this is a harmless no-op.
+        /// </summary>
+        private void FlushStalePipe(string pipeName)
+        {
+            try
+            {
+                using var client = new NamedPipeClientStream(".", pipeName, PipeDirection.Out);
+                client.Connect(100); // Quick timeout
+                // Connected to stale server - just disconnect, which releases it
+            }
+            catch
+            {
+                // No stale pipe or already gone - that's fine
+            }
         }
 
         /// <summary>
@@ -131,7 +153,7 @@ namespace CodeMerger.Services
                         using var pipe = new NamedPipeServerStream(
                             _handshakePipeName, 
                             PipeDirection.In, 
-                            1, 
+                            NamedPipeServerStream.MaxAllowedServerInstances, 
                             PipeTransmissionMode.Byte, 
                             PipeOptions.Asynchronous);
                         
@@ -185,7 +207,7 @@ namespace CodeMerger.Services
                         using var pipe = new NamedPipeServerStream(
                             _activityPipeName, 
                             PipeDirection.In, 
-                            1, 
+                            NamedPipeServerStream.MaxAllowedServerInstances, 
                             PipeTransmissionMode.Byte, 
                             PipeOptions.Asynchronous);
                         

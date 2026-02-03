@@ -260,41 +260,61 @@ namespace CodeMerger.Services
         }
 
         /// <summary>
-        /// Deploys to stable directory and ensures Claude Desktop config points there.
-        /// Returns true if anything was updated.
+        /// Ensures Claude Desktop config always points to the currently running exe.
+        /// - If running from stable/ClickOnce: deploys stable copy and points config there.
+        /// - If running from VS debug or other path: points config directly to current exe (no deploy).
+        /// This means whichever instance you launch last "wins" the config.
         /// </summary>
         public bool SelfHeal()
         {
             bool changed = false;
-
-            // Step 1: Deploy stable copy
-            try
-            {
-                changed = DeployStableCopy();
-            }
-            catch
-            {
-                // Deploy failed — continue to fix config anyway
-            }
-
-            // Step 2: Ensure Claude Desktop config points to stable path
-            var stableExePath = GetStableExePath();
+            var currentExePath = GetCurrentExePath();
             var configuredPath = GetConfiguredExePath();
+            
+            bool isDebugRun = IsDebugRun();
 
-            if (configuredPath == null)
+            if (!isDebugRun)
             {
-                // Not configured at all
-                EnsureConfigured(stableExePath);
-                changed = true;
+                // Production run: deploy stable copy as before
+                try
+                {
+                    changed = DeployStableCopy();
+                }
+                catch
+                {
+                    // Deploy failed — continue to fix config anyway
+                }
+
+                // Point to stable path
+                var stableExePath = GetStableExePath();
+                if (!string.Equals(configuredPath, stableExePath, StringComparison.OrdinalIgnoreCase))
+                {
+                    EnsureConfigured(stableExePath);
+                    changed = true;
+                }
             }
-            else if (!string.Equals(configuredPath, stableExePath, StringComparison.OrdinalIgnoreCase))
+            else
             {
-                // Points to wrong path (old ClickOnce path, or anything else)
-                EnsureConfigured(stableExePath);
-                changed = true;
+                // Debug/VS run: point config directly to the debug exe
+                if (!string.Equals(configuredPath, currentExePath, StringComparison.OrdinalIgnoreCase))
+                {
+                    EnsureConfigured(currentExePath);
+                    changed = true;
+                }
             }
 
             return changed;
+        }
+
+        /// <summary>
+        /// Detects if the application is running from a development/debug environment.
+        /// True if running from a bin\Debug or bin\Release folder.
+        /// </summary>
+        public bool IsDebugRun()
+        {
+            var path = GetCurrentExePath();
+            return path.Contains(@"\bin\Debug\", StringComparison.OrdinalIgnoreCase) ||
+                   path.Contains(@"\bin\Release\", StringComparison.OrdinalIgnoreCase);
         }
 
         public string GetCurrentExePath()

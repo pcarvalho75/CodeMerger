@@ -1,7 +1,9 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.IO.Pipes;
 using System.Linq;
+using System.Threading;
 using System.Windows;
 using CodeMerger.Services;
 
@@ -15,12 +17,22 @@ namespace CodeMerger
         {
             base.OnStartup(e);
 
-            // Self-heal Claude Desktop config if needed
+            // Check for MCP mode first (before killing anything)
+            if (e.Args.Length >= 1 && e.Args[0] == "--mcp")
+            {
+                RunMcpMode();
+                return;
+            }
+
+            // GUI mode: kill any previous GUI instances holding pipes
+            KillOtherGuiInstances();
+
+            // Update Claude Desktop config to point to the currently running exe
             try
             {
                 var claudeService = new ClaudeDesktopService();
-                bool healed = claudeService.SelfHeal();
-                if (healed)
+                bool updated = claudeService.SelfHeal();
+                if (updated)
                 {
                     Application.Current.Properties["ConfigHealed"] = true;
                 }
@@ -29,13 +41,59 @@ namespace CodeMerger
             {
                 // Don't crash on heal failure
             }
+        }
 
-            // Check for MCP mode
-            if (e.Args.Length >= 1 && e.Args[0] == "--mcp")
+        /// <summary>
+        /// Kills other CodeMerger GUI instances (non-MCP) to free named pipes.
+        /// MCP instances (with --mcp arg) are left alone.
+        /// </summary>
+        private void KillOtherGuiInstances()
+        {
+            var currentPid = Environment.ProcessId;
+            var currentName = Process.GetCurrentProcess().ProcessName;
+
+            foreach (var proc in Process.GetProcessesByName(currentName))
             {
-                RunMcpMode();
-                return;
+                if (proc.Id == currentPid) continue;
+
+                try
+                {
+                    // Check if this is an MCP instance by looking at command line
+                    // If we can't determine, kill it anyway - MCP will be restarted by Claude
+                    var cmdLine = GetCommandLine(proc);
+                    if (cmdLine != null && cmdLine.Contains("--mcp"))
+                        continue; // Leave MCP instances alone
+
+                    proc.Kill();
+                    proc.WaitForExit(2000);
+                }
+                catch
+                {
+                    // Process may have already exited
+                }
             }
+
+            // Brief pause to let OS release pipe handles
+            Thread.Sleep(200);
+        }
+
+        private static string? GetCommandLine(Process process)
+        {
+            try
+            {
+                // Use WMI to get command line - only reliable way on Windows
+                using var searcher = new System.Management.ManagementObjectSearcher(
+                    $"SELECT CommandLine FROM Win32_Process WHERE ProcessId = {process.Id}");
+                foreach (var obj in searcher.Get())
+                {
+                    return obj["CommandLine"]?.ToString();
+                }
+            }
+            catch
+            {
+                // WMI not available or access denied
+            }
+            return null;
         }
 
         private void RunMcpMode()
