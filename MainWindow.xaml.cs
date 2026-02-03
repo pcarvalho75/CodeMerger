@@ -2,6 +2,7 @@ using CodeMerger.Models;
 using CodeMerger.Services;
 using Microsoft.Win32;
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
@@ -11,6 +12,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Shapes;
 
 namespace CodeMerger
 {
@@ -41,6 +43,10 @@ namespace CodeMerger
         // MCP Session statistics
         private readonly McpSessionStats _sessionStats = new();
         private System.Windows.Threading.DispatcherTimer? _statsUpdateTimer;
+        
+        // Activity log
+        private readonly ObservableCollection<ActivityLogEntry> _activityLog = new();
+        private bool _isSwitchingFromMcp = false; // Prevent double-load when MCP switches workspace
         
         private Workspace? _currentWorkspace => _workspaceManager.CurrentWorkspace;
 
@@ -119,6 +125,9 @@ namespace CodeMerger
             _statsUpdateTimer.Tick += StatsUpdateTimer_Tick;
             _statsUpdateTimer.Start();
 
+            // Wire up activity log
+            activityLogListBox.ItemsSource = _activityLog;
+
             UpdateStatus("Ready", Brushes.Gray);
             Loaded += MainWindow_Loaded;
             Closing += MainWindow_Closing;
@@ -187,6 +196,14 @@ namespace CodeMerger
                 connectionStatusText.Foreground = new SolidColorBrush(Color.FromRgb(0, 217, 165));
                 stopServerButton.Visibility = Visibility.Visible;
 
+                // Disable project controls while Claude is connected
+                projectComboBox.IsEnabled = false;
+                projectComboBox.ToolTip = "Project is locked while Claude is connected";
+                newWorkspaceButton.IsEnabled = false;
+                renameWorkspaceButton.IsEnabled = false;
+                deleteWorkspaceButton.IsEnabled = false;
+
+                AddActivityLogEntry(ActivityLogType.Connection, "", 0, $"Claude connected — workspace: {workspaceName}");
                 UpdateStatus($"✓ Claude connected via MCP (workspace: {workspaceName})", Brushes.LightGreen);
             });
         }
@@ -200,6 +217,14 @@ namespace CodeMerger
                 connectionStatusText.Foreground = new SolidColorBrush(Color.FromRgb(136, 146, 160));
                 stopServerButton.Visibility = Visibility.Collapsed;
 
+                // Re-enable project controls
+                projectComboBox.IsEnabled = true;
+                projectComboBox.ToolTip = null;
+                newWorkspaceButton.IsEnabled = true;
+                renameWorkspaceButton.IsEnabled = true;
+                deleteWorkspaceButton.IsEnabled = true;
+
+                AddActivityLogEntry(ActivityLogType.Disconnection, "", 0, $"Claude disconnected — workspace: {workspaceName}");
                 UpdateStatus($"MCP server disconnected (workspace: {workspaceName})", Brushes.Gray);
             });
         }
@@ -253,12 +278,16 @@ namespace CodeMerger
                         mcpActivityBorder.BorderThickness = new Thickness(1);
                         
                         // Record statistics - parse duration from Details (e.g., "12ms")
+                        long durationMs = 0;
                         if (activityMsg.Details.EndsWith("ms") && 
-                            long.TryParse(activityMsg.Details.Replace("ms", ""), out long durationMs))
+                            long.TryParse(activityMsg.Details.Replace("ms", ""), out durationMs))
                         {
                             _sessionStats.RecordToolCall(activityMsg.ToolName, durationMs);
                             UpdateStatsDisplay();
                         }
+                        
+                        // Add to activity log
+                        AddActivityLogEntry(ActivityLogType.ToolCall, activityMsg.ToolName, durationMs, $"Completed in {activityMsg.Details}");
                         
                         // Start timeout timer - ball is in Claude's court
                         _lastCompletedTime = DateTime.Now;
@@ -277,6 +306,9 @@ namespace CodeMerger
                         // Record error statistics
                         _sessionStats.RecordError();
                         UpdateStatsDisplay();
+                        
+                        // Add to activity log
+                        AddActivityLogEntry(ActivityLogType.Error, activityMsg.ToolName, 0, activityMsg.Details);
 
                         // Stop timeout timer
                         _claudeResponseTimer?.Stop();
@@ -298,7 +330,33 @@ namespace CodeMerger
                             });
                         });
                         break;
+
+                    case McpActivityType.WORKSPACE_SWITCHED:
+                        // Sync the GUI dropdown to match the workspace that MCP switched to
+                        var switchedName = activityMsg.ToolName; // ToolName field carries the workspace name
+                        AddActivityLogEntry(ActivityLogType.WorkspaceSwitch, "", 0, $"Workspace switched to: {switchedName}");
+                        
+                        // Find the workspace in the combo box and select it without triggering a reload
+                        var matchingWorkspace = _workspaceManager.Workspaces
+                            .FirstOrDefault(w => w.Name.Equals(switchedName, StringComparison.OrdinalIgnoreCase));
+                        
+                        if (matchingWorkspace != null && projectComboBox.SelectedItem != matchingWorkspace)
+                        {
+                            _isSwitchingFromMcp = true;
+                            projectComboBox.IsEnabled = true; // Temporarily enable to change selection
+                            projectComboBox.SelectedItem = matchingWorkspace;
+                            projectComboBox.IsEnabled = false; // Re-disable (still connected)
+                            _isSwitchingFromMcp = false;
+                        }
+                        
+                        // Update connection status text
+                        connectionStatusText.Text = $"Connected: {switchedName}";
+                        UpdateStatus($"🔄 Workspace switched to: {switchedName}", new SolidColorBrush(Color.FromRgb(100, 200, 255)));
+                        break;
                 }
+                
+                // Update chart after any activity
+                UpdateActivityLogDisplay();
             });
         }
 
@@ -320,7 +378,9 @@ namespace CodeMerger
                 {
                     _sessionStats.RecordTimeout();
                     _timeoutRecorded = true;
+                    AddActivityLogEntry(ActivityLogType.Timeout, "", 0, $"Claude hasn't responded in {(int)elapsed}s");
                     UpdateStatsDisplay();
+                    UpdateActivityLogDisplay();
                 }
             }
             else
@@ -341,6 +401,7 @@ namespace CodeMerger
         private void StatsUpdateTimer_Tick(object? sender, EventArgs e)
         {
             UpdateStatsDisplay();
+            UpdateActivityLogDisplay();
         }
 
         private void UpdateStatsDisplay()
@@ -969,7 +1030,7 @@ namespace CodeMerger
         {
             // Get log file path from the SSE server if available, otherwise use default location
             var logPath = _mcpServerForSse?.LogFilePath ?? 
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), 
+                System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), 
                     "CodeMerger", "codemerger-mcp.log");
             
             if (File.Exists(logPath))
@@ -1026,6 +1087,8 @@ namespace CodeMerger
 
         private void ProjectComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
+            if (_isSwitchingFromMcp) return; // MCP already switched the workspace, just updating UI
+            
             if (projectComboBox.SelectedItem is Workspace selected)
             {
                 _workspaceManager.SelectWorkspace(selected);
@@ -1184,7 +1247,7 @@ namespace CodeMerger
 
             if (dialog.ShowDialog() == true)
             {
-                string? folderPath = Path.GetDirectoryName(dialog.FileName);
+                string? folderPath = System.IO.Path.GetDirectoryName(dialog.FileName);
                 if (!string.IsNullOrEmpty(folderPath))
                 {
                     _directoryManager.Add(folderPath);
@@ -1613,5 +1676,191 @@ namespace CodeMerger
         }
 
         #endregion
+
+        #region Activity Log
+
+        private const int MaxLogEntries = 1000;
+
+        private void AddActivityLogEntry(ActivityLogType type, string toolName, long durationMs, string message)
+        {
+            var entry = new ActivityLogEntry
+            {
+                Timestamp = DateTime.Now,
+                Type = type,
+                ToolName = toolName,
+                DurationMs = durationMs,
+                Message = message
+            };
+
+            _activityLog.Add(entry);
+
+            // Trim oldest entries if over limit
+            while (_activityLog.Count > MaxLogEntries)
+                _activityLog.RemoveAt(0);
+
+            // Auto-scroll to bottom
+            if (activityLogListBox.Items.Count > 0)
+                activityLogListBox.ScrollIntoView(activityLogListBox.Items[activityLogListBox.Items.Count - 1]);
+        }
+
+        private void UpdateActivityLogDisplay()
+        {
+            // Update summary cards
+            logTotalCallsText.Text = _sessionStats.TotalToolCalls.ToString();
+            logErrorsText.Text = _sessionStats.TotalErrors.ToString();
+            logTimeoutsText.Text = _sessionStats.TotalTimeouts.ToString();
+
+            if (_sessionStats.AverageResponseTime > 0)
+                logAvgResponseText.Text = $"{_sessionStats.AverageResponseTime:F0}ms";
+
+            var duration = DateTime.Now - _sessionStats.SessionStartTime;
+            logUptimeText.Text = duration.TotalHours >= 1
+                ? $"{(int)duration.TotalHours}h{duration.Minutes}m"
+                : duration.TotalMinutes >= 1
+                    ? $"{(int)duration.TotalMinutes}m{duration.Seconds}s"
+                    : $"{duration.Seconds}s";
+
+            // Update chart
+            RenderResponseTimeChart();
+
+            // Update tool breakdown
+            UpdateToolBreakdown();
+        }
+
+        private void RenderResponseTimeChart()
+        {
+            responseTimeChart.Children.Clear();
+            var history = _sessionStats.GetCallHistory();
+            if (history.Count < 2) return;
+
+            double w = responseTimeChart.ActualWidth;
+            double h = responseTimeChart.ActualHeight;
+            if (w < 20 || h < 20) return;
+
+            // Show last 60 data points
+            var recent = history.Skip(Math.Max(0, history.Count - 60)).ToList();
+            if (recent.Count < 2) return;
+
+            double maxMs = recent.Max(r => (double)r.DurationMs);
+            if (maxMs < 1) maxMs = 1;
+            double padding = 4;
+
+            // Draw grid lines
+            for (int i = 0; i <= 4; i++)
+            {
+                double y = padding + (h - 2 * padding) * i / 4;
+                var line = new Line
+                {
+                    X1 = 0, X2 = w, Y1 = y, Y2 = y,
+                    Stroke = new SolidColorBrush(Color.FromRgb(30, 50, 70)),
+                    StrokeThickness = 0.5
+                };
+                responseTimeChart.Children.Add(line);
+            }
+
+            // Draw bars for each call
+            double barWidth = Math.Max(2, (w - 2 * padding) / recent.Count - 1);
+            for (int i = 0; i < recent.Count; i++)
+            {
+                double x = padding + i * (w - 2 * padding) / recent.Count;
+                double barH = (recent[i].DurationMs / maxMs) * (h - 2 * padding);
+                double y = h - padding - barH;
+
+                var isError = recent[i].DurationMs == 0;
+                var color = isError
+                    ? Color.FromRgb(233, 69, 96)  // red for errors
+                    : recent[i].DurationMs > _sessionStats.AverageResponseTime * 2
+                        ? Color.FromRgb(255, 193, 7)  // yellow for slow
+                        : Color.FromRgb(0, 217, 165);  // green for normal
+
+                var rect = new Rectangle
+                {
+                    Width = barWidth,
+                    Height = Math.Max(2, barH),
+                    Fill = new SolidColorBrush(color),
+                    Opacity = 0.8,
+                    RadiusX = 1, RadiusY = 1
+                };
+                Canvas.SetLeft(rect, x);
+                Canvas.SetTop(rect, y);
+                responseTimeChart.Children.Add(rect);
+            }
+
+            // Y-axis label (max)
+            var maxLabel = new TextBlock
+            {
+                Text = $"{maxMs:F0}ms",
+                FontSize = 9,
+                Foreground = new SolidColorBrush(Color.FromRgb(136, 146, 160))
+            };
+            Canvas.SetRight(maxLabel, 4);
+            Canvas.SetTop(maxLabel, 0);
+            responseTimeChart.Children.Add(maxLabel);
+        }
+
+        private void UpdateToolBreakdown()
+        {
+            var breakdown = _sessionStats.GetToolBreakdown();
+            if (breakdown.Count == 0) return;
+
+            int maxCount = breakdown.First().Count;
+            double maxBarWidth = 150;
+
+            var items = breakdown.Take(8).Select(b => new ToolBreakdownItem
+            {
+                Name = b.ToolName.Replace("codemerger_", ""),
+                CountText = $"{b.Count}× ({b.AvgMs:F0}ms)",
+                BarWidth = maxCount > 0 ? (b.Count * maxBarWidth / maxCount) : 0,
+                BarBrush = new SolidColorBrush(Color.FromRgb(0, 217, 165))
+            }).ToList();
+
+            toolBreakdownList.ItemsSource = items;
+        }
+
+        private void ClearActivityLog_Click(object sender, RoutedEventArgs e)
+        {
+            _activityLog.Clear();
+            _sessionStats.Reset();
+            UpdateActivityLogDisplay();
+        }
+
+        private void ExportActivityLog_Click(object sender, RoutedEventArgs e)
+        {
+            var dialog = new SaveFileDialog
+            {
+                Filter = "CSV Files|*.csv|Text Files|*.txt",
+                FileName = $"activity_log_{DateTime.Now:yyyyMMdd_HHmmss}.csv"
+            };
+
+            if (dialog.ShowDialog() == true)
+            {
+                try
+                {
+                    var lines = new List<string> { "Timestamp,Type,Tool,DurationMs,Message" };
+                    lines.AddRange(_activityLog.Select(e =>
+                        $"{e.Timestamp:yyyy-MM-dd HH:mm:ss},{e.Type},{e.ToolName},{e.DurationMs},\"{e.Message.Replace("\"", "\"\"")}\""
+                    ));
+                    File.WriteAllLines(dialog.FileName, lines);
+                    UpdateStatus($"Activity log exported to {dialog.FileName}", Brushes.LightGreen);
+                }
+                catch (Exception ex)
+                {
+                    UpdateStatus($"Export failed: {ex.Message}", new SolidColorBrush(Color.FromRgb(233, 69, 96)));
+                }
+            }
+        }
+
+        #endregion
     }
+}
+
+/// <summary>
+/// Helper class for tool breakdown display binding.
+/// </summary>
+public class ToolBreakdownItem
+{
+    public string Name { get; set; } = string.Empty;
+    public string CountText { get; set; } = string.Empty;
+    public double BarWidth { get; set; }
+    public Brush BarBrush { get; set; } = Brushes.Green;
 }

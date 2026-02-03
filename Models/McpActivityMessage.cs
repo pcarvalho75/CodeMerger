@@ -19,7 +19,13 @@ namespace CodeMerger.Models
         /// <summary>
         /// Tool execution failed with error.
         /// </summary>
-        ERROR
+        ERROR,
+
+        /// <summary>
+        /// Workspace was switched via MCP request.
+        /// Details contains the new workspace name.
+        /// </summary>
+        WORKSPACE_SWITCHED
     }
 
     /// <summary>

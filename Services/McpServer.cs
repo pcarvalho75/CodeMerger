@@ -227,6 +227,10 @@ namespace CodeMerger.Services
             PerformIndexing();
 
             LogWithMemory($"Switched to workspace: {workspaceName} ({_workspaceAnalysis?.TotalFiles ?? 0} files)");
+            
+            // Notify GUI about workspace switch
+            SendActivity($"WORKSPACE_SWITCHED|{workspaceName}|");
+            
             return true;
         }
 
@@ -330,6 +334,10 @@ namespace CodeMerger.Services
             PerformIndexing();
 
             LogWithMemory($"Merged workspaces loaded: {_workspaceName} ({_workspaceAnalysis?.TotalFiles ?? 0} files)");
+            
+            // Notify GUI about workspace switch (use first workspace name for merged)
+            SendActivity($"WORKSPACE_SWITCHED|{_workspaceName}|");
+            
             return true;
         }
 

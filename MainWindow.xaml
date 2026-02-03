@@ -256,9 +256,9 @@
                           SelectionChanged="ProjectComboBox_SelectionChanged" Style="{StaticResource ModernComboBox}"/>
 
                 <StackPanel Grid.Column="3" Orientation="Horizontal" Margin="12,0,0,0">
-                    <Button Content="＋ New" Click="NewWorkspace_Click" Style="{StaticResource ModernButton}" Margin="0,0,6,0"/>
-                    <Button Content="✎ Rename" Click="RenameWorkspace_Click" Style="{StaticResource ModernButton}" Margin="0,0,6,0"/>
-                    <Button Content="🗑 Delete" Click="DeleteWorkspace_Click" Style="{StaticResource ModernButton}"/>
+                    <Button x:Name="newWorkspaceButton" Content="＋ New" Click="NewWorkspace_Click" Style="{StaticResource ModernButton}" Margin="0,0,6,0"/>
+                    <Button x:Name="renameWorkspaceButton" Content="✎ Rename" Click="RenameWorkspace_Click" Style="{StaticResource ModernButton}" Margin="0,0,6,0"/>
+                    <Button x:Name="deleteWorkspaceButton" Content="🗑 Delete" Click="DeleteWorkspace_Click" Style="{StaticResource ModernButton}"/>
                 </StackPanel>
 
                 <!-- Connection Status -->
@@ -622,6 +622,166 @@
                                 <StackPanel x:Name="sessionStatsPanel"/>
                             </StackPanel>
                         </ScrollViewer>
+                    </TabItem>
+
+                    <!-- Tab 5: Activity Log -->
+                    <TabItem x:Name="activityLogTab" Header="📊 Activity Log">
+                        <Grid Margin="0,16,0,0">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="160"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+
+                            <!-- Summary Cards Row -->
+                            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,12">
+                                <Border Background="#1a3050" CornerRadius="8" Padding="16,10" Margin="0,0,10,0" MinWidth="120">
+                                    <StackPanel>
+                                        <TextBlock Text="TOTAL CALLS" FontSize="9" Foreground="{StaticResource TextSecondary}" FontWeight="SemiBold"/>
+                                        <TextBlock x:Name="logTotalCallsText" Text="0" FontSize="24" FontWeight="Bold" Foreground="{StaticResource AccentSuccess}"/>
+                                    </StackPanel>
+                                </Border>
+                                <Border Background="#1a3050" CornerRadius="8" Padding="16,10" Margin="0,0,10,0" MinWidth="120">
+                                    <StackPanel>
+                                        <TextBlock Text="AVG RESPONSE" FontSize="9" Foreground="{StaticResource TextSecondary}" FontWeight="SemiBold"/>
+                                        <TextBlock x:Name="logAvgResponseText" Text="—" FontSize="24" FontWeight="Bold" Foreground="#4fc3f7"/>
+                                    </StackPanel>
+                                </Border>
+                                <Border Background="#1a3050" CornerRadius="8" Padding="16,10" Margin="0,0,10,0" MinWidth="120">
+                                    <StackPanel>
+                                        <TextBlock Text="ERRORS" FontSize="9" Foreground="{StaticResource TextSecondary}" FontWeight="SemiBold"/>
+                                        <TextBlock x:Name="logErrorsText" Text="0" FontSize="24" FontWeight="Bold" Foreground="{StaticResource AccentPrimary}"/>
+                                    </StackPanel>
+                                </Border>
+                                <Border Background="#1a3050" CornerRadius="8" Padding="16,10" Margin="0,0,10,0" MinWidth="120">
+                                    <StackPanel>
+                                        <TextBlock Text="TIMEOUTS" FontSize="9" Foreground="{StaticResource TextSecondary}" FontWeight="SemiBold"/>
+                                        <TextBlock x:Name="logTimeoutsText" Text="0" FontSize="24" FontWeight="Bold" Foreground="{StaticResource AccentWarning}"/>
+                                    </StackPanel>
+                                </Border>
+                                <Border Background="#1a3050" CornerRadius="8" Padding="16,10" Margin="0,0,10,0" MinWidth="120">
+                                    <StackPanel>
+                                        <TextBlock Text="UPTIME" FontSize="9" Foreground="{StaticResource TextSecondary}" FontWeight="SemiBold"/>
+                                        <TextBlock x:Name="logUptimeText" Text="0s" FontSize="24" FontWeight="Bold" Foreground="{StaticResource TextPrimary}"/>
+                                    </StackPanel>
+                                </Border>
+                                <StackPanel VerticalAlignment="Center" Margin="12,0,0,0">
+                                    <Button Content="🧹 Clear Log" Click="ClearActivityLog_Click" Style="{StaticResource ModernButton}" Margin="0,0,0,4"/>
+                                    <Button Content="📋 Export" Click="ExportActivityLog_Click" Style="{StaticResource ModernButton}"/>
+                                </StackPanel>
+                            </StackPanel>
+
+                            <!-- Chart Area -->
+                            <Border Grid.Row="1" Background="#0d1929" CornerRadius="8" Padding="12,8" Margin="0,0,0,12">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="220"/>
+                                    </Grid.ColumnDefinitions>
+                                    <!-- Response time chart -->
+                                    <Grid>
+                                        <TextBlock Text="Response Time (ms)" FontSize="10" Foreground="{StaticResource TextSecondary}" 
+                                                   VerticalAlignment="Top" HorizontalAlignment="Left" Margin="4,0,0,0"/>
+                                        <Canvas x:Name="responseTimeChart" ClipToBounds="True" Margin="0,16,0,0"/>
+                                    </Grid>
+                                    <!-- Tool breakdown -->
+                                    <Grid Grid.Column="1" Margin="12,0,0,0">
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="*"/>
+                                        </Grid.RowDefinitions>
+                                        <TextBlock Text="Top Tools" FontSize="10" Foreground="{StaticResource TextSecondary}" Margin="0,0,0,6"/>
+                                        <ItemsControl x:Name="toolBreakdownList" Grid.Row="1">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Grid Margin="0,2">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <Grid>
+                                                            <Grid.RowDefinitions>
+                                                                <RowDefinition Height="Auto"/>
+                                                                <RowDefinition Height="4"/>
+                                                            </Grid.RowDefinitions>
+                                                            <TextBlock Text="{Binding Name}" FontSize="10" Foreground="{StaticResource TextPrimary}" TextTrimming="CharacterEllipsis"/>
+                                                            <Border Grid.Row="1" Background="#2a3a5a" CornerRadius="2" Height="4">
+                                                                <Border Background="{Binding BarBrush}" CornerRadius="2" HorizontalAlignment="Left" Width="{Binding BarWidth}"/>
+                                                            </Border>
+                                                        </Grid>
+                                                        <TextBlock Grid.Column="1" Text="{Binding CountText}" FontSize="10" Foreground="{StaticResource TextSecondary}" 
+                                                                   VerticalAlignment="Top" Margin="8,0,0,0"/>
+                                                    </Grid>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </Grid>
+                                </Grid>
+                            </Border>
+
+                            <!-- Log header -->
+                            <Grid Grid.Row="2" Margin="0,0,0,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="70"/>
+                                    <ColumnDefinition Width="30"/>
+                                    <ColumnDefinition Width="200"/>
+                                    <ColumnDefinition Width="70"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="TIME" FontSize="10" FontWeight="SemiBold" Foreground="{StaticResource TextSecondary}"/>
+                                <TextBlock Grid.Column="1" Text="" FontSize="10" FontWeight="SemiBold" Foreground="{StaticResource TextSecondary}"/>
+                                <TextBlock Grid.Column="2" Text="TOOL" FontSize="10" FontWeight="SemiBold" Foreground="{StaticResource TextSecondary}"/>
+                                <TextBlock Grid.Column="3" Text="DURATION" FontSize="10" FontWeight="SemiBold" Foreground="{StaticResource TextSecondary}"/>
+                                <TextBlock Grid.Column="4" Text="MESSAGE" FontSize="10" FontWeight="SemiBold" Foreground="{StaticResource TextSecondary}"/>
+                            </Grid>
+
+                            <!-- Scrollable log entries -->
+                            <ListBox x:Name="activityLogListBox" Grid.Row="3" 
+                                     Background="{StaticResource BackgroundDark}" 
+                                     BorderBrush="{StaticResource BorderColor}" BorderThickness="1"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                     HorizontalContentAlignment="Stretch">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid Margin="0,1">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="70"/>
+                                                <ColumnDefinition Width="30"/>
+                                                <ColumnDefinition Width="200"/>
+                                                <ColumnDefinition Width="70"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="{Binding TimeText}" FontSize="11" Foreground="{StaticResource TextSecondary}" FontFamily="Consolas"/>
+                                            <TextBlock Grid.Column="1" Text="{Binding TypeIcon}" FontSize="11"/>
+                                            <TextBlock Grid.Column="2" Text="{Binding ToolName}" FontSize="11" Foreground="{StaticResource TextPrimary}" TextTrimming="CharacterEllipsis"/>
+                                            <TextBlock Grid.Column="3" Text="{Binding DurationText}" FontSize="11" Foreground="#4fc3f7" FontFamily="Consolas"/>
+                                            <TextBlock Grid.Column="4" Text="{Binding Message}" FontSize="11" Foreground="{StaticResource TextSecondary}" TextTrimming="CharacterEllipsis"/>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                                <ListBox.ItemContainerStyle>
+                                    <Style TargetType="ListBoxItem">
+                                        <Setter Property="Background" Value="Transparent"/>
+                                        <Setter Property="Padding" Value="4,2"/>
+                                        <Setter Property="Template">
+                                            <Setter.Value>
+                                                <ControlTemplate TargetType="ListBoxItem">
+                                                    <Border Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}">
+                                                        <ContentPresenter/>
+                                                    </Border>
+                                                    <ControlTemplate.Triggers>
+                                                        <Trigger Property="IsMouseOver" Value="True">
+                                                            <Setter Property="Background" Value="{StaticResource BackgroundCardHover}"/>
+                                                        </Trigger>
+                                                    </ControlTemplate.Triggers>
+                                                </ControlTemplate>
+                                            </Setter.Value>
+                                        </Setter>
+                                    </Style>
+                                </ListBox.ItemContainerStyle>
+                            </ListBox>
+                        </Grid>
                     </TabItem>
                 </TabControl>
             </Border>

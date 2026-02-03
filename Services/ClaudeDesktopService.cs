@@ -160,11 +160,29 @@ namespace CodeMerger.Services
                 mcpServers.Remove(key);
             }
 
-            // Create/update the fixed entry
+            // Create/update the fixed entry with auto-approve for all tools
             var entry = new JsonObject
             {
                 ["command"] = exePath,
-                ["args"] = new JsonArray("--mcp")
+                ["args"] = new JsonArray("--mcp"),
+                ["alwaysAllow"] = new JsonArray(
+                    "codemerger_get_project_overview", "codemerger_list_files", "codemerger_get_file",
+                    "codemerger_search_code", "codemerger_get_type", "codemerger_get_dependencies",
+                    "codemerger_get_type_hierarchy", "codemerger_grep", "codemerger_get_context",
+                    "codemerger_get_lines", "codemerger_find_references", "codemerger_get_callers",
+                    "codemerger_get_callees", "codemerger_get_diagnostics", "codemerger_str_replace",
+                    "codemerger_write_file", "codemerger_preview_write", "codemerger_delete_file",
+                    "codemerger_undo", "codemerger_move_file", "codemerger_rename_symbol",
+                    "codemerger_generate_interface", "codemerger_extract_method", "codemerger_add_parameter",
+                    "codemerger_implement_interface", "codemerger_generate_constructor", "codemerger_build",
+                    "codemerger_refresh", "codemerger_shutdown", "codemerger_list_projects",
+                    "codemerger_switch_project", "codemerger_clean_backups", "codemerger_find_duplicates",
+                    "codemerger_log_lesson", "codemerger_get_lessons", "codemerger_delete_lesson",
+                    "codemerger_sync_lessons", "codemerger_submit_lesson", "codemerger_get_notes",
+                    "codemerger_add_note", "codemerger_update_note", "codemerger_clear_notes",
+                    "codemerger_delete_note", "codemerger_git_status", "codemerger_git_commit",
+                    "codemerger_git_push", "codemerger_git_commit_push"
+                )
             };
 
             mcpServers[EntryName] = entry;

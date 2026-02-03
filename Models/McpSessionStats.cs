@@ -153,5 +153,49 @@ namespace CodeMerger.Models
             public long DurationMs { get; set; }
             public DateTime Timestamp { get; set; }
         }
+
+        /// <summary>
+        /// Get tool call history as (Timestamp, DurationMs) pairs for charting.
+        /// </summary>
+        public List<(DateTime Timestamp, long DurationMs, string ToolName)> GetCallHistory()
+        {
+            lock (_lock)
+            {
+                return _callHistory.Select(c => (c.Timestamp, c.DurationMs, c.ToolName)).ToList();
+            }
+        }
+
+        /// <summary>
+        /// Get tool call counts grouped by tool name, sorted descending.
+        /// </summary>
+        public List<(string ToolName, int Count, double AvgMs)> GetToolBreakdown()
+        {
+            lock (_lock)
+            {
+                return _callHistory
+                    .GroupBy(c => c.ToolName)
+                    .Select(g => (g.Key, g.Count(), g.Average(c => (double)c.DurationMs)))
+                    .OrderByDescending(x => x.Item2)
+                    .ToList();
+            }
+        }
+
+        /// <summary>
+        /// Get calls-per-minute over time for charting (bucketed by minute).
+        /// </summary>
+        public List<(DateTime Minute, int Count, double AvgMs)> GetActivityOverTime()
+        {
+            lock (_lock)
+            {
+                if (_callHistory.Count == 0) return new List<(DateTime, int, double)>();
+
+                return _callHistory
+                    .GroupBy(c => new DateTime(c.Timestamp.Year, c.Timestamp.Month, c.Timestamp.Day,
+                                               c.Timestamp.Hour, c.Timestamp.Minute, 0))
+                    .Select(g => (g.Key, g.Count(), g.Average(c => (double)c.DurationMs)))
+                    .OrderBy(x => x.Key)
+                    .ToList();
+            }
+        }
     }
 }
