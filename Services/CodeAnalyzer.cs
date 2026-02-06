@@ -150,9 +150,10 @@ namespace CodeMerger.Services
                     .Where(e => e.Name.LocalName == "PackageReference")
                     .Select(e => e.Attribute("Include")?.Value)
                     .Where(v => !string.IsNullOrEmpty(v))
+                    .Select(v => v!)
                     .ToList();
 
-                analysis.Dependencies = projectRefs.Concat(packageRefs!).ToList();
+                analysis.Dependencies = projectRefs.Concat(packageRefs).ToList();
 
                 // Extract root namespace if specified
                 var rootNamespace = root.Descendants()

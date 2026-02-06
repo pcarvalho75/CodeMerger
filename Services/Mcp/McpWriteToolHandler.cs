@@ -407,14 +407,18 @@ namespace CodeMerger.Services.Mcp
             if (arguments.TryGetProperty("createBackup", out var backupEl))
                 createBackup = backupEl.GetBoolean();
 
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             var result = _refactoringService.WriteFile(path, content, createBackup);
-            _log($"WriteFile: {path} - {(result.Success ? "OK" : "FAILED")}");
+            sw.Stop();
 
             // Update index for this file in background (non-blocking)
             if (result.Success && !string.IsNullOrEmpty(result.FullPath))
                 _updateFileIndex(result.FullPath);
 
             var response = result.ToMarkdown();
+            var responseSize = System.Text.Encoding.UTF8.GetByteCount(response);
+
+            _log($"WriteFile: {path} - {(result.Success ? "OK" : "FAILED")} | {sw.ElapsedMilliseconds}ms | response: {responseSize} bytes");
 
             // Soft warning for large files that may cause memory issues in MCP clients
             var lineCount = content.Split('\n').Length;

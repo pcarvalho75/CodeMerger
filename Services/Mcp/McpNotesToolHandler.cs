@@ -170,14 +170,22 @@ namespace CodeMerger.Services.Mcp
             }
 
             lines.RemoveAt(lineNumber - 1);
-            File.WriteAllText(NotesFilePath, string.Join(Environment.NewLine, lines) + Environment.NewLine);
+            
+            // Remove consecutive blank lines left behind
+            for (int i = lines.Count - 1; i > 0; i--)
+            {
+                if (string.IsNullOrWhiteSpace(lines[i]) && string.IsNullOrWhiteSpace(lines[i - 1]))
+                    lines.RemoveAt(i);
+            }
+            
+            File.WriteAllText(NotesFilePath, string.Join("\n", lines) + "\n");
 
             return (true, $"Deleted note at line {lineNumber}.", targetLine.Trim());
         }
 
         private string AddNoteToSection(string content, string section, string note)
         {
-            var pattern = $@"(^|\n)(#{1,2}\s*{Regex.Escape(section)}\s*\n)";
+            var pattern = @"(^|\n)(#{1,2}\s*" + Regex.Escape(section) + @"\s*\n)";
             var match = Regex.Match(content, pattern, RegexOptions.IgnoreCase);
 
             if (match.Success)
@@ -197,7 +205,7 @@ namespace CodeMerger.Services.Mcp
 
         private string ReplaceSectionContent(string content, string section, string newSectionContent)
         {
-            var pattern = $@"(^|\n)(#{1,2}\s*{Regex.Escape(section)}\s*\n)";
+            var pattern = @"(^|\n)(#{1,2}\s*" + Regex.Escape(section) + @"\s*\n)";
             var match = Regex.Match(content, pattern, RegexOptions.IgnoreCase);
 
             if (match.Success)
@@ -218,7 +226,7 @@ namespace CodeMerger.Services.Mcp
 
         private string RemoveSection(string content, string section)
         {
-            var pattern = $@"(\n?#{1,2}\s*{Regex.Escape(section)}\s*\n)[\s\S]*?(?=\n#{1,2}\s+\w|$)";
+            var pattern = @"(\n?#{1,2}\s*" + Regex.Escape(section) + @"\s*\n)[\s\S]*?(?=\n#{1,2}\s+\w|$)";
             return Regex.Replace(content, pattern, "", RegexOptions.IgnoreCase).Trim() + "\n";
         }
 

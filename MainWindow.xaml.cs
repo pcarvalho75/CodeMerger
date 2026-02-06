@@ -1,22 +1,20 @@
+using CodeMerger.Controls;
 using CodeMerger.Models;
 using CodeMerger.Services;
-using Microsoft.Win32;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
-using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
-using System.Windows.Controls;
 using System.Windows.Media;
-using System.Windows.Shapes;
+using System.Windows.Interop;
 
 namespace CodeMerger
 {
-    public partial class MainWindow : Window, INotifyPropertyChanged
+    public partial class MainWindow : Window
     {
         public ObservableCollection<string> FoundFiles { get; set; }
 
@@ -26,79 +24,60 @@ namespace CodeMerger
         private readonly FileScannerService _fileScannerService = new FileScannerService();
         private readonly DirectoryManager _directoryManager = new DirectoryManager();
         private readonly GitRepositoryManager _gitRepositoryManager = new GitRepositoryManager();
-        private readonly WorkspaceSettingsService _settingsService;
+        private readonly WorkspaceSettingsService _settingsService = null!;
         private readonly BackupCleanupService _backupCleanupService = new BackupCleanupService();
-        
-        // ChatGPT Desktop support
-        private TunnelService? _tunnelService;
-        private McpServer? _mcpServerForSse;
-        private bool _isChatGptConnected = false;
-        
-        // MCP Activity timeout detection
-        private System.Windows.Threading.DispatcherTimer? _claudeResponseTimer;
-        private DateTime _lastCompletedTime;
-        private int ClaudeTimeoutSeconds => _settingsService?.CurrentSettings?.TimeoutThresholdSeconds ?? 45;
-        private bool _timeoutRecorded = false; // Track if current timeout has been recorded
+        private readonly AppState _appState = new();
         
         // MCP Session statistics
         private readonly McpSessionStats _sessionStats = new();
         private System.Windows.Threading.DispatcherTimer? _statsUpdateTimer;
         
         // Activity log
-        private readonly ObservableCollection<ActivityLogEntry> _activityLog = new();
         private bool _isSwitchingFromMcp = false; // Prevent double-load when MCP switches workspace
+        private bool _isExiting = false; // True only when exiting via tray "Exit" menu
         
         private Workspace? _currentWorkspace => _workspaceManager.CurrentWorkspace;
 
-        private string _statusText = string.Empty;
-        private Brush _statusForeground = Brushes.White;
         private bool _isScanning = false;
         private bool _isLoadingWorkspace = false;
         private int _estimatedTokens = 0;
 
-        public string StatusText
-        {
-            get => _statusText;
-            set { _statusText = value; OnPropertyChanged(nameof(StatusText)); }
-        }
-
-        public Brush StatusForeground
-        {
-            get => _statusForeground;
-            set { _statusForeground = value; OnPropertyChanged(nameof(StatusForeground)); }
-        }
-
-        public event PropertyChangedEventHandler? PropertyChanged;
-        protected virtual void OnPropertyChanged(string propertyName)
-        {
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
-        }
-
         public MainWindow()
         {
             InitializeComponent();
-            DataContext = this;
             FoundFiles = new ObservableCollection<string>();
 
             // Initialize settings service
             _settingsService = new WorkspaceSettingsService(msg => Debug.WriteLine($"[Settings] {msg}"));
 
-            inputDirListBox.ItemsSource = _directoryManager.Directories;
-            fileListBox.ItemsSource = FoundFiles;
-            gitRepoListBox.ItemsSource = _gitRepositoryManager.Repositories;
-            projectComboBox.ItemsSource = _workspaceManager.Workspaces;
+            foundFilesTab.SetSource(FoundFiles);
+            headerBar.SetWorkspaceSource(_workspaceManager.Workspaces);
+            headerBar.Initialize(_appState);
 
-            // Bind directory count text
-            _directoryManager.PropertyChanged += (s, e) =>
+            // Wire up SourceDirectoriesTab
+            sourceDirectoriesTab.Initialize(_directoryManager, _gitRepositoryManager);
+            sourceDirectoriesTab.SaveAndScanRequested += async () =>
             {
-                if (e.PropertyName == nameof(DirectoryManager.CountText))
-                    directoryCountText.Text = _directoryManager.CountText;
+                SaveCurrentWorkspace();
+                await ScanFilesAsync();
             };
+            sourceDirectoriesTab.UIStateRequested += (s, enabled) => SetUIState(enabled);
 
-            // Wire up git repository manager events
-            _gitRepositoryManager.OnProgress += msg => Dispatcher.Invoke(() => gitStatusText.Text = msg);
+            // Wire up git repository manager error (progress is handled inside SourceDirectoriesTab)
             _gitRepositoryManager.OnError += msg => Dispatcher.Invoke(() => 
                 UpdateStatus(msg, new SolidColorBrush(Color.FromRgb(233, 69, 96))));
+
+            // Wire up LessonsTab
+            lessonsTab.Initialize(() => this);
+            lessonsTab.StatusUpdate += (s, msg) => UpdateStatus(msg, Brushes.OrangeRed);
+
+            // Wire up BottomBar
+            bottomBar.Initialize(_claudeDesktopService, () => _currentWorkspace, _appState);
+            bottomBar.StatusUpdate += (s, msg) => UpdateStatus(msg, Brushes.LightGreen);
+            bottomBar.ProgressUpdate += (s, args) =>
+            {
+                statusBar.SetProgress(args.Progress, args.Visible);
+            };
 
             // Wire up file scanner progress
             _fileScannerService.OnProgress += msg => Dispatcher.Invoke(() => UpdateStatus(msg, Brushes.Gray));
@@ -114,19 +93,67 @@ namespace CodeMerger
             _mcpConnectionService.OnActivityParsed += OnMcpActivityParsed;
             _mcpConnectionService.OnError += OnMcpConnectionError;
 
-            // Initialize Claude response timeout timer
-            _claudeResponseTimer = new System.Windows.Threading.DispatcherTimer();
-            _claudeResponseTimer.Interval = TimeSpan.FromSeconds(1); // Check every second
-            _claudeResponseTimer.Tick += ClaudeResponseTimer_Tick;
-
             // Initialize stats update timer
             _statsUpdateTimer = new System.Windows.Threading.DispatcherTimer();
             _statsUpdateTimer.Interval = TimeSpan.FromSeconds(3); // Update every 3 seconds
             _statsUpdateTimer.Tick += StatsUpdateTimer_Tick;
             _statsUpdateTimer.Start();
 
-            // Wire up activity log
-            activityLogListBox.ItemsSource = _activityLog;
+            // Wire up ActivityStrip events
+            activityStrip.Initialize(_appState);
+            activityStrip.TimeoutThresholdSeconds = _settingsService?.CurrentSettings?.TimeoutThresholdSeconds ?? 45;
+            activityStrip.ResetStatsClicked += (s, e) =>
+            {
+                _sessionStats.Reset();
+                activityStrip.UpdateStatsDisplay(_sessionStats);
+                UpdateStatus("Session statistics reset", Brushes.Gray);
+            };
+            activityStrip.TimeoutDetected += (s, elapsedSeconds) =>
+            {
+                _sessionStats.RecordTimeout();
+                activityLogTab.AddEntry(ActivityLogType.Timeout, "", 0, $"Claude hasn't responded in {elapsedSeconds}s");
+                activityStrip.UpdateStatsDisplay(_sessionStats);
+                activityLogTab.UpdateDisplay();
+            };
+
+            // Wire up ParametersTab
+            parametersTab.Initialize(_settingsService!, _backupCleanupService, () => _currentWorkspace);
+            parametersTab.SetConnectionCheck(() => _mcpConnectionService.IsConnected);
+            parametersTab.TimeoutThresholdChanged += (s, seconds) =>
+            {
+                activityStrip.TimeoutThresholdSeconds = seconds;
+            };
+            parametersTab.RestartRequested += (s, e) =>
+            {
+                try
+                {
+                    int killed = _mcpConnectionService.KillServerProcesses();
+                    parametersTab.HideRestartBanner();
+
+                    if (killed > 0)
+                        UpdateStatus("MCP server stopped. Settings will apply on next connection.", Brushes.LightGreen);
+                    else
+                        UpdateStatus("Settings saved. Will apply on next MCP connection.", Brushes.Gray);
+
+                    _appState.ClaudeState = ClaudeState.Restarting;
+                }
+                catch (Exception ex)
+                {
+                    UpdateStatus($"Failed to restart: {ex.Message}", new SolidColorBrush(Color.FromRgb(233, 69, 96)));
+                }
+            };
+            parametersTab.StatusUpdate += (s, message) =>
+            {
+                // Determine color based on message content
+                var brush = message.Contains("freed") ? Brushes.LightGreen
+                          : message.Contains("Auto-cleanup") ? Brushes.LightYellow
+                          : Brushes.Gray;
+                UpdateStatus(message, brush);
+            };
+
+            // Wire up ActivityLogTab
+            activityLogTab.Initialize(_sessionStats);
+            activityLogTab.StatusUpdate += (s, msg) => UpdateStatus(msg, Brushes.LightGreen);
 
             UpdateStatus("Ready", Brushes.Gray);
             Loaded += MainWindow_Loaded;
@@ -135,6 +162,32 @@ namespace CodeMerger
 
         private void MainWindow_Loaded(object sender, RoutedEventArgs e)
         {
+            // Register to receive the "bring to front" message from second instances
+            var source = HwndSource.FromHwnd(new WindowInteropHelper(this).Handle);
+            source?.AddHook(WndProc);
+
+            // Wire up HeaderBar events
+            headerBar.WorkspaceSelectionChanged += (s, workspace) =>
+            {
+                if (!_isSwitchingFromMcp)
+                    _workspaceManager.SelectWorkspace(workspace);
+            };
+            headerBar.NewWorkspaceClicked += (s, e) => NewWorkspace_Click();
+            headerBar.RenameWorkspaceClicked += (s, e) => RenameWorkspace_Click();
+            headerBar.DeleteWorkspaceClicked += (s, e) => DeleteWorkspace_Click();
+            headerBar.StopServerClicked += (s, e) => StopServer_Click();
+
+            // Set tray icon from the running executable
+            try
+            {
+                var icon = System.Drawing.Icon.ExtractAssociatedIcon(Environment.ProcessPath!);
+                if (icon != null) trayIcon.Icon = icon;
+            }
+            catch
+            {
+                // Fall back to no icon — tray still works
+            }
+
             LoadWorkspaceList();
 
             if (_workspaceManager.Workspaces.Count == 0)
@@ -142,21 +195,18 @@ namespace CodeMerger
                 PromptCreateFirstWorkspace();
             }
 
-            if (Application.Current.Properties.Contains("ConfigHealed"))
+            if (Application.Current.Properties.Contains("ConfigHealed") &&
+                Application.Current.Properties["ConfigHealed"] is bool healed && healed)
             {
-                bool healed = (bool)Application.Current.Properties["ConfigHealed"];
-                if (healed)
-                {
-                    string message = _claudeDesktopService.IsDebugRun()
-                        ? "Debug run detected. Claude Desktop config updated to use debug exe."
-                        : _claudeDesktopService.IsClickOnceDeployment()
-                            ? "ClickOnce update detected. Updated Claude Desktop config."
-                            : "Updated Claude Desktop config to match current installation.";
-                    UpdateStatus(message, Brushes.LightGreen);
-                }
+                string message = _claudeDesktopService.IsDebugRun()
+                    ? "Debug run detected. Claude Desktop config updated to use debug exe."
+                    : _claudeDesktopService.IsClickOnceDeployment()
+                        ? "ClickOnce update detected. Updated Claude Desktop config."
+                        : "Updated Claude Desktop config to match current installation.";
+                UpdateStatus(message, Brushes.LightGreen);
             }
 
-            RefreshClaudeDesktopStatus();
+            bottomBar.RefreshClaudeDesktopStatus();
             _mcpConnectionService.Start();
 
             // Background sync community lessons (fire-and-forget, non-blocking)
@@ -167,7 +217,7 @@ namespace CodeMerger
                     var settings = Models.CommunityLessonSettings.Load();
                     if (!settings.CommunityLessonsEnabled)
                     {
-                        Dispatcher.Invoke(() => RefreshLessonsTab());
+                        Dispatcher.Invoke(() => lessonsTab.RefreshLessons());
                         return;
                     }
                     var lessonService = new LessonService();
@@ -177,12 +227,12 @@ namespace CodeMerger
                     {
                         if (synced)
                             UpdateStatus($"Community lessons synced: {count} lessons", Brushes.LightBlue);
-                        RefreshLessonsTab();
+                        lessonsTab.RefreshLessons();
                     });
                 }
                 catch
                 {
-                    Dispatcher.Invoke(() => RefreshLessonsTab());
+                    Dispatcher.Invoke(() => lessonsTab.RefreshLessons());
                 }
             });
         }
@@ -193,20 +243,11 @@ namespace CodeMerger
         {
             Dispatcher.Invoke(() =>
             {
-                connectionIndicator.Fill = new SolidColorBrush(Color.FromRgb(0, 217, 165)); // AccentSuccess
-                connectionStatusText.Text = $"Connected: {workspaceName}";
-                connectionStatusText.Foreground = new SolidColorBrush(Color.FromRgb(0, 217, 165));
-                stopServerButton.Visibility = Visibility.Visible;
+                _appState.SetClaudeConnected(workspaceName);
 
-                // Disable project controls while Claude is connected
-                projectComboBox.IsEnabled = false;
-                projectComboBox.ToolTip = "Project is locked while Claude is connected";
-                newWorkspaceButton.IsEnabled = false;
-                renameWorkspaceButton.IsEnabled = false;
-                deleteWorkspaceButton.IsEnabled = false;
-
-                AddActivityLogEntry(ActivityLogType.Connection, "", 0, $"Claude connected — workspace: {workspaceName}");
+                activityLogTab.AddEntry(ActivityLogType.Connection, "", 0, $"Claude connected — workspace: {workspaceName}");
                 UpdateStatus($"✓ Claude connected via MCP (workspace: {workspaceName})", Brushes.LightGreen);
+                UpdateTrayTooltip();
             });
         }
 
@@ -214,20 +255,11 @@ namespace CodeMerger
         {
             Dispatcher.Invoke(() =>
             {
-                connectionIndicator.Fill = new SolidColorBrush(Color.FromRgb(136, 146, 160)); // Gray
-                connectionStatusText.Text = "Disconnected";
-                connectionStatusText.Foreground = new SolidColorBrush(Color.FromRgb(136, 146, 160));
-                stopServerButton.Visibility = Visibility.Collapsed;
+                _appState.SetClaudeDisconnected();
 
-                // Re-enable project controls
-                projectComboBox.IsEnabled = true;
-                projectComboBox.ToolTip = null;
-                newWorkspaceButton.IsEnabled = true;
-                renameWorkspaceButton.IsEnabled = true;
-                deleteWorkspaceButton.IsEnabled = true;
-
-                AddActivityLogEntry(ActivityLogType.Disconnection, "", 0, $"Claude disconnected — workspace: {workspaceName}");
+                activityLogTab.AddEntry(ActivityLogType.Disconnection, "", 0, $"Claude disconnected — workspace: {workspaceName}");
                 UpdateStatus($"MCP server disconnected (workspace: {workspaceName})", Brushes.Gray);
+                UpdateTrayTooltip();
             });
         }
 
@@ -236,10 +268,7 @@ namespace CodeMerger
             Dispatcher.Invoke(() =>
             {
                 // Update connection status since we're receiving activity
-                connectionIndicator.Fill = new SolidColorBrush(Color.FromRgb(0, 217, 165)); // AccentSuccess
-                connectionStatusText.Text = $"Connected: {workspaceName}";
-                connectionStatusText.Foreground = new SolidColorBrush(Color.FromRgb(0, 217, 165));
-                stopServerButton.Visibility = Visibility.Visible;
+                _appState.SetClaudeConnected(workspaceName);
 
                 UpdateStatus($"🔄 [{workspaceName}] {activity}", new SolidColorBrush(Color.FromRgb(100, 200, 255)));
             });
@@ -250,146 +279,67 @@ namespace CodeMerger
             Dispatcher.Invoke(() =>
             {
                 // Update connection status
-                connectionIndicator.Fill = new SolidColorBrush(Color.FromRgb(0, 217, 165)); // AccentSuccess
-                connectionStatusText.Text = $"Connected: {workspaceName}";
-                connectionStatusText.Foreground = new SolidColorBrush(Color.FromRgb(0, 217, 165));
-                stopServerButton.Visibility = Visibility.Visible;
+                _appState.SetClaudeConnected(workspaceName);
 
                 // Update MCP Activity UI based on state
                 switch (activityMsg.Type)
                 {
                     case McpActivityType.STARTED:
-                        // Yellow - Processing
-                        mcpActivityIndicator.Fill = new SolidColorBrush(Color.FromRgb(255, 193, 7)); // AccentWarning
-                        mcpActivityText.Text = $"🔧 Processing {activityMsg.ToolName}...";
-                        mcpActivityText.Foreground = new SolidColorBrush(Color.FromRgb(255, 193, 7));
-                        mcpActivityBorder.BorderBrush = new SolidColorBrush(Color.FromRgb(255, 193, 7));
-                        mcpActivityBorder.BorderThickness = new Thickness(1);
-                        
-                        // Stop timeout timer - server is working
-                        _claudeResponseTimer?.Stop();
-                        _timeoutRecorded = false; // Reset timeout flag for new activity
+                        activityStrip.SetProcessing(activityMsg.ToolName);
                         break;
 
                     case McpActivityType.COMPLETED:
-                        // Green - Done, waiting for Claude
-                        mcpActivityIndicator.Fill = new SolidColorBrush(Color.FromRgb(0, 217, 165)); // AccentSuccess
-                        mcpActivityText.Text = $"✅ {activityMsg.ToolName} done ({activityMsg.Details}) — waiting for Claude...";
-                        mcpActivityText.Foreground = new SolidColorBrush(Color.FromRgb(0, 217, 165));
-                        mcpActivityBorder.BorderBrush = new SolidColorBrush(Color.FromRgb(0, 217, 165));
-                        mcpActivityBorder.BorderThickness = new Thickness(1);
-                        
+                        activityStrip.SetCompleted(activityMsg.ToolName, activityMsg.Details);
+                    
                         // Record statistics - parse duration from Details (e.g., "12ms")
                         long durationMs = 0;
                         if (activityMsg.Details.EndsWith("ms") && 
                             long.TryParse(activityMsg.Details.Replace("ms", ""), out durationMs))
                         {
                             _sessionStats.RecordToolCall(activityMsg.ToolName, durationMs);
-                            UpdateStatsDisplay();
+                            activityStrip.UpdateStatsDisplay(_sessionStats);
                         }
-                        
+                    
                         // Add to activity log
-                        AddActivityLogEntry(ActivityLogType.ToolCall, activityMsg.ToolName, durationMs, $"Completed in {activityMsg.Details}");
-                        
-                        // Start timeout timer - ball is in Claude's court
-                        _lastCompletedTime = DateTime.Now;
-                        _timeoutRecorded = false; // Reset timeout flag
-                        _claudeResponseTimer?.Start();
+                        activityLogTab.AddEntry(ActivityLogType.ToolCall, activityMsg.ToolName, durationMs, $"Completed in {activityMsg.Details}");
                         break;
 
                     case McpActivityType.ERROR:
-                        // Red - Error
-                        mcpActivityIndicator.Fill = new SolidColorBrush(Color.FromRgb(233, 69, 96)); // AccentPrimary (red)
-                        mcpActivityText.Text = $"❌ {activityMsg.ToolName} failed: {activityMsg.Details}";
-                        mcpActivityText.Foreground = new SolidColorBrush(Color.FromRgb(233, 69, 96));
-                        mcpActivityBorder.BorderBrush = new SolidColorBrush(Color.FromRgb(233, 69, 96));
-                        mcpActivityBorder.BorderThickness = new Thickness(1);
-                        
+                        activityStrip.SetError(activityMsg.ToolName, activityMsg.Details);
+                    
                         // Record error statistics
                         _sessionStats.RecordError();
-                        UpdateStatsDisplay();
-                        
+                        activityStrip.UpdateStatsDisplay(_sessionStats);
+                    
                         // Add to activity log
-                        AddActivityLogEntry(ActivityLogType.Error, activityMsg.ToolName, 0, activityMsg.Details);
-
-                        // Stop timeout timer
-                        _claudeResponseTimer?.Stop();
-                        _timeoutRecorded = false;
-                        
-                        // Auto-reset to idle after 5 seconds
-                        Task.Delay(5000).ContinueWith(_ =>
-                        {
-                            Dispatcher.Invoke(() =>
-                            {
-                                if (mcpActivityText.Text.StartsWith("❌"))
-                                {
-                                    mcpActivityIndicator.Fill = new SolidColorBrush(Color.FromRgb(136, 146, 160)); // Gray
-                                    mcpActivityText.Text = "Idle";
-                                    mcpActivityText.Foreground = new SolidColorBrush(Color.FromRgb(136, 146, 160));
-                                    mcpActivityBorder.BorderBrush = Brushes.Transparent;
-                                    mcpActivityBorder.BorderThickness = new Thickness(0);
-                                }
-                            });
-                        });
+                        activityLogTab.AddEntry(ActivityLogType.Error, activityMsg.ToolName, 0, activityMsg.Details);
                         break;
 
                     case McpActivityType.WORKSPACE_SWITCHED:
                         // Sync the GUI dropdown to match the workspace that MCP switched to
                         var switchedName = activityMsg.ToolName; // ToolName field carries the workspace name
-                        AddActivityLogEntry(ActivityLogType.WorkspaceSwitch, "", 0, $"Workspace switched to: {switchedName}");
+                        activityLogTab.AddEntry(ActivityLogType.WorkspaceSwitch, "", 0, $"Workspace switched to: {switchedName}");
                         
                         // Find the workspace in the combo box and select it without triggering a reload
                         var matchingWorkspace = _workspaceManager.Workspaces
                             .FirstOrDefault(w => w.Name.Equals(switchedName, StringComparison.OrdinalIgnoreCase));
                         
-                        if (matchingWorkspace != null && projectComboBox.SelectedItem != matchingWorkspace)
+                        if (matchingWorkspace != null && headerBar.SelectedWorkspace != matchingWorkspace)
                         {
                             _isSwitchingFromMcp = true;
-                            projectComboBox.IsEnabled = true; // Temporarily enable to change selection
-                            projectComboBox.SelectedItem = matchingWorkspace;
-                            projectComboBox.IsEnabled = false; // Re-disable (still connected)
+                            headerBar.SwitchWorkspaceFromMcp(matchingWorkspace);
                             _isSwitchingFromMcp = false;
                         }
                         
                         // Update connection status text
-                        connectionStatusText.Text = $"Connected: {switchedName}";
+                        _appState.SetClaudeConnected(switchedName);
                         UpdateStatus($"🔄 Workspace switched to: {switchedName}", new SolidColorBrush(Color.FromRgb(100, 200, 255)));
                         break;
                 }
                 
                 // Update chart after any activity
-                UpdateActivityLogDisplay();
+                activityLogTab.UpdateDisplay();
             });
-        }
-
-        private void ClaudeResponseTimer_Tick(object? sender, EventArgs e)
-        {
-            var elapsed = (DateTime.Now - _lastCompletedTime).TotalSeconds;
-            
-            if (elapsed >= ClaudeTimeoutSeconds)
-            {
-                // Timeout reached - Claude hasn't responded
-                mcpActivityIndicator.Fill = new SolidColorBrush(Color.FromRgb(255, 152, 0)); // Orange
-                mcpActivityText.Text = $"⏳ Claude hasn't responded in {(int)elapsed}s (timeout threshold: {ClaudeTimeoutSeconds}s)";
-                mcpActivityText.Foreground = new SolidColorBrush(Color.FromRgb(255, 152, 0));
-                mcpActivityBorder.BorderBrush = new SolidColorBrush(Color.FromRgb(255, 152, 0));
-                mcpActivityBorder.BorderThickness = new Thickness(2); // Thicker border for emphasis
-                
-                // Record timeout statistics (only once per timeout)
-                if (!_timeoutRecorded)
-                {
-                    _sessionStats.RecordTimeout();
-                    _timeoutRecorded = true;
-                    AddActivityLogEntry(ActivityLogType.Timeout, "", 0, $"Claude hasn't responded in {(int)elapsed}s");
-                    UpdateStatsDisplay();
-                    UpdateActivityLogDisplay();
-                }
-            }
-            else
-            {
-                // Update elapsed time while waiting
-                mcpActivityText.Text = $"✅ Tool completed — waiting for Claude... ({(int)elapsed}s)";
-            }
         }
 
         private void OnMcpConnectionError(string errorMessage)
@@ -402,135 +352,14 @@ namespace CodeMerger
 
         private void StatsUpdateTimer_Tick(object? sender, EventArgs e)
         {
-            UpdateStatsDisplay();
-            UpdateActivityLogDisplay();
-        }
-
-        private void UpdateStatsDisplay()
-        {
-            var summary = _sessionStats.GetSummary();
-            var duration = _sessionStats.GetSessionDuration();
-            
-            // Add session duration to the summary
-            if (_sessionStats.TotalToolCalls > 0 || _sessionStats.TotalErrors > 0 || _sessionStats.TotalTimeouts > 0)
-            {
-                mcpStatsText.Text = $"{summary} | Session: {duration}";
-            }
-            else
-            {
-                mcpStatsText.Text = $"No activity this session | Session: {duration}";
-            }
-
-            // Build detailed tooltip
-            var tooltipText = new System.Text.StringBuilder();
-            tooltipText.AppendLine($"Session Duration: {duration}");
-            tooltipText.AppendLine($"Total Calls: {_sessionStats.TotalToolCalls}");
-            
-            if (_sessionStats.TotalToolCalls > 0)
-            {
-                tooltipText.AppendLine($"Average Response: {_sessionStats.AverageResponseTime:F1}ms");
-            }
-            
-            var slowest = _sessionStats.GetSlowestTool();
-            if (slowest.HasValue)
-            {
-                tooltipText.AppendLine($"Slowest Tool: {slowest.Value.ToolName} ({slowest.Value.DurationMs}ms)");
-            }
-            
-            if (_sessionStats.TotalTimeouts > 0)
-            {
-                tooltipText.AppendLine($"Timeouts: {_sessionStats.TotalTimeouts}");
-            }
-            
-            if (_sessionStats.TotalErrors > 0)
-            {
-                tooltipText.AppendLine($"Errors: {_sessionStats.TotalErrors}");
-            }
-            
-            tooltipText.AppendLine();
-            tooltipText.AppendLine("Click 🔄 to reset statistics");
-            
-            mcpStatsText.ToolTip = tooltipText.ToString().TrimEnd();
-
-            // Color-code based on health
-            if (_sessionStats.TotalErrors > 0)
-            {
-                // Red if there are errors
-                mcpStatsText.Foreground = new SolidColorBrush(Color.FromRgb(233, 69, 96)); // AccentPrimary (red)
-            }
-            else if (_sessionStats.TotalTimeouts > 0)
-            {
-                // Yellow/Orange if there are timeouts
-                mcpStatsText.Foreground = new SolidColorBrush(Color.FromRgb(255, 193, 7)); // AccentWarning (yellow)
-            }
-            else if (_sessionStats.TotalToolCalls > 0)
-            {
-                // Green if active with no issues
-                mcpStatsText.Foreground = new SolidColorBrush(Color.FromRgb(0, 217, 165)); // AccentSuccess (green)
-            }
-            else
-            {
-                // Gray if no activity
-                mcpStatsText.Foreground = new SolidColorBrush(Color.FromRgb(136, 146, 160)); // TextSecondary (gray)
-            }
-        }
-
-        private void ResetStats_Click(object sender, RoutedEventArgs e)
-        {
-            _sessionStats.Reset();
-            UpdateStatsDisplay();
-            UpdateStatus("Session statistics reset", Brushes.Gray);
+            activityStrip.UpdateStatsDisplay(_sessionStats);
+            activityLogTab.UpdateDisplay();
         }
 
         #endregion
 
-        private void RefreshClaudeDesktopStatus()
-        {
-            if (_claudeDesktopService.IsClaudeDesktopInstalled())
-            {
-                claudeInstallStatus.Text = "Installed ✓";
-                claudeInstallStatus.Foreground = new SolidColorBrush(Color.FromRgb(0, 217, 165));
-                claudeDownloadButton.Visibility = Visibility.Collapsed;
-            }
-            else
-            {
-                claudeInstallStatus.Text = "Not installed";
-                claudeInstallStatus.Foreground = new SolidColorBrush(Color.FromRgb(136, 146, 160));
-                claudeDownloadButton.Visibility = Visibility.Visible;
-            }
 
-            if (_claudeDesktopService.IsConfigured())
-            {
-                var configuredPath = _claudeDesktopService.GetConfiguredExePath();
-                var currentExePath = _claudeDesktopService.GetCurrentExePath();
-                var stableExePath = _claudeDesktopService.GetStableExePath();
-
-                // Config is correct if it points to either the current exe or the stable path
-                bool isCorrect = string.Equals(configuredPath, currentExePath, StringComparison.OrdinalIgnoreCase) ||
-                                 string.Equals(configuredPath, stableExePath, StringComparison.OrdinalIgnoreCase);
-
-                if (isCorrect)
-                {
-                    bool isDebug = _claudeDesktopService.IsDebugRun();
-                    claudeConfigStatus.Text = isDebug ? "Ready ✓ (Debug)" : "Ready ✓";
-                    claudeConfigStatus.Foreground = new SolidColorBrush(Color.FromRgb(0, 217, 165));
-                }
-                else
-                {
-                    claudeConfigStatus.Text = "Path mismatch";
-                    claudeConfigStatus.Foreground = new SolidColorBrush(Color.FromRgb(255, 193, 7));
-                }
-                claudeAddConfigButton.Visibility = Visibility.Collapsed;
-            }
-            else
-            {
-                claudeConfigStatus.Text = "Not configured";
-                claudeConfigStatus.Foreground = new SolidColorBrush(Color.FromRgb(136, 146, 160));
-                claudeAddConfigButton.Visibility = Visibility.Visible;
-            }
-        }
-
-        private void StopServer_Click(object sender, RoutedEventArgs e)
+        private void StopServer_Click()
         {
             try
             {
@@ -545,10 +374,7 @@ namespace CodeMerger
                     UpdateStatus($"Stopped {killed} MCP server process(es). You can now recompile.", Brushes.LightGreen);
                 }
 
-                connectionIndicator.Fill = new SolidColorBrush(Color.FromRgb(136, 146, 160));
-                connectionStatusText.Text = killed == 0 ? "Not connected" : "Server stopped";
-                connectionStatusText.Foreground = new SolidColorBrush(Color.FromRgb(136, 146, 160));
-                stopServerButton.Visibility = Visibility.Collapsed;
+                _appState.SetClaudeDisconnected();
             }
             catch (Exception ex)
             {
@@ -556,514 +382,73 @@ namespace CodeMerger
             }
         }
 
-        private void ClaudeDownload_Click(object sender, RoutedEventArgs e)
+
+        private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
         {
-            _claudeDesktopService.OpenDownloadPage();
+            if (msg == App.WM_SHOWME)
+            {
+                ShowAndActivate();
+                handled = true;
+            }
+            return IntPtr.Zero;
         }
 
-        private void ClaudeAddConfig_Click(object sender, RoutedEventArgs e)
+        #region System Tray
+
+        private void TrayIcon_DoubleClick(object sender, RoutedEventArgs e)
         {
-            try
-            {
-                _claudeDesktopService.SelfHeal();
-                UpdateStatus("Added CodeMerger to Claude Desktop config.", Brushes.LightGreen);
-                RefreshClaudeDesktopStatus();
-            }
-            catch (Exception ex)
-            {
-                UpdateStatus($"Failed to update config: {ex.Message}", new SolidColorBrush(Color.FromRgb(233, 69, 96)));
-            }
+            ShowAndActivate();
         }
 
-        private void ClaudeOpenConfigFolder_Click(object sender, RoutedEventArgs e)
+        private void TrayOpen_Click(object sender, RoutedEventArgs e)
         {
-            _claudeDesktopService.OpenConfigFolder();
+            ShowAndActivate();
         }
 
-        #region ChatGPT Desktop / SSE Transport
-
-        private const int DefaultSsePort = 52780;
-
-        private async void ChatGptStart_Click(object sender, RoutedEventArgs e)
+        private void TrayExit_Click(object sender, RoutedEventArgs e)
         {
-            if (_currentWorkspace == null)
-            {
-                UpdateStatus("Select a workspace first", new SolidColorBrush(Color.FromRgb(233, 69, 96)));
-                return;
-            }
-
-            chatGptStartButton.IsEnabled = false;
-            UpdateStatus("Starting ChatGPT server...", new SolidColorBrush(Color.FromRgb(100, 200, 255)));
-
-            try
-            {
-                // Create and index McpServer for SSE
-                _mcpServerForSse = new McpServer();
-                _mcpServerForSse.OnLog += msg => Dispatcher.Invoke(() => UpdateStatus(msg, Brushes.Gray));
-
-                var extensions = _currentWorkspace.Extensions
-                    .Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries)
-                    .Select(ext => ext.Trim())
-                    .Where(ext => !string.IsNullOrEmpty(ext))
-                    .ToList();
-
-                var ignoredDirs = (_currentWorkspace.IgnoredDirectories + ",.git")
-                    .Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries)
-                    .Select(dir => dir.Trim().ToLowerInvariant())
-                    .ToHashSet();
-
-                var activeDirectories = _currentWorkspace.InputDirectories
-                    .Where(dir => !_currentWorkspace.DisabledDirectories.Contains(dir))
-                    .ToList();
-
-                _mcpServerForSse.IndexWorkspace(_currentWorkspace.Name, activeDirectories, extensions, ignoredDirs);
-
-                // Wire up SSE events
-                _mcpServerForSse.OnSseClientConnected += sessionId => Dispatcher.Invoke(() =>
-                {
-                        _isChatGptConnected = true;
-                        chatGptConnectionIndicator.Fill = new SolidColorBrush(Color.FromRgb(16, 163, 127)); // ChatGPT green
-                        chatGptIndicator.Fill = new SolidColorBrush(Color.FromRgb(16, 163, 127));
-                        chatGptStatusText.Text = "Connected";
-                        chatGptStatusText.Foreground = new SolidColorBrush(Color.FromRgb(16, 163, 127));
-                        UpdateStatus($"✓ ChatGPT connected (session: {sessionId})", Brushes.LightGreen);
-                    });
-
-                _mcpServerForSse.OnSseClientDisconnected += sessionId => Dispatcher.Invoke(() =>
-                {
-                        _isChatGptConnected = false;
-                        chatGptConnectionIndicator.Fill = new SolidColorBrush(Color.FromRgb(136, 146, 160));
-                        chatGptIndicator.Fill = new SolidColorBrush(Color.FromRgb(255, 193, 7)); // Yellow - running but no client
-                        chatGptStatusText.Text = "Running";
-                        chatGptStatusText.Foreground = new SolidColorBrush(Color.FromRgb(136, 146, 160));
-                        UpdateStatus($"ChatGPT disconnected (session: {sessionId})", Brushes.Gray);
-                    });
-
-                // Activity flash when ChatGPT makes requests
-                _mcpServerForSse.OnSseMessageReceived += method => Dispatcher.Invoke(async () =>
-                {
-                    _isChatGptConnected = true; // Message received = connected
-                    chatGptConnectionIndicator.Fill = new SolidColorBrush(Color.FromRgb(0, 255, 150));
-                    chatGptIndicator.Fill = new SolidColorBrush(Color.FromRgb(0, 255, 150));
-                    chatGptStatusText.Text = method;
-                
-                    await Task.Delay(300);
-                
-                    if (_isChatGptConnected)
-                    {
-                        chatGptConnectionIndicator.Fill = new SolidColorBrush(Color.FromRgb(16, 163, 127));
-                        chatGptIndicator.Fill = new SolidColorBrush(Color.FromRgb(16, 163, 127));
-                        chatGptStatusText.Text = "Connected";
-                    }
-                });
-
-                // Start HTTP transport (tunnel will provide HTTPS)
-                _mcpServerForSse.StartSse(DefaultSsePort, useHttps: false);
-
-                // Update UI to show starting state
-                chatGptStatusText.Text = "Starting tunnel...";
-                chatGptIndicator.Fill = new SolidColorBrush(Color.FromRgb(255, 193, 7)); // Yellow
-
-                // Now start the tunnel
-                _tunnelService = new TunnelService();
-                _tunnelService.OnLog += msg => Dispatcher.Invoke(() => UpdateStatus(msg, Brushes.Gray));
-                _tunnelService.OnDownloadProgress += progress => Dispatcher.Invoke(() =>
-                {
-                    progressBar.Visibility = Visibility.Visible;
-                    progressBar.Value = progress;
-                    UpdateStatus($"Downloading cloudflared... {progress}%", new SolidColorBrush(Color.FromRgb(100, 200, 255)));
-                    if (progress >= 100)
-                    {
-                        progressBar.Visibility = Visibility.Collapsed;
-                    }
-                });
-                _tunnelService.OnUrlAvailable += url => Dispatcher.Invoke(() =>
-                {
-                    var sseUrl = _tunnelService.GetSseUrl();
-                    publicUrlTextBox.Text = sseUrl ?? url;
-                    copyUrlButton.IsEnabled = true;
-                    
-                    // Auto-copy to clipboard
-                    if (!string.IsNullOrEmpty(sseUrl))
-                    {
-                        Clipboard.SetText(sseUrl);
-                    }
-                    
-                    chatGptStatusText.Text = "Ready";
-                    chatGptIndicator.Fill = new SolidColorBrush(Color.FromRgb(0, 217, 165)); // Green
-                    UpdateStatus($"✓ ChatGPT server ready! URL copied to clipboard", Brushes.LightGreen);
-                });
-                _tunnelService.OnDisconnected += () => Dispatcher.Invoke(() =>
-                {
-                    // Tunnel disconnected but server may still be running
-                    if (_mcpServerForSse != null && _mcpServerForSse.IsSseRunning)
-                    {
-                        publicUrlTextBox.Text = "Tunnel disconnected - restart server";
-                        copyUrlButton.IsEnabled = false;
-                        chatGptStatusText.Text = "Tunnel lost";
-                        chatGptIndicator.Fill = new SolidColorBrush(Color.FromRgb(233, 69, 96)); // Red
-                        UpdateStatus("Tunnel disconnected. Click Stop then Start again.", new SolidColorBrush(Color.FromRgb(233, 69, 96)));
-                    }
-                });
-                _tunnelService.OnError += msg => Dispatcher.Invoke(() =>
-                {
-                    UpdateStatus(msg, new SolidColorBrush(Color.FromRgb(233, 69, 96)));
-                    // Don't stop server on tunnel error - let user retry
-                    chatGptStatusText.Text = "Tunnel failed";
-                    chatGptIndicator.Fill = new SolidColorBrush(Color.FromRgb(233, 69, 96)); // Red
-                    chatGptStartButton.IsEnabled = false;
-                    chatGptStopButton.Visibility = Visibility.Visible;
-                });
-
-                bool tunnelSuccess = await _tunnelService.StartAsync(DefaultSsePort);
-
-                if (tunnelSuccess)
-                {
-                    // Success - update UI
-                    chatGptStartButton.Visibility = Visibility.Collapsed;
-                    chatGptStopButton.Visibility = Visibility.Visible;
-                }
-                else
-                {
-                    // Tunnel failed - stop everything
-                    StopChatGptServer();
-                    chatGptStartButton.IsEnabled = true;
-                }
-            }
-            catch (Exception ex)
-            {
-                UpdateStatus($"Failed to start: {ex.Message}", new SolidColorBrush(Color.FromRgb(233, 69, 96)));
-                StopChatGptServer();
-                chatGptStartButton.IsEnabled = true;
-            }
+            ExitApplication();
         }
 
-        private void ChatGptStop_Click(object sender, RoutedEventArgs e)
+        private void ShowAndActivate()
         {
-            StopChatGptServer();
+            Show();
+            WindowState = WindowState.Normal;
+            Activate();
         }
 
-        private void StopChatGptServer()
+        private void ExitApplication()
         {
-            // Stop tunnel first
-            _tunnelService?.Stop();
-            _tunnelService?.Dispose();
-            _tunnelService = null;
-
-            // Stop SSE server
-            _mcpServerForSse?.StopSse();
-            _mcpServerForSse?.Stop();
-            _mcpServerForSse = null;
-
-            // Reset UI
-            chatGptStartButton.Visibility = Visibility.Visible;
-            chatGptStartButton.IsEnabled = true;
-            chatGptStopButton.Visibility = Visibility.Collapsed;
-            chatGptStatusText.Text = "Stopped";
-            chatGptStatusText.Foreground = new SolidColorBrush(Color.FromRgb(136, 146, 160));
-            chatGptIndicator.Fill = new SolidColorBrush(Color.FromRgb(136, 146, 160));
-            chatGptConnectionIndicator.Fill = new SolidColorBrush(Color.FromRgb(136, 146, 160));
-            publicUrlTextBox.Text = "Click 'Start ChatGPT Server' to get URL";
-            copyUrlButton.IsEnabled = false;
-            progressBar.Visibility = Visibility.Collapsed;
-
-            UpdateStatus("ChatGPT server stopped", Brushes.Gray);
+            _isExiting = true;
+            trayIcon.Dispose();
+            Close();
         }
 
-        private void CopyUrl_Click(object sender, RoutedEventArgs e)
+        private void UpdateTrayTooltip()
         {
-            var url = publicUrlTextBox.Text;
-            if (!string.IsNullOrEmpty(url) && url.StartsWith("http"))
-            {
-                Clipboard.SetText(url);
-                UpdateStatus($"Copied to clipboard: {url}", Brushes.LightGreen);
-            }
-        }
-
-        private void TunnelHelp_Click(object sender, RoutedEventArgs e)
-        {
-            MessageBox.Show(TunnelService.GetInstallInstructions(), "ChatGPT Desktop Setup", 
-                MessageBoxButton.OK, MessageBoxImage.Information);
-        }
-
-        private void CommunityLessonsSettings_Click(object sender, RoutedEventArgs e)
-        {
-            var dialog = new CommunityLessonSettingsDialog { Owner = this };
-            dialog.ShowDialog();
-            RefreshLessonsTab();
-        }
-
-        private void RefreshLessonsTab()
-        {
-            try
-            {
-                var service = new LessonService();
-                var local = service.GetLocalLessons();
-                var community = service.GetCommunityLessons();
-
-                localLessonsListBox.ItemsSource = local;
-                communityLessonsListBox.ItemsSource = community;
-                localLessonCountText.Text = $"({local.Count}/100)";
-                communityLessonCountText.Text = $"({community.Count})";
-
-                // Reset button states
-                deleteLessonButton.IsEnabled = false;
-                submitLessonButton.IsEnabled = false;
-                lessonDetailPanel.Visibility = Visibility.Collapsed;
-            }
-            catch (Exception ex)
-            {
-                UpdateStatus($"Failed to load lessons: {ex.Message}", Brushes.OrangeRed);
-            }
-        }
-
-        private void ShowLessonDetail(Models.Lesson lesson)
-        {
-            detailTypeText.Text = lesson.Type;
-            detailComponentText.Text = lesson.Component;
-            detailContributorText.Text = lesson.ContributedBy ?? "";
-
-            var content = $"Observation:\n{lesson.Observation}\n\nProposal:\n{lesson.Proposal}";
-            if (!string.IsNullOrEmpty(lesson.SuggestedCode))
-                content += $"\n\nSuggested Code:\n{lesson.SuggestedCode}";
-
-            detailContentText.Text = content;
-            lessonDetailPanel.Visibility = Visibility.Visible;
-        }
-
-        private bool _isLessonSelectionChanging;
-
-        private void LocalLessonListBox_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
-        {
-            if (_isLessonSelectionChanging) return;
-            _isLessonSelectionChanging = true;
-
-            communityLessonsListBox.SelectedItem = null;
-            if (localLessonsListBox.SelectedItem is Models.Lesson lesson)
-            {
-                deleteLessonButton.IsEnabled = true;
-                submitLessonButton.IsEnabled = true;
-                ShowLessonDetail(lesson);
-            }
-            else
-            {
-                deleteLessonButton.IsEnabled = false;
-                submitLessonButton.IsEnabled = false;
-                lessonDetailPanel.Visibility = Visibility.Collapsed;
-            }
-
-            _isLessonSelectionChanging = false;
-        }
-
-        private void CommunityLessonListBox_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
-        {
-            if (_isLessonSelectionChanging) return;
-            _isLessonSelectionChanging = true;
-
-            localLessonsListBox.SelectedItem = null;
-            deleteLessonButton.IsEnabled = false;
-            submitLessonButton.IsEnabled = false;
-            if (communityLessonsListBox.SelectedItem is Models.Lesson lesson)
-            {
-                ShowLessonDetail(lesson);
-            }
-            else
-            {
-                lessonDetailPanel.Visibility = Visibility.Collapsed;
-            }
-
-            _isLessonSelectionChanging = false;
-        }
-
-        private async void SyncLessonsNow_Click(object sender, RoutedEventArgs e)
-        {
-            syncLessonsButton.IsEnabled = false;
-            lessonSyncStatusText.Text = "⏳ Syncing...";
-            lessonSyncStatusText.Foreground = Brushes.LightBlue;
-
-            try
-            {
-                var lessonService = new LessonService();
-                var syncService = new CommunityLessonSyncService(lessonService);
-                var (synced, count, message) = await syncService.ForceSyncAsync();
-
-                lessonSyncStatusText.Text = synced ? $"✅ Synced {count} lessons" : $"ℹ️ {message}";
-                lessonSyncStatusText.Foreground = synced ? Brushes.LightGreen : Brushes.Orange;
-                RefreshLessonsTab();
-            }
-            catch (Exception ex)
-            {
-                lessonSyncStatusText.Text = $"❌ {ex.Message}";
-                lessonSyncStatusText.Foreground = Brushes.OrangeRed;
-            }
-            finally
-            {
-                syncLessonsButton.IsEnabled = true;
-            }
-        }
-
-        private void DeleteLesson_Click(object sender, RoutedEventArgs e)
-        {
-            if (localLessonsListBox.SelectedItem is not Models.Lesson lesson) return;
-
-            var result = MessageBox.Show($"Delete lesson '{lesson.Component}'?\n\n{lesson.Observation}",
-                "Delete Lesson", MessageBoxButton.YesNo, MessageBoxImage.Warning);
-            if (result != MessageBoxResult.Yes) return;
-
-            var service = new LessonService();
-            // Find the lesson's index among all lessons (local come first)
-            var all = service.GetLessons();
-            var match = all.FindIndex(l => l.Timestamp == lesson.Timestamp && l.Observation == lesson.Observation);
-            if (match >= 0)
-            {
-                var (success, message) = service.DeleteLesson(match + 1);
-                lessonSyncStatusText.Text = success ? $"✅ {message}" : $"❌ {message}";
-                lessonSyncStatusText.Foreground = success ? Brushes.LightGreen : Brushes.OrangeRed;
-            }
-
-            lessonDetailPanel.Visibility = Visibility.Collapsed;
-            RefreshLessonsTab();
-        }
-
-        private async void SubmitLesson_Click(object sender, RoutedEventArgs e)
-        {
-            if (localLessonsListBox.SelectedItem is not Models.Lesson lesson) return;
-
-            var settings = Models.CommunityLessonSettings.Load();
-            if (string.IsNullOrEmpty(settings.GitHubToken))
-            {
-                lessonSyncStatusText.Text = "❌ GitHub sign-in required — open Settings";
-                lessonSyncStatusText.Foreground = Brushes.OrangeRed;
-                return;
-            }
-
-            var confirm = MessageBox.Show($"Submit lesson '{lesson.Component}' to GitHub as an issue?\n\n{lesson.Observation}",
-                "Submit Lesson", MessageBoxButton.YesNo, MessageBoxImage.Question);
-            if (confirm != MessageBoxResult.Yes) return;
-
-            submitLessonButton.IsEnabled = false;
-            lessonSyncStatusText.Text = "⏳ Submitting to GitHub...";
-            lessonSyncStatusText.Foreground = Brushes.LightBlue;
-
-            try
-            {
-                var repoOwner = "pcarvalho75";
-                var repoName = "CodeMerger";
-
-                if (!string.IsNullOrEmpty(settings.RepoUrl))
-                {
-                    var uri = settings.RepoUrl.TrimEnd('/');
-                    var parts = uri.Split('/');
-                    if (parts.Length >= 2)
-                    {
-                        repoOwner = parts[parts.Length - 2];
-                        repoName = parts[parts.Length - 1];
-                    }
-                }
-
-                var contributor = !string.IsNullOrEmpty(settings.GitHubUsername)
-                    ? $"@{settings.GitHubUsername}" : "Anonymous";
-
-                var title = $"[Lesson] {lesson.Type}: {lesson.Component}";
-                var body = $"## Observation\n{lesson.Observation}\n\n" +
-                           $"## Proposal\n{lesson.Proposal}\n\n" +
-                           $"**Type:** {lesson.Type}\n" +
-                           $"**Component:** {lesson.Component}\n" +
-                           $"**Contributed by:** {contributor}\n" +
-                           $"**Logged:** {lesson.Timestamp:yyyy-MM-dd HH:mm}\n";
-
-                if (!string.IsNullOrEmpty(lesson.SuggestedCode))
-                    body += $"\n## Suggested Code\n```csharp\n{lesson.SuggestedCode}\n```\n";
-
-                using var client = new System.Net.Http.HttpClient();
-                client.DefaultRequestHeaders.Add("Authorization", $"token {settings.GitHubToken}");
-                client.DefaultRequestHeaders.Add("User-Agent", "CodeMerger");
-                client.DefaultRequestHeaders.Add("Accept", "application/vnd.github.v3+json");
-
-                var payload = System.Text.Json.JsonSerializer.Serialize(new { title, body, labels = new[] { "lesson", lesson.Type } });
-                var content = new System.Net.Http.StringContent(payload, System.Text.Encoding.UTF8, "application/json");
-                var response = await client.PostAsync($"https://api.github.com/repos/{repoOwner}/{repoName}/issues", content);
-
-                if (response.IsSuccessStatusCode)
-                {
-                    var responseJson = await response.Content.ReadAsStringAsync();
-                    using var doc = System.Text.Json.JsonDocument.Parse(responseJson);
-                    var issueUrl = doc.RootElement.GetProperty("html_url").GetString();
-                    lessonSyncStatusText.Text = $"✅ Submitted — {issueUrl}";
-                    lessonSyncStatusText.Foreground = Brushes.LightGreen;
-                }
-                else
-                {
-                    var errorBody = await response.Content.ReadAsStringAsync();
-                    lessonSyncStatusText.Text = $"❌ HTTP {(int)response.StatusCode}";
-                    lessonSyncStatusText.Foreground = Brushes.OrangeRed;
-                }
-            }
-            catch (Exception ex)
-            {
-                lessonSyncStatusText.Text = $"❌ {ex.Message}";
-                lessonSyncStatusText.Foreground = Brushes.OrangeRed;
-            }
-            finally
-            {
-                submitLessonButton.IsEnabled = true;
-            }
-        }
-
-        private void ClearLocalLessons_Click(object sender, RoutedEventArgs e)
-        {
-            var service = new LessonService();
-            var count = service.GetLessonCount();
-            if (count == 0)
-            {
-                lessonSyncStatusText.Text = "ℹ️ No local lessons to clear";
-                lessonSyncStatusText.Foreground = Brushes.Orange;
-                return;
-            }
-
-            var result = MessageBox.Show($"Delete all {count} local lessons? This cannot be undone.",
-                "Clear Local Lessons", MessageBoxButton.YesNo, MessageBoxImage.Warning);
-            if (result != MessageBoxResult.Yes) return;
-
-            service.ClearAllLessons();
-            lessonSyncStatusText.Text = $"✅ Cleared {count} local lessons";
-            lessonSyncStatusText.Foreground = Brushes.LightGreen;
-            lessonDetailPanel.Visibility = Visibility.Collapsed;
-            RefreshLessonsTab();
-        }
-
-        private void OpenLog_Click(object sender, RoutedEventArgs e)
-        {
-            // Get log file path from the SSE server if available, otherwise use default location
-            var logPath = _mcpServerForSse?.LogFilePath ?? 
-                System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), 
-                    "CodeMerger", "codemerger-mcp.log");
-            
-            if (File.Exists(logPath))
-            {
-                // Open in default text editor
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = logPath,
-                    UseShellExecute = true
-                });
-            }
-            else
-            {
-                MessageBox.Show($"Log file not found at:\n{logPath}\n\nThe log is created when the MCP server starts.", 
-                    "Log File", MessageBoxButton.OK, MessageBoxImage.Information);
-            }
+            var text = headerBar.ConnectionStatusText;
+            trayIcon.ToolTipText = text.StartsWith("Connected")
+                ? $"CodeMerger — {text}"
+                : "CodeMerger — Idle";
         }
 
         #endregion
 
         private void MainWindow_Closing(object? sender, CancelEventArgs e)
         {
-            _claudeResponseTimer?.Stop();
+            if (!_isExiting)
+            {
+                // Hide to tray instead of closing
+                e.Cancel = true;
+                Hide();
+                return;
+            }
+
+            // Real exit — clean up resources
+            activityStrip.StopTimer();
             _statsUpdateTimer?.Stop();
             _mcpConnectionService.Dispose();
-            _tunnelService?.Dispose();
-            _mcpServerForSse?.Stop();
+            bottomBar.Cleanup();
         }
 
         private void LoadWorkspaceList()
@@ -1075,7 +460,7 @@ namespace CodeMerger
                 var defaultWorkspace = _workspaceManager.GetDefaultWorkspace();
                 if (defaultWorkspace != null)
                 {
-                    projectComboBox.SelectedItem = defaultWorkspace;
+                    headerBar.SelectWorkspace(defaultWorkspace);
                 }
             }
         }
@@ -1083,21 +468,11 @@ namespace CodeMerger
         private void PromptCreateFirstWorkspace()
         {
             MessageBox.Show("Welcome! Create your first workspace to get started.", "CodeMerger", MessageBoxButton.OK, MessageBoxImage.Information);
-            NewWorkspace_Click(null, null);
+            NewWorkspace_Click();
 
             if (_workspaceManager.Workspaces.Count == 0)
             {
                 Application.Current.Shutdown();
-            }
-        }
-
-        private void ProjectComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
-        {
-            if (_isSwitchingFromMcp) return; // MCP already switched the workspace, just updating UI
-            
-            if (projectComboBox.SelectedItem is Workspace selected)
-            {
-                _workspaceManager.SelectWorkspace(selected);
             }
         }
 
@@ -1109,12 +484,13 @@ namespace CodeMerger
             _gitRepositoryManager.SetWorkspaceFolder(workspaceFolder);
 
             // Load workspace settings
-            LoadWorkspaceSettings(workspaceFolder);
+            var settings = parametersTab.LoadSettings(workspaceFolder);
+            activityStrip.TimeoutThresholdSeconds = settings.TimeoutThresholdSeconds;
 
             await LoadWorkspaceDataAsync(workspace);
 
             EnsureClaudeConfig();
-            RefreshClaudeDesktopStatus();
+            bottomBar.RefreshClaudeDesktopStatus();
         }
 
         private void EnsureClaudeConfig()
@@ -1138,13 +514,8 @@ namespace CodeMerger
             try
             {
                 _directoryManager.Load(workspace.InputDirectories, workspace.DisabledDirectories);
-                _gitRepositoryManager.Load(workspace.ExternalRepositories);
 
-                extensionsTextBox.Text = workspace.Extensions;
-                ignoredDirsTextBox.Text = workspace.IgnoredDirectories;
-
-                string workspaceFolder = _workspaceManager.GetWorkspaceFolder(workspace.Name);
-                outputFileTextBox.Text = workspaceFolder;
+                sourceDirectoriesTab.LoadWorkspace(workspace.Extensions, workspace.IgnoredDirectories, workspace.ExternalRepositories);
 
                 await _gitRepositoryManager.UpdateAllAsync();
             }
@@ -1159,7 +530,7 @@ namespace CodeMerger
             }
         }
 
-        private void NewWorkspace_Click(object? sender, RoutedEventArgs? e)
+        private void NewWorkspace_Click()
         {
             var dialog = new InputDialog("New Workspace", "Enter workspace name:");
             if (dialog.ShowDialog() == true && !string.IsNullOrWhiteSpace(dialog.ResponseText))
@@ -1173,11 +544,11 @@ namespace CodeMerger
                     return;
                 }
 
-                projectComboBox.SelectedItem = workspace;
+                headerBar.SelectWorkspace(workspace);
             }
         }
 
-        private void RenameWorkspace_Click(object sender, RoutedEventArgs e)
+        private void RenameWorkspace_Click()
         {
             if (_currentWorkspace == null) return;
 
@@ -1192,7 +563,7 @@ namespace CodeMerger
                     var renamed = _workspaceManager.Workspaces.FirstOrDefault(w => w.Name == newName);
                     if (renamed != null)
                     {
-                        projectComboBox.SelectedItem = renamed;
+                        headerBar.SelectWorkspace(renamed);
                     }
                 }
                 else
@@ -1202,7 +573,7 @@ namespace CodeMerger
             }
         }
 
-        private void DeleteWorkspace_Click(object sender, RoutedEventArgs e)
+        private void DeleteWorkspace_Click()
         {
             if (_currentWorkspace == null) return;
 
@@ -1222,7 +593,7 @@ namespace CodeMerger
                 }
                 else
                 {
-                    projectComboBox.SelectedItem = _workspaceManager.Workspaces.FirstOrDefault();
+                    headerBar.SelectWorkspace(_workspaceManager.Workspaces.FirstOrDefault());
                 }
             }
         }
@@ -1233,150 +604,13 @@ namespace CodeMerger
 
             _currentWorkspace.InputDirectories = _directoryManager.GetAllPaths().ToList();
             _currentWorkspace.DisabledDirectories = _directoryManager.GetDisabledPaths().ToList();
-            _currentWorkspace.Extensions = extensionsTextBox.Text;
-            _currentWorkspace.IgnoredDirectories = ignoredDirsTextBox.Text;
+            _currentWorkspace.Extensions = sourceDirectoriesTab.Extensions;
+            _currentWorkspace.IgnoredDirectories = sourceDirectoriesTab.IgnoredDirectories;
             _currentWorkspace.ExternalRepositories = _gitRepositoryManager.ToList();
 
             _workspaceManager.SaveCurrent();
         }
 
-        private async void AddDirectory_Click(object sender, RoutedEventArgs e)
-        {
-            var dialog = new OpenFileDialog
-            {
-                ValidateNames = false,
-                CheckFileExists = false,
-                CheckPathExists = true,
-                FileName = "Select Folder"
-            };
-
-            if (dialog.ShowDialog() == true)
-            {
-                string? folderPath = System.IO.Path.GetDirectoryName(dialog.FileName);
-                if (!string.IsNullOrEmpty(folderPath))
-                {
-                    _directoryManager.Add(folderPath);
-                    SaveCurrentWorkspace();
-                    await ScanFilesAsync();
-                }
-            }
-        }
-
-        private async void RemoveDirectory_Click(object sender, RoutedEventArgs e)
-        {
-            var selectedItems = inputDirListBox.SelectedItems.Cast<SelectableItem>().ToList();
-            foreach (var item in selectedItems)
-            {
-                _directoryManager.Remove(item);
-            }
-            
-            if (selectedItems.Count > 0)
-            {
-                SaveCurrentWorkspace();
-                await ScanFilesAsync();
-            }
-        }
-
-        private async void SelectAllDirectories_Click(object sender, RoutedEventArgs e)
-        {
-            _directoryManager.SelectAll();
-            SaveCurrentWorkspace();
-            await ScanFilesAsync();
-        }
-
-        private async void DeselectAllDirectories_Click(object sender, RoutedEventArgs e)
-        {
-            _directoryManager.DeselectAll();
-            SaveCurrentWorkspace();
-            await ScanFilesAsync();
-        }
-
-        #region Git Repository Management
-
-        private async void AddGitRepo_Click(object sender, RoutedEventArgs e)
-        {
-            if (_currentWorkspace == null)
-            {
-                UpdateStatus("No workspace selected.", new SolidColorBrush(Color.FromRgb(233, 69, 96)));
-                return;
-            }
-
-            string url = gitUrlTextBox.Text.Trim();
-            SetUIState(false);
-
-            if (await _gitRepositoryManager.AddRepositoryAsync(url))
-            {
-                SaveCurrentWorkspace();
-                gitUrlTextBox.Text = "https://github.com/user/repo";
-                await ScanFilesAsync();
-            }
-
-            SetUIState(true);
-        }
-
-        private async void RefreshGitRepo_Click(object sender, RoutedEventArgs e)
-        {
-            var button = sender as Button;
-            var repo = button?.DataContext as ExternalRepository;
-            if (repo == null) return;
-
-            SetUIState(false);
-
-            if (await _gitRepositoryManager.RefreshRepositoryAsync(repo))
-            {
-                SaveCurrentWorkspace();
-                await ScanFilesAsync();
-            }
-
-            SetUIState(true);
-        }
-
-        private async void RemoveGitRepo_Click(object sender, RoutedEventArgs e)
-        {
-            var button = sender as Button;
-            var repo = button?.DataContext as ExternalRepository;
-            if (repo == null) return;
-
-            var result = MessageBox.Show(
-                $"Remove '{repo.Name}' and delete local files?",
-                "Remove Repository",
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Question);
-
-            if (result == MessageBoxResult.Yes)
-            {
-                if (_gitRepositoryManager.RemoveRepository(repo))
-                {
-                    SaveCurrentWorkspace();
-                    await ScanFilesAsync();
-                }
-            }
-        }
-
-        private async void GitRepoCheckBox_Changed(object sender, RoutedEventArgs e)
-        {
-            if (_isLoadingWorkspace) return;
-            SaveCurrentWorkspace();
-            await ScanFilesAsync();
-        }
-
-        #endregion
-
-        private void OpenFolder_Click(object sender, RoutedEventArgs e)
-        {
-            if (_currentWorkspace == null) return;
-
-            string folder = _workspaceManager.GetCurrentWorkspaceFolder();
-
-            if (Directory.Exists(folder))
-            {
-                Process.Start("explorer.exe", folder);
-            }
-            else
-            {
-                MessageBox.Show("Output folder does not exist yet.", "Info", MessageBoxButton.OK, MessageBoxImage.Information);
-            }
-        }
 
         private void UpdateRecommendation()
         {
@@ -1391,19 +625,6 @@ namespace CodeMerger
             }
         }
 
-        // Keep for compatibility - hidden in UI
-        private void Merge_Click(object sender, RoutedEventArgs e)
-        {
-            // Legacy feature - MCP now handles file access dynamically
-            UpdateStatus("Legacy merge feature is no longer needed. Use MCP.", Brushes.Gray);
-        }
-
-        // Keep for compatibility - hidden in UI
-        private void McpServer_Click(object sender, RoutedEventArgs e)
-        {
-            // MCP is now managed by Claude Desktop automatically
-            UpdateStatus("MCP is managed automatically by Claude Desktop.", Brushes.Gray);
-        }
 
         private async Task ScanFilesAsync()
         {
@@ -1411,7 +632,7 @@ namespace CodeMerger
             _isScanning = true;
 
             FoundFiles.Clear();
-            foundFilesTab.Header = "📄 Found Files";
+            foundFilesTab.UpdateHeader(null);
 
             var selectedDirs = _directoryManager.GetSelectedPaths().ToList();
             var enabledRepos = _gitRepositoryManager.Repositories.Where(r => r.IsEnabled).ToList();
@@ -1433,8 +654,8 @@ namespace CodeMerger
                     selectedDirs,
                     enabledRepos,
                     _gitRepositoryManager.GitService,
-                    extensionsTextBox.Text,
-                    ignoredDirsTextBox.Text);
+                    sourceDirectoriesTab.Extensions,
+                    sourceDirectoriesTab.IgnoredDirectories);
 
                 foreach (var file in result.Files)
                 {
@@ -1442,7 +663,7 @@ namespace CodeMerger
                 }
 
                 _estimatedTokens = result.EstimatedTokens;
-                foundFilesTab.Header = $"📄 Found Files ({result.Files.Count})";
+                foundFilesTab.UpdateHeader(result.Files.Count);
                 UpdateStatus($"Found {result.Files.Count} files (~{_estimatedTokens:N0} tokens)", Brushes.Gray);
                 UpdateRecommendation();
             }
@@ -1457,415 +678,15 @@ namespace CodeMerger
             }
         }
 
-        private async void Filters_Changed(object sender, TextChangedEventArgs e)
-        {
-            if (!IsLoaded) return;
-            SaveCurrentWorkspace();
-            await ScanFilesAsync();
-        }
-
-        private async void DirectoryCheckBox_Changed(object sender, RoutedEventArgs e)
-        {
-            if (!IsLoaded || _isLoadingWorkspace) return;
-            _directoryManager.NotifySelectionChanged();
-            SaveCurrentWorkspace();
-            await ScanFilesAsync();
-        }
-
         private void UpdateStatus(string message, Brush color)
         {
-            StatusText = message;
-            StatusForeground = color;
+            statusBar.UpdateStatus(message, color);
         }
 
         private void SetUIState(bool isEnabled)
         {
             mainGrid.IsEnabled = isEnabled;
-            progressBar.Visibility = isEnabled ? Visibility.Collapsed : Visibility.Visible;
-            if (isEnabled)
-            {
-                fileStatusLabel.Text = "";
-                progressBar.Value = 0;
-            }
+            statusBar.SetScanningState(isEnabled);
         }
-
-        #region Parameters Tab Event Handlers
-
-        private bool _isLoadingSettings = false;
-
-        private void LoadWorkspaceSettings(string workspaceFolder)
-        {
-            _isLoadingSettings = true;
-            try
-            {
-                var settings = _settingsService.LoadSettings(workspaceFolder);
-                
-                // Update UI to reflect loaded settings
-                createBackupFilesCheckBox.IsChecked = settings.CreateBackupFiles;
-                autoCleanupCheckBox.IsChecked = settings.AutoCleanupEnabled;
-                backupRetentionTextBox.Text = settings.BackupRetentionHours.ToString();
-                maxBackupsTextBox.Text = settings.MaxBackupsPerFile.ToString();
-                timeoutThresholdTextBox.Text = settings.TimeoutThresholdSeconds.ToString();
-                showSessionStatsCheckBox.IsChecked = settings.ShowSessionStatistics;
-                sessionStatsPanel.Visibility = settings.ShowSessionStatistics ? Visibility.Visible : Visibility.Collapsed;
-
-                // Hide restart banner when loading new workspace
-                settingsRestartBanner.Visibility = Visibility.Collapsed;
-
-                // Run auto-cleanup if enabled
-                if (settings.AutoCleanupEnabled && _currentWorkspace != null)
-                {
-                    var activeDirectories = _currentWorkspace.InputDirectories
-                        .Where(dir => !_currentWorkspace.DisabledDirectories.Contains(dir))
-                        .ToList();
-
-                    var (deleted, bytesFreed) = _backupCleanupService.RunAutoCleanup(activeDirectories, settings);
-                    if (deleted > 0)
-                    {
-                        UpdateStatus($"Auto-cleanup: removed {deleted} old backup files ({bytesFreed / 1024.0:F1} KB freed)", Brushes.LightYellow);
-                    }
-                }
-            }
-            finally
-            {
-                _isLoadingSettings = false;
-            }
-        }
-
-        private void CreateBackupFiles_Changed(object sender, RoutedEventArgs e)
-        {
-            if (_isLoadingSettings || _settingsService == null || !_settingsService.HasWorkspace) return;
-
-            _settingsService.UpdateSetting(s => s.CreateBackupFiles = createBackupFilesCheckBox.IsChecked == true);
-            ShowSettingsRestartBanner();
-        }
-
-        private void AutoCleanup_Changed(object sender, RoutedEventArgs e)
-        {
-            if (_isLoadingSettings || _settingsService == null || !_settingsService.HasWorkspace) return;
-
-            _settingsService.UpdateSetting(s => s.AutoCleanupEnabled = autoCleanupCheckBox.IsChecked == true);
-        }
-
-        private void BackupRetention_TextChanged(object sender, TextChangedEventArgs e)
-        {
-            if (_isLoadingSettings || _settingsService == null || !_settingsService.HasWorkspace) return;
-
-            if (int.TryParse(backupRetentionTextBox.Text, out int hours))
-            {
-                _settingsService.UpdateSetting(s => s.BackupRetentionHours = hours);
-            }
-        }
-
-        private void MaxBackups_TextChanged(object sender, TextChangedEventArgs e)
-        {
-            if (_isLoadingSettings || _settingsService == null || !_settingsService.HasWorkspace) return;
-
-            if (int.TryParse(maxBackupsTextBox.Text, out int max))
-            {
-                _settingsService.UpdateSetting(s => s.MaxBackupsPerFile = max);
-            }
-        }
-
-        private void TimeoutThreshold_TextChanged(object sender, TextChangedEventArgs e)
-        {
-            if (_isLoadingSettings || _settingsService == null || !_settingsService.HasWorkspace) return;
-
-            if (int.TryParse(timeoutThresholdTextBox.Text, out int seconds))
-            {
-                _settingsService.UpdateSetting(s => s.TimeoutThresholdSeconds = seconds);
-            }
-        }
-
-        private void ShowSessionStats_Changed(object sender, RoutedEventArgs e)
-        {
-            if (_isLoadingSettings || _settingsService == null || !_settingsService.HasWorkspace) return;
-
-            var show = showSessionStatsCheckBox.IsChecked == true;
-            _settingsService.UpdateSetting(s => s.ShowSessionStatistics = show);
-            sessionStatsPanel.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
-        }
-
-        private void CleanAllBackups_Click(object sender, RoutedEventArgs e)
-        {
-            if (_currentWorkspace == null) return;
-
-            var activeDirectories = _currentWorkspace.InputDirectories
-                .Where(dir => !_currentWorkspace.DisabledDirectories.Contains(dir))
-                .ToList();
-
-            var stats = _backupCleanupService.GetStatistics(activeDirectories);
-
-            if (stats.TotalCount == 0)
-            {
-                MessageBox.Show("No backup files found in this workspace.", "Cleanup", 
-                    MessageBoxButton.OK, MessageBoxImage.Information);
-                return;
-            }
-
-            var result = MessageBox.Show(
-                $"Found {stats.TotalCount} backup files ({stats.TotalSizeMB:F2} MB).\n\nThis will permanently delete all .bak files in this workspace.\n\nContinue?",
-                "Confirm Cleanup",
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Warning);
-
-            if (result != MessageBoxResult.Yes) return;
-
-            var (deleted, bytesFreed) = _backupCleanupService.CleanupAll(activeDirectories);
-            UpdateStatus($"Deleted {deleted} backup files ({bytesFreed / (1024.0 * 1024.0):F2} MB freed)", Brushes.LightGreen);
-        }
-
-        private void ShowBackupStats_Click(object sender, RoutedEventArgs e)
-        {
-            if (_currentWorkspace == null) return;
-
-            var activeDirectories = _currentWorkspace.InputDirectories
-                .Where(dir => !_currentWorkspace.DisabledDirectories.Contains(dir))
-                .ToList();
-
-            var stats = _backupCleanupService.GetStatistics(activeDirectories);
-
-            var sb = new System.Text.StringBuilder();
-            sb.AppendLine($"Backup File Statistics\n");
-            sb.AppendLine($"Total files: {stats.TotalCount}");
-            sb.AppendLine($"Total size: {stats.TotalSizeMB:F2} MB");
-            
-            if (stats.OldestBackup.HasValue)
-                sb.AppendLine($"Oldest backup: {stats.OldestBackup.Value:g}");
-
-            if (stats.ByDirectory.Count > 0)
-            {
-                sb.AppendLine($"\nBy directory:");
-                foreach (var kv in stats.ByDirectory.OrderByDescending(x => x.Value.Size))
-                {
-                    sb.AppendLine($"  {kv.Key}: {kv.Value.Count} files ({kv.Value.Size / 1024.0:F1} KB)");
-                }
-            }
-
-            MessageBox.Show(sb.ToString(), "Backup Statistics", MessageBoxButton.OK, MessageBoxImage.Information);
-        }
-
-        private void ShowSettingsRestartBanner()
-        {
-            if (_mcpConnectionService.IsConnected)
-            {
-                settingsRestartBanner.Visibility = Visibility.Visible;
-            }
-        }
-
-        private void RestartMcpServer_Click(object sender, RoutedEventArgs e)
-        {
-            try
-            {
-                int killed = _mcpConnectionService.KillServerProcesses();
-                settingsRestartBanner.Visibility = Visibility.Collapsed;
-
-                if (killed > 0)
-                {
-                    UpdateStatus("MCP server stopped. Settings will apply on next connection.", Brushes.LightGreen);
-                }
-                else
-                {
-                    UpdateStatus("Settings saved. Will apply on next MCP connection.", Brushes.Gray);
-                }
-
-                connectionIndicator.Fill = new SolidColorBrush(Color.FromRgb(136, 146, 160));
-                connectionStatusText.Text = "Restarting...";
-                connectionStatusText.Foreground = new SolidColorBrush(Color.FromRgb(136, 146, 160));
-                stopServerButton.Visibility = Visibility.Collapsed;
-            }
-            catch (Exception ex)
-            {
-                UpdateStatus($"Failed to restart: {ex.Message}", new SolidColorBrush(Color.FromRgb(233, 69, 96)));
-            }
-        }
-
-        #endregion
-
-        #region Activity Log
-
-        private const int MaxLogEntries = 1000;
-
-        private void AddActivityLogEntry(ActivityLogType type, string toolName, long durationMs, string message)
-        {
-            var entry = new ActivityLogEntry
-            {
-                Timestamp = DateTime.Now,
-                Type = type,
-                ToolName = toolName,
-                DurationMs = durationMs,
-                Message = message
-            };
-
-            _activityLog.Add(entry);
-
-            // Trim oldest entries if over limit
-            while (_activityLog.Count > MaxLogEntries)
-                _activityLog.RemoveAt(0);
-
-            // Auto-scroll to bottom
-            if (activityLogListBox.Items.Count > 0)
-                activityLogListBox.ScrollIntoView(activityLogListBox.Items[activityLogListBox.Items.Count - 1]);
-        }
-
-        private void UpdateActivityLogDisplay()
-        {
-            // Update summary cards
-            logTotalCallsText.Text = _sessionStats.TotalToolCalls.ToString();
-            logErrorsText.Text = _sessionStats.TotalErrors.ToString();
-            logTimeoutsText.Text = _sessionStats.TotalTimeouts.ToString();
-
-            if (_sessionStats.AverageResponseTime > 0)
-                logAvgResponseText.Text = $"{_sessionStats.AverageResponseTime:F0}ms";
-
-            var duration = DateTime.Now - _sessionStats.SessionStartTime;
-            logUptimeText.Text = duration.TotalHours >= 1
-                ? $"{(int)duration.TotalHours}h{duration.Minutes}m"
-                : duration.TotalMinutes >= 1
-                    ? $"{(int)duration.TotalMinutes}m{duration.Seconds}s"
-                    : $"{duration.Seconds}s";
-
-            // Update chart
-            RenderResponseTimeChart();
-
-            // Update tool breakdown
-            UpdateToolBreakdown();
-        }
-
-        private void RenderResponseTimeChart()
-        {
-            responseTimeChart.Children.Clear();
-            var history = _sessionStats.GetCallHistory();
-            if (history.Count < 2) return;
-
-            double w = responseTimeChart.ActualWidth;
-            double h = responseTimeChart.ActualHeight;
-            if (w < 20 || h < 20) return;
-
-            // Show last 60 data points
-            var recent = history.Skip(Math.Max(0, history.Count - 60)).ToList();
-            if (recent.Count < 2) return;
-
-            double maxMs = recent.Max(r => (double)r.DurationMs);
-            if (maxMs < 1) maxMs = 1;
-            double padding = 4;
-
-            // Draw grid lines
-            for (int i = 0; i <= 4; i++)
-            {
-                double y = padding + (h - 2 * padding) * i / 4;
-                var line = new Line
-                {
-                    X1 = 0, X2 = w, Y1 = y, Y2 = y,
-                    Stroke = new SolidColorBrush(Color.FromRgb(30, 50, 70)),
-                    StrokeThickness = 0.5
-                };
-                responseTimeChart.Children.Add(line);
-            }
-
-            // Draw bars for each call
-            double barWidth = Math.Max(2, (w - 2 * padding) / recent.Count - 1);
-            for (int i = 0; i < recent.Count; i++)
-            {
-                double x = padding + i * (w - 2 * padding) / recent.Count;
-                double barH = (recent[i].DurationMs / maxMs) * (h - 2 * padding);
-                double y = h - padding - barH;
-
-                var isError = recent[i].DurationMs == 0;
-                var color = isError
-                    ? Color.FromRgb(233, 69, 96)  // red for errors
-                    : recent[i].DurationMs > _sessionStats.AverageResponseTime * 2
-                        ? Color.FromRgb(255, 193, 7)  // yellow for slow
-                        : Color.FromRgb(0, 217, 165);  // green for normal
-
-                var rect = new Rectangle
-                {
-                    Width = barWidth,
-                    Height = Math.Max(2, barH),
-                    Fill = new SolidColorBrush(color),
-                    Opacity = 0.8,
-                    RadiusX = 1, RadiusY = 1
-                };
-                Canvas.SetLeft(rect, x);
-                Canvas.SetTop(rect, y);
-                responseTimeChart.Children.Add(rect);
-            }
-
-            // Y-axis label (max)
-            var maxLabel = new TextBlock
-            {
-                Text = $"{maxMs:F0}ms",
-                FontSize = 9,
-                Foreground = new SolidColorBrush(Color.FromRgb(136, 146, 160))
-            };
-            Canvas.SetRight(maxLabel, 4);
-            Canvas.SetTop(maxLabel, 0);
-            responseTimeChart.Children.Add(maxLabel);
-        }
-
-        private void UpdateToolBreakdown()
-        {
-            var breakdown = _sessionStats.GetToolBreakdown();
-            if (breakdown.Count == 0) return;
-
-            int maxCount = breakdown.First().Count;
-            double maxBarWidth = 150;
-
-            var items = breakdown.Take(8).Select(b => new ToolBreakdownItem
-            {
-                Name = b.ToolName.Replace("codemerger_", ""),
-                CountText = $"{b.Count}× ({b.AvgMs:F0}ms)",
-                BarWidth = maxCount > 0 ? (b.Count * maxBarWidth / maxCount) : 0,
-                BarBrush = new SolidColorBrush(Color.FromRgb(0, 217, 165))
-            }).ToList();
-
-            toolBreakdownList.ItemsSource = items;
-        }
-
-        private void ClearActivityLog_Click(object sender, RoutedEventArgs e)
-        {
-            _activityLog.Clear();
-            _sessionStats.Reset();
-            UpdateActivityLogDisplay();
-        }
-
-        private void ExportActivityLog_Click(object sender, RoutedEventArgs e)
-        {
-            var dialog = new SaveFileDialog
-            {
-                Filter = "CSV Files|*.csv|Text Files|*.txt",
-                FileName = $"activity_log_{DateTime.Now:yyyyMMdd_HHmmss}.csv"
-            };
-
-            if (dialog.ShowDialog() == true)
-            {
-                try
-                {
-                    var lines = new List<string> { "Timestamp,Type,Tool,DurationMs,Message" };
-                    lines.AddRange(_activityLog.Select(e =>
-                        $"{e.Timestamp:yyyy-MM-dd HH:mm:ss},{e.Type},{e.ToolName},{e.DurationMs},\"{e.Message.Replace("\"", "\"\"")}\""
-                    ));
-                    File.WriteAllLines(dialog.FileName, lines);
-                    UpdateStatus($"Activity log exported to {dialog.FileName}", Brushes.LightGreen);
-                }
-                catch (Exception ex)
-                {
-                    UpdateStatus($"Export failed: {ex.Message}", new SolidColorBrush(Color.FromRgb(233, 69, 96)));
-                }
-            }
-        }
-
-        #endregion
     }
-}
-
-/// <summary>
-/// Helper class for tool breakdown display binding.
-/// </summary>
-public class ToolBreakdownItem
-{
-    public string Name { get; set; } = string.Empty;
-    public string CountText { get; set; } = string.Empty;
-    public double BarWidth { get; set; }
-    public Brush BarBrush { get; set; } = Brushes.Green;
 }

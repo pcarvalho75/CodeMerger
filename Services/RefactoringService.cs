@@ -478,6 +478,23 @@ namespace CodeMerger.Services
             var oldLines = oldContent.Split('\n').Select(l => l.TrimEnd('\r')).ToArray();
             var newLines = newContent.Split('\n').Select(l => l.TrimEnd('\r')).ToArray();
 
+            // Skip expensive LCS diff for full rewrites — produces useless 100% delete + 100% add output
+            // and generates massive JSON responses that can saturate the MCP stdio pipe buffer
+            int commonLines = 0;
+            int checkLimit = Math.Min(oldLines.Length, newLines.Length);
+            for (int i = 0; i < checkLimit; i++)
+            {
+                if (oldLines[i] == newLines[i]) commonLines++;
+            }
+            int maxLines = Math.Max(oldLines.Length, newLines.Length);
+            double similarityPct = maxLines > 0 ? (double)commonLines / maxLines * 100 : 100;
+
+            if (similarityPct < 20)
+            {
+                return $"(Full rewrite — {oldLines.Length} lines removed, {newLines.Length} lines added. " +
+                       $"Diff skipped to avoid excessive output.)";
+            }
+
             var sb = new StringBuilder();
             sb.AppendLine($"--- a/{fileName}");
             sb.AppendLine($"+++ b/{fileName}");
@@ -485,12 +502,20 @@ namespace CodeMerger.Services
             // Find all differences using LCS-based approach
             var hunks = ComputeHunks(oldLines, newLines, contextLines: 3);
 
+            // Cap diff output at 100 lines to prevent oversized responses
+            int totalDiffLines = 0;
             foreach (var hunk in hunks)
             {
                 sb.AppendLine($"@@ -{hunk.OldStart},{hunk.OldCount} +{hunk.NewStart},{hunk.NewCount} @@");
                 foreach (var line in hunk.Lines)
                 {
                     sb.AppendLine(line);
+                    totalDiffLines++;
+                    if (totalDiffLines >= 100)
+                    {
+                        sb.AppendLine($"... (diff truncated — {hunks.Sum(h => h.Lines.Count)} total lines)");
+                        return sb.ToString();
+                    }
                 }
             }
 

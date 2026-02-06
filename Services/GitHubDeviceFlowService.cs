@@ -15,7 +15,7 @@ namespace CodeMerger.Services
     public class GitHubDeviceFlowService
     {
         // TODO: Replace with your actual OAuth App Client ID after registering at https://github.com/settings/developers
-        public const string ClientId = "REPLACE_WITH_YOUR_CLIENT_ID";
+        public static readonly string ClientId = "REPLACE_WITH_YOUR_CLIENT_ID";
 
         private static readonly HttpClient Http = new();
 

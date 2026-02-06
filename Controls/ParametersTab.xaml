@@ -1,0 +1,74 @@
+<UserControl x:Class="CodeMerger.Controls.ParametersTab"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <ScrollViewer Margin="0,16,0,0" VerticalScrollBarVisibility="Auto">
+        <StackPanel MaxWidth="600" HorizontalAlignment="Left">
+
+            <!-- Settings Restart Banner -->
+            <Border x:Name="settingsRestartBanner" Background="#2a2a4a" CornerRadius="6" Padding="12,8" Margin="0,0,0,16" Visibility="Collapsed">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="⚠ Settings changed. Restart MCP server to apply." Foreground="{StaticResource AccentWarning}" FontSize="11" VerticalAlignment="Center"/>
+                    <Button Content="Restart" Click="RestartMcpServer_Click" Style="{StaticResource SmallLinkButton}" Margin="12,0,0,0"/>
+                </StackPanel>
+            </Border>
+
+            <!-- Backup Settings -->
+            <TextBlock Text="Backup Files" FontSize="14" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" Margin="0,0,0,12"/>
+
+            <CheckBox x:Name="createBackupFilesCheckBox" Content="  Create .bak backup files before editing" 
+                      Foreground="{StaticResource TextPrimary}" Margin="0,0,0,12" IsChecked="True"
+                      Checked="CreateBackupFiles_Changed" Unchecked="CreateBackupFiles_Changed"/>
+
+            <CheckBox x:Name="autoCleanupCheckBox" Content="  Auto-cleanup old backups on workspace load" 
+                      Foreground="{StaticResource TextPrimary}" Margin="0,0,0,12"
+                      Checked="AutoCleanup_Changed" Unchecked="AutoCleanup_Changed"/>
+
+            <Grid Margin="0,0,0,12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="200"/>
+                    <ColumnDefinition Width="80"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="Backup retention (hours):" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center"/>
+                <TextBox x:Name="backupRetentionTextBox" Grid.Column="1" Text="24" Style="{StaticResource ModernTextBox}" 
+                         TextChanged="BackupRetention_TextChanged"/>
+            </Grid>
+
+            <Grid Margin="0,0,0,12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="200"/>
+                    <ColumnDefinition Width="80"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="Max backups per file:" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center"/>
+                <TextBox x:Name="maxBackupsTextBox" Grid.Column="1" Text="5" Style="{StaticResource ModernTextBox}" 
+                         TextChanged="MaxBackups_TextChanged"/>
+            </Grid>
+
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,20">
+                <Button Content="🧹 Clean All Backups" Click="CleanAllBackups_Click" Style="{StaticResource ModernButton}" Margin="0,0,8,0"/>
+                <Button Content="📊 Stats" Click="ShowBackupStats_Click" Style="{StaticResource ModernButton}"/>
+            </StackPanel>
+
+            <!-- Timeout Settings -->
+            <TextBlock Text="Claude Timeout Detection" FontSize="14" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" Margin="0,0,0,12"/>
+
+            <Grid Margin="0,0,0,12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="200"/>
+                    <ColumnDefinition Width="80"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="Timeout threshold (seconds):" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center"/>
+                <TextBox x:Name="timeoutThresholdTextBox" Grid.Column="1" Text="45" Style="{StaticResource ModernTextBox}" 
+                         TextChanged="TimeoutThreshold_TextChanged"/>
+            </Grid>
+
+            <!-- Session Statistics -->
+            <TextBlock Text="Session Statistics" FontSize="14" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" Margin="0,8,0,12"/>
+
+            <CheckBox x:Name="showSessionStatsCheckBox" Content="  Show session statistics in activity strip" 
+                      Foreground="{StaticResource TextPrimary}" Margin="0,0,0,12" IsChecked="True"
+                      Checked="ShowSessionStats_Changed" Unchecked="ShowSessionStats_Changed"/>
+
+            <StackPanel x:Name="sessionStatsPanel"/>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

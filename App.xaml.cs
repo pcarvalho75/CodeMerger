@@ -1,8 +1,8 @@
 using System;
-using System.Diagnostics;
 using System.IO;
 using System.IO.Pipes;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows;
 using CodeMerger.Services;
@@ -13,19 +13,43 @@ namespace CodeMerger
     {
         public const string HandshakePipeName = "codemerger_handshake";
 
+        private static Mutex? _singleInstanceMutex;
+
+        /// <summary>
+        /// Custom window message used to bring the existing GUI instance to the foreground.
+        /// MainWindow registers a HwndSource hook to handle this message.
+        /// </summary>
+        public static readonly int WM_SHOWME = RegisterWindowMessage("CodeMerger_ShowMe");
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern int RegisterWindowMessage(string message);
+
+        [DllImport("user32.dll")]
+        private static extern bool PostMessage(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam);
+
+        private const int HWND_BROADCAST = 0xFFFF;
+
         protected override void OnStartup(StartupEventArgs e)
         {
             base.OnStartup(e);
 
-            // Check for MCP mode first (before killing anything)
+            // MCP mode: allow multiple instances (Claude Desktop spawns these)
             if (e.Args.Length >= 1 && e.Args[0] == "--mcp")
             {
                 RunMcpMode();
                 return;
             }
 
-            // GUI mode: kill any previous GUI instances holding pipes
-            KillOtherGuiInstances();
+            // GUI mode: enforce single instance via Mutex
+            _singleInstanceMutex = new Mutex(true, @"Global\CodeMerger_SingleInstance", out bool createdNew);
+
+            if (!createdNew)
+            {
+                // Another GUI instance is already running — bring it to front and exit
+                PostMessage((IntPtr)HWND_BROADCAST, WM_SHOWME, IntPtr.Zero, IntPtr.Zero);
+                Shutdown();
+                return;
+            }
 
             // Update Claude Desktop config to point to the currently running exe
             try
@@ -43,57 +67,11 @@ namespace CodeMerger
             }
         }
 
-        /// <summary>
-        /// Kills other CodeMerger GUI instances (non-MCP) to free named pipes.
-        /// MCP instances (with --mcp arg) are left alone.
-        /// </summary>
-        private void KillOtherGuiInstances()
+        protected override void OnExit(ExitEventArgs e)
         {
-            var currentPid = Environment.ProcessId;
-            var currentName = Process.GetCurrentProcess().ProcessName;
-
-            foreach (var proc in Process.GetProcessesByName(currentName))
-            {
-                if (proc.Id == currentPid) continue;
-
-                try
-                {
-                    // Check if this is an MCP instance by looking at command line
-                    // If we can't determine, kill it anyway - MCP will be restarted by Claude
-                    var cmdLine = GetCommandLine(proc);
-                    if (cmdLine != null && cmdLine.Contains("--mcp"))
-                        continue; // Leave MCP instances alone
-
-                    proc.Kill();
-                    proc.WaitForExit(2000);
-                }
-                catch
-                {
-                    // Process may have already exited
-                }
-            }
-
-            // Brief pause to let OS release pipe handles
-            Thread.Sleep(200);
-        }
-
-        private static string? GetCommandLine(Process process)
-        {
-            try
-            {
-                // Use WMI to get command line - only reliable way on Windows
-                using var searcher = new System.Management.ManagementObjectSearcher(
-                    $"SELECT CommandLine FROM Win32_Process WHERE ProcessId = {process.Id}");
-                foreach (var obj in searcher.Get())
-                {
-                    return obj["CommandLine"]?.ToString();
-                }
-            }
-            catch
-            {
-                // WMI not available or access denied
-            }
-            return null;
+            _singleInstanceMutex?.ReleaseMutex();
+            _singleInstanceMutex?.Dispose();
+            base.OnExit(e);
         }
 
         private void RunMcpMode()
