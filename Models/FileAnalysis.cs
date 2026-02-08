@@ -40,6 +40,7 @@ namespace CodeMerger.Models
         public string BaseType { get; set; } = string.Empty;
         public List<string> Interfaces { get; set; } = new List<string>();
         public List<CodeMemberInfo> Members { get; set; } = new List<CodeMemberInfo>();
+        public bool IsAbstract { get; set; }
 
         // Location info
         public int StartLine { get; set; }

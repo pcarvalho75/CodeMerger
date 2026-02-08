@@ -5,54 +5,7 @@ namespace CodeMerger.Services.Mcp
 {
     /// <summary>
     /// Centralized registry for all MCP tool definitions.
-    ///
-    /// TOOL CATEGORIES:
-    ///
-    /// EXPLORATION (start here):
-    ///   get_project_overview → list_files → get_type / get_file
-    ///   get_context (AI-ranked files for a task, with call-graph expansion)
-    ///
-    /// SEARCHING:
-    ///   search_code - semantic (type/method names)
-    ///   grep - literal text patterns
-    ///   find_references - all usages of a symbol
-    ///
-    /// UNDERSTANDING:
-    ///   get_type - class structure
-    ///   get_dependencies - what uses/is used by a type
-    ///   get_callers/get_callees - call graph
-    ///   get_type_hierarchy - inheritance
-    ///
-    /// EDITING:
-    ///   str_replace - surgical edits (preferred)
-    ///   write_file - full file writes
-    ///   get_lines - see exact content before editing
-    ///   preview_write - preview changes before writing
-    ///
-    /// REFACTORING:
-    ///   rename_symbol - rename across project
-    ///   move_file - move with reference updates
-    ///   add_parameter - add param, update call sites
-    ///   extract_method, generate_interface, generate_constructor, implement_interface
-    ///
-    /// VALIDATION:
-    ///   get_diagnostics - Roslyn analysis for compile errors
-    ///   build - full dotnet build with NuGet/XAML
-    ///
-    /// RECOVERY:
-    ///   undo - restore from .bak
-    ///
-    /// SERVER:
-    ///   refresh, shutdown, list_projects, switch_project
-    ///
-    /// MAINTENANCE:
-    ///   clean_backups - delete all .bak files (preview first, then confirm)
-    ///   find_duplicates - find duplicate code for refactoring opportunities
-    ///
-    /// SELF-IMPROVEMENT:
-    ///   log_lesson - log observation when something could be improved
-    ///   get_lessons - view all logged lessons
-    ///   delete_lesson - clear lessons after applying improvements
+    /// Categories: Exploration, Searching, Understanding, Editing, Refactoring, Validation, Recovery, Server, Maintenance, Self-Improvement.
     /// </summary>
     public static class McpToolRegistry
     {
@@ -78,18 +31,8 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_get_project_overview",
-                    description = "Get high-level project information including framework, structure, namespaces, total files, entry points, and project references.\n\n" +
-                        "WHEN TO USE: Call this first when starting work on a project to understand its structure.\n\n" +
-                        "SHOWS:\n" +
-                        "- Framework, file count, token count, type count\n" +
-                        "- Namespaces found (warns if multiple root namespaces)\n" +
-                        "- File breakdown by classification\n" +
-                        "- Key entry points (Program.cs, App.xaml, etc.)\n" +
-                        "- Project References with resolved paths (external vs in-workspace)\n\n" +
-                        "EXPLORATION PATHS:\n" +
-                        "- For general exploration: get_project_overview → list_files → get_type/get_file\n" +
-                        "- For task-based work: get_context (uses call-graph analysis to find relevant files)\n\n" +
-                        "Follow up with `list_files` filtered by namespace to explore specific areas.",
+                    description = "Get high-level project info: framework, namespaces, file breakdown, entry points, project references.\n" +
+                        "Call this first. Then: list_files to drill in, or get_context for task-based exploration.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -100,8 +43,7 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_list_files",
-                    description = "List all files in the project with their namespaces, classifications (View, Model, Service, etc.) and estimated tokens.\n\n" +
-                        "WHEN TO USE: After `get_project_overview`, use this to drill into specific namespaces or file types. Filter by 'namespace' for architectural exploration, by 'classification' to find all Services/Models/Views.",
+                    description = "List files with namespaces, classifications, and token counts. Filter by namespace or classification.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -118,10 +60,7 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_get_file",
-                    description = "Get the full content of a specific file by its relative path.\n\n" +
-                        "WHEN TO USE: When you need to see complete file content. For large files (>300 lines), prefer `get_lines` to read specific sections.\n" +
-                        "BEFORE EDITING: Always verify current state with this or `get_lines` before using `str_replace` — never assume content hasn't changed.\n" +
-                        "FOR CHANGES: Prefer `str_replace` for surgical edits rather than rewriting entire files with `write_file`.",
+                    description = "Get full file content. For large files (>300 lines), prefer get_lines. Always verify before str_replace.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -136,10 +75,7 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_search_code",
-                    description = "Search for types, methods, namespaces, or keywords in the indexed codebase.\n\n" +
-                        "WHEN TO USE: For finding where something is defined — type names, method names, namespaces. This searches the semantic index.\n" +
-                        "VS GREP: Use `grep` instead for literal text patterns, string values, comments, or content that isn't a symbol name.\n" +
-                        "VS GET_CONTEXT: Use `get_context` when you have a task description and want AI-ranked relevant files.",
+                    description = "Search the semantic index for type/method/namespace names. Use grep instead for literal text, comments, or string values.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -155,9 +91,7 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_get_type",
-                    description = "Get detailed information about a specific type including its members, base types, and interfaces.\n\n" +
-                        "WHEN TO USE: Before modifying a class — understand its structure, what it inherits, what interfaces it implements.\n" +
-                        "NEXT STEP: If planning to change this type, call `get_dependencies` to see what would be affected.",
+                    description = "Get type details: members with full signatures, base types, interfaces. Call get_dependencies before modifying.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -172,9 +106,7 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_get_dependencies",
-                    description = "Get dependencies of a type (what it uses) and reverse dependencies (what uses it).\n\n" +
-                        "WHEN TO USE: ESSENTIAL before any refactoring — renaming, moving, changing signatures. Shows impact scope.\n" +
-                        "RULE: Always call this before `rename_symbol`, `move_file`, or modifying public members.",
+                    description = "Get what a type uses and what uses it. ESSENTIAL before rename_symbol, move_file, or changing public members.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -188,23 +120,35 @@ namespace CodeMerger.Services.Mcp
                 },
                 new
                 {
-                    name = "codemerger_get_type_hierarchy",
-                    description = "Get the inheritance hierarchy for all types in the project.\n\n" +
-                        "WHEN TO USE: Understanding class relationships, finding base classes, seeing interface implementations across the codebase.",
+                    name = "codemerger_find_implementations",
+                    description = "Find concrete implementations of an interface or base class. Set includeAbstract: true to include abstract classes.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
-                        { "properties", new Dictionary<string, object>() },
-                        { "required", Array.Empty<string>() }
+                        { "properties", new Dictionary<string, object>
+                            {
+                                { "typeName", new Dictionary<string, object>
+                                    {
+                                        { "type", "string" },
+                                        { "description", "Interface or base class name to search for" }
+                                    }
+                                },
+                                { "includeAbstract", new Dictionary<string, object>
+                                    {
+                                        { "type", "boolean" },
+                                        { "default", false },
+                                        { "description", "Include abstract classes (default: only concrete)" }
+                                    }
+                                }
+                            }
+                        },
+                        { "required", new[] { "typeName" } }
                     }
                 },
                 new
                 {
                     name = "codemerger_grep",
-                    description = "Search file contents using regex or plain text. Returns matches with line numbers and context.\n\n" +
-                        "WHEN TO USE: For literal text patterns, string values, comments, error messages, TODO markers, or anything that isn't a symbol name.\n" +
-                        "VS SEARCH_CODE: Use `search_code` for type/method names. Use `grep` for actual text content.\n" +
-                        "EXAMPLES: Find all TODO comments, search for a specific error string, find hardcoded values.",
+                    description = "Regex/text search in file contents with line numbers and context. Use search_code instead for type/method names.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -223,19 +167,7 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_get_context",
-                    description = "Intelligently analyze a task description and return relevant files ranked by relevance.\n\n" +
-                        "START HERE: For new tasks, describe what you want to do in natural language.\n\n" +
-                        "SMART FEATURES:\n" +
-                        "- Keyword extraction from task description\n" +
-                        "- Type/method name matching\n" +
-                        "- Classification-aware scoring (Service, Model, View)\n" +
-                        "- **Call graph expansion**: Automatically includes files containing callers/callees of matched code\n" +
-                        "- Token budget optimization\n\n" +
-                        "WHEN TO USE:\n" +
-                        "- Starting a new task and don't know which files to look at\n" +
-                        "- Need complete context including related code paths\n" +
-                        "- More efficient than manual `search_code` + `grep` combinations\n\n" +
-                        "EXAMPLES: 'add a new MCP tool', 'fix the grid trading logic', 'implement caching for the workspace'.",
+                    description = "Describe a task in natural language, get relevant files ranked by relevance with call-graph expansion. Best starting point for new tasks.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -252,12 +184,7 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_get_lines",
-                    description = "Get raw lines from a file with ALL whitespace made visible (tabs as →, spaces as ·).\n\n" +
-                        "WHEN TO USE:\n" +
-                        "1. When `str_replace` fails with 'not found' — see exact whitespace to fix your search string\n" +
-                        "2. For large files — read specific sections instead of loading entire file with `get_file`\n" +
-                        "3. Before editing — verify exact current content at specific line numbers\n" +
-                        "RECOVERY: If `str_replace` fails, call this with the line numbers from the error, then copy exact content.",
+                    description = "Get raw lines with visible whitespace (tabs→, spaces·). Use when str_replace fails, for large files, or to verify content before editing.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -270,6 +197,23 @@ namespace CodeMerger.Services.Mcp
                         },
                         { "required", new[] { "path", "startLine" } }
                     }
+                },
+                new
+                {
+                    name = "codemerger_get_method_body",
+                    description = "Get one method's source code by name. If ambiguous, returns disambiguation list — specify typeName to resolve.",
+                    inputSchema = new Dictionary<string, object>
+                    {
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>
+                            {
+                                { "methodName", new Dictionary<string, string> { { "type", "string" }, { "description", "Name of the method" } } },
+                                { "typeName", new Dictionary<string, string> { { "type", "string" }, { "description", "Qualifying class name if ambiguous" } } },
+                                { "includeDoc", new Dictionary<string, object> { { "type", "boolean" }, { "default", false }, { "description", "Include XML doc comments" } } }
+                            }
+                        },
+                        { "required", new[] { "methodName" } }
+                    }
                 }
             };
         }
@@ -281,9 +225,7 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_find_references",
-                    description = "Find all references to a symbol (type, method, property) using semantic analysis.\n\n" +
-                        "WHEN TO USE: To see everywhere a symbol is used — definitions, invocations, implementations.\n" +
-                        "VS GREP: This uses semantic analysis (understands code structure), while `grep` is just text search.",
+                    description = "Find all references to a symbol using semantic analysis. Use grep instead for plain text search.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -299,10 +241,7 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_get_callers",
-                    description = "Get all methods that call a specific method.\n\n" +
-                        "WHEN TO USE: Before modifying a method's signature or behavior — see what code depends on it.\n" +
-                        "PART OF: Call graph analysis. Pair with `get_callees` for full picture.\n" +
-                        "NOTE: `get_context` uses this data automatically to include related files.",
+                    description = "Get all methods that call a specific method. Check before modifying signatures. Pair with get_callees.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -318,10 +257,7 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_get_callees",
-                    description = "Get all methods that a specific method calls.\n\n" +
-                        "WHEN TO USE: Understanding what a method depends on — useful for understanding complex methods.\n" +
-                        "PART OF: Call graph analysis. Pair with `get_callers` for full picture.\n" +
-                        "NOTE: `get_context` uses this data automatically to include related files.",
+                    description = "Get all methods that a specific method calls. Pair with get_callers for full call graph.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -332,24 +268,6 @@ namespace CodeMerger.Services.Mcp
                             }
                         },
                         { "required", new[] { "methodName" } }
-                    }
-                },
-                new
-                {
-                    name = "codemerger_get_diagnostics",
-                    description = "Get compilation errors and warnings for the project.\n\n" +
-                        "Two-tier approach: (1) Fast syntax check on all files, (2) Full `dotnet build` if syntax is clean.\n" +
-                        "WHEN TO USE: After making changes — verify the code still compiles correctly.\n" +
-                        "TIP: Run this after a series of edits to catch any issues before the user tries to build.",
-                    inputSchema = new Dictionary<string, object>
-                    {
-                        { "type", "object" },
-                        { "properties", new Dictionary<string, object>
-                            {
-                                { "path", new Dictionary<string, string> { { "type", "string" }, { "description", "Optional: specific file path to check. If omitted, checks all C# files." } } }
-                            }
-                        },
-                        { "required", Array.Empty<string>() }
                     }
                 }
             };
@@ -362,34 +280,11 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_str_replace",
-                    description = "Replace a unique string in a file with another string. The oldStr must appear exactly once in the file.\n\n" +
-                        "⚠️ STOP — USE THE RIGHT TOOL FIRST:\n" +
-                        "- Renaming a class/method/property/variable? → Use `rename_symbol` instead (updates ALL references automatically)\n" +
-                        "- Moving/renaming a file? → Use `move_file` instead (updates all using statements)\n" +
-                        "- Adding a parameter to a method? → Use `add_parameter` instead (updates all call sites)\n" +
-                        "- Extracting code into a new method? → Use `extract_method` instead\n" +
-                        "- Only use `str_replace` for edits that DON'T fall into the above categories.\n\n" +
-                        "PREFERRED: Use this for surgical edits instead of rewriting entire files with `write_file`.\n" +
-                        "DELETE: Set newStr to empty string to delete the match.\n\n" +
-                        "⚠️ SEQUENTIAL EDIT SAFETY:\n" +
-                        "- Making multiple edits to the same file? Do ONE edit at a time.\n" +
-                        "- Verify it compiles (get_diagnostics) before the next edit.\n" +
-                        "- Each str_replace overwrites the .bak, so chaining edits without verification risks corruption.\n\n" +
-                        "IF IT FAILS ('not found'):\n" +
-                        "1. Call `get_lines` with line numbers from the error to see exact whitespace\n" +
-                        "2. Copy the exact content including whitespace\n" +
-                        "3. Never guess — always verify current file state first\n\n" +
-                        "NUGET PACKAGES (.csproj files):\n" +
-                        "Before adding a PackageReference, use `grep` to search for existing references to that package.\n" +
-                        "If found, preserve the existing version unless explicitly asked to change it.\n\n" +
-                        "WORKFLOW - Before making ANY file modifications:\n" +
-                        "1. Present a roadmap of all planned changes to the user\n" +
-                        "2. IMPORTANT: By default, pause between each roadmap step and wait for the user to confirm before proceeding to the next step. Inform the user of this at roadmap presentation. Only skip pauses if the user explicitly says to proceed without stopping.\n" +
-                        "3. Ask: 'Proceed with AUTOMATIC editing (I'll make all changes), or STEP-BY-STEP (I'll show each change for your approval)?'\n" +
-                        "4. If STEP-BY-STEP: Show the original code and proposed new code in chat, wait for user to say OK before calling this tool\n" +
-                        "5. Only call this tool AFTER user confirms the change\n" +
-                        "6. If AUTOMATIC: Proceed with all changes after initial roadmap approval\n" +
-                        "7. ALWAYS add a FINAL roadmap step: 'Review & Cleanup' — go back through ALL changes to check for clean code, red flags, loose ends, dead references, and naming inconsistencies. This step is mandatory and must not be skipped.",
+                    description = "Replace a unique string in a file. oldStr must appear exactly once.\n\n" +
+                        "PREFER specialized tools: rename_symbol for renaming, move_file for moving, add_parameter for params, extract_method for extraction.\n" +
+                        "On failure: use get_lines to see exact whitespace, then retry. One edit at a time; verify with build between edits.\n" +
+                        "For .csproj: grep existing PackageReferences before adding new ones.\n" +
+                        "WORKFLOW: Present roadmap first, pause between steps for user OK (unless told otherwise), end with Review & Cleanup step.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -408,27 +303,10 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_write_file",
-                    description = "Write content to a file (create new or overwrite existing). Creates a .bak backup before overwriting.\n\n" +
-                        "⚠️ STOP — USE THE RIGHT TOOL FIRST:\n" +
-                        "- Small/medium changes? → Use `str_replace` instead (safer, preserves context)\n" +
-                        "- Renaming a class/method/property? → Use `rename_symbol` instead\n" +
-                        "- Moving a file? → Use `move_file` instead\n" +
-                        "- Only use `write_file` for NEW files or when changes are so extensive that str_replace isn't practical.\n\n" +
-                        "⚠️ LARGE FILE WARNING (>600 lines):\n" +
-                        "Writing files over 600 lines in a single call can cause memory issues in some MCP clients.\n" +
-                        "For large files, use an INCREMENTAL approach instead:\n" +
-                        "1. Write a small skeleton/scaffold first (class stub, usings, namespace, empty methods)\n" +
-                        "2. Fill in each method body with separate `str_replace` calls\n" +
-                        "3. This is safer, uses less memory, and easier to debug if something goes wrong.\n\n" +
-                        "TIP: Use `preview_write` first to see a diff of what will change.\n\n" +
-                        "WORKFLOW - Before making ANY file modifications:\n" +
-                        "1. Present a roadmap of all planned changes to the user\n" +
-                        "2. IMPORTANT: By default, pause between each roadmap step and wait for the user to confirm before proceeding to the next step. Inform the user of this at roadmap presentation. Only skip pauses if the user explicitly says to proceed without stopping.\n" +
-                        "3. Ask: 'Proceed with AUTOMATIC editing (I'll make all changes), or STEP-BY-STEP (I'll show each change for your approval)?'\n" +
-                        "4. If STEP-BY-STEP: Show the proposed file content in chat, wait for user to say OK before calling this tool\n" +
-                        "5. Only call this tool AFTER user confirms the change\n" +
-                        "6. If AUTOMATIC: Proceed with all changes after initial roadmap approval\n" +
-                        "7. ALWAYS add a FINAL roadmap step: 'Review & Cleanup' — go back through ALL changes to check for clean code, red flags, loose ends, dead references, and naming inconsistencies. This step is mandatory and must not be skipped.",
+                    description = "Write full file content (create or overwrite). Creates .bak backup.\n\n" +
+                        "PREFER str_replace for small/medium changes, rename_symbol for renaming, move_file for moving.\n" +
+                        "For files >600 lines: write skeleton first, fill methods via str_replace. Set preview: true to diff without writing.\n" +
+                        "WORKFLOW: Present roadmap first, pause between steps for user OK (unless told otherwise), end with Review & Cleanup step.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -436,25 +314,8 @@ namespace CodeMerger.Services.Mcp
                             {
                                 { "path", new Dictionary<string, string> { { "type", "string" }, { "description", "Relative path to the file (e.g., 'Services/MyService.cs')" } } },
                                 { "content", new Dictionary<string, string> { { "type", "string" }, { "description", "Complete file content to write" } } },
-                                { "createBackup", new Dictionary<string, object> { { "type", "boolean" }, { "description", "Create .bak backup before overwriting (default: true)" }, { "default", true } } }
-                            }
-                        },
-                        { "required", new[] { "path", "content" } }
-                    }
-                },
-                new
-                {
-                    name = "codemerger_preview_write",
-                    description = "Preview what a file write would look like without actually writing. Shows a diff of changes.\n\n" +
-                        "WHEN TO USE: Before `write_file` to verify your changes are correct. Especially useful for large rewrites.\n" +
-                        "SAFE: No changes are made — purely informational.",
-                    inputSchema = new Dictionary<string, object>
-                    {
-                        { "type", "object" },
-                        { "properties", new Dictionary<string, object>
-                            {
-                                { "path", new Dictionary<string, string> { { "type", "string" }, { "description", "Relative path to the file" } } },
-                                { "content", new Dictionary<string, string> { { "type", "string" }, { "description", "Complete file content to preview" } } }
+                                { "createBackup", new Dictionary<string, object> { { "type", "boolean" }, { "description", "Create .bak backup before overwriting (default: true)" }, { "default", true } } },
+                                { "preview", new Dictionary<string, object> { { "type", "boolean" }, { "description", "Preview diff without writing (default: false)" }, { "default", false } } }
                             }
                         },
                         { "required", new[] { "path", "content" } }
@@ -463,9 +324,7 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_delete_file",
-                    description = "Delete a file from the project. Creates a .bak backup before deleting.\n\n" +
-                        "RECOVERABLE: Use `undo` to restore the file from the .bak backup.\n" +
-                        "CAUTION: Check `get_dependencies` first to ensure nothing depends on types in this file.",
+                    description = "Delete a file (.bak backup created). Use undo to restore. Check get_dependencies first.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -480,9 +339,7 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_undo",
-                    description = "Restore a file from its .bak backup.\n\n" +
-                        "WHEN TO USE: After `str_replace`, `write_file`, or `delete_file` made unwanted changes.\n" +
-                        "LIMITATION: Only restores the most recent backup — multiple sequential edits overwrite previous backups.",
+                    description = "Restore a file from its .bak backup. Only restores the most recent backup.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -497,15 +354,7 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_move_file",
-                    description = "Move or rename a file and update all using statements and references across the project.\n\n" +
-                        "USE THIS INSTEAD OF manual file operations WHEN:\n" +
-                        "- Moving a file to a different folder\n" +
-                        "- Renaming a file\n" +
-                        "- Reorganizing project structure\n" +
-                        "This automatically updates ALL using statements and namespace references.\n\n" +
-                        "BEFORE USING: Call `get_dependencies` to understand what will be affected.\n" +
-                        "PREVIEW FIRST: Always run with preview=true first to see all affected files.\n" +
-                        "BACKUPS: Creates backups of all modified files.",
+                    description = "Move/rename a file and update all using statements and references. Always preview first. Call get_dependencies before using.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -529,19 +378,8 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_rename_symbol",
-                    description = "Rename a symbol (class, method, property, variable) across all files in the project.\n\n" +
-                        "USE THIS INSTEAD OF str_replace WHEN:\n" +
-                        "- Renaming ANY class, method, property, field, or variable\n" +
-                        "- The name appears in multiple files\n" +
-                        "- You need all references updated automatically\n" +
-                        "This is ALWAYS better than manual find-and-replace for renaming.\n\n" +
-                        "BEFORE USING: ALWAYS call `get_dependencies` first to understand the scope of impact.\n" +
-                        "PREVIEW FIRST: Always run with preview=true to see all affected locations.\n\n" +
-                        "WORKFLOW:\n" +
-                        "1. Call `get_dependencies` on the type containing the symbol\n" +
-                        "2. Run with preview=true and show results to user\n" +
-                        "3. Ask user to confirm before running with preview=false\n" +
-                        "4. Only set preview=false AFTER user explicitly approves",
+                    description = "Rename a symbol across all files. ALWAYS use instead of str_replace for renaming.\n" +
+                        "Call get_dependencies first. Always preview=true first, then confirm with user before preview=false.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -558,14 +396,7 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_generate_interface",
-                    description = "Generate an interface from a class's public members.\n\n" +
-                        "USE THIS WHEN:\n" +
-                        "- Introducing dependency injection for a class\n" +
-                        "- Making a class testable/mockable\n" +
-                        "- User asks to 'extract an interface' or 'add an interface'\n" +
-                        "- Refactoring to program against abstractions\n\n" +
-                        "RETURNS: Generated code — you must then write it to a file using `write_file`.\n" +
-                        "NEXT STEP: After creating the interface file, update the class to implement it using `implement_interface`.",
+                    description = "Generate an interface from a class's public members. Returns code — write to file, then use implement_interface.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -581,13 +412,7 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_extract_method",
-                    description = "Extract a range of lines into a new method.\n\n" +
-                        "USE THIS INSTEAD OF manual copy-paste WHEN:\n" +
-                        "- A block of code should become its own method\n" +
-                        "- Reducing method length or complexity\n" +
-                        "- Eliminating duplicate code blocks (pair with `find_duplicates`)\n\n" +
-                        "RETURNS: Modified file content — you must then write it using `write_file`.\n" +
-                        "TIP: Use `get_lines` first to identify the exact line range to extract.",
+                    description = "Extract a line range into a new method. Returns modified content — write with write_file. Use get_lines to identify range.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -605,17 +430,8 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_add_parameter",
-                    description = "Add a parameter to a method and update all call sites.\n\n" +
-                        "USE THIS INSTEAD OF str_replace WHEN:\n" +
-                        "- Adding a new parameter to any method\n" +
-                        "- The method is called from multiple places\n" +
-                        "This automatically updates ALL call sites with the default value.\n\n" +
-                        "BEFORE USING: Call `get_callers` to see all places that call this method.\n" +
-                        "PREVIEW FIRST: Always run with preview=true to see all affected call sites.\n\n" +
-                        "WORKFLOW:\n" +
-                        "1. Run with preview=true and show results to user\n" +
-                        "2. Ask user to confirm before running with preview=false\n" +
-                        "3. Only set preview=false AFTER user explicitly approves",
+                    description = "Add a parameter to a method and update all call sites with a default value. Use instead of str_replace for this.\n" +
+                        "Preview first, confirm with user before applying.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -635,13 +451,7 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_implement_interface",
-                    description = "Generate stub implementations for all members of an interface in a class.\n\n" +
-                        "USE THIS WHEN:\n" +
-                        "- A class needs to implement a new interface\n" +
-                        "- After using `generate_interface` to create an interface\n" +
-                        "- Adding interface compliance to an existing class\n\n" +
-                        "RETURNS: Code to add — you must insert it into the class using `str_replace`.\n" +
-                        "TIP: Use `get_type` on the interface first to see what members will be generated.",
+                    description = "Generate stub implementations for all interface members in a class. Returns code — insert via str_replace.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -657,13 +467,7 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_generate_constructor",
-                    description = "Generate a constructor that initializes selected fields/properties of a class.\n\n" +
-                        "USE THIS WHEN:\n" +
-                        "- Creating a new class that needs a constructor\n" +
-                        "- Adding dependency injection to a class\n" +
-                        "- User asks to 'add a constructor' or 'initialize fields'\n\n" +
-                        "RETURNS: Constructor code — you must insert it into the class using `str_replace`.\n" +
-                        "TIP: Use `get_type` first to see available fields/properties.",
+                    description = "Generate a constructor initializing selected fields/properties. Returns code — insert via str_replace.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -686,17 +490,18 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_build",
-                    description = "Run `dotnet build` on the project and return real compilation results.\n\n" +
-                        "WHEN TO USE: After making changes — verify the code compiles correctly with full NuGet resolution and XAML compilation.\n" +
-                        "BETTER THAN get_diagnostics: Uses actual MSBuild, handles NuGet packages, XAML, all project references.\n" +
-                        "NOTE: Takes 10-30 seconds depending on project size.",
+                    description = "Validate the project compiles correctly.\n\n" +
+                        "Default: full `dotnet build` with NuGet/XAML (10-30s).\n" +
+                        "quickCheck: true for fast Roslyn syntax-only check (~1s). Use after quick edits.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
                         { "properties", new Dictionary<string, object>
                             {
                                 { "configuration", new Dictionary<string, object> { { "type", "string" }, { "description", "Build configuration: Debug or Release (default: Debug)" }, { "default", "Debug" } } },
-                                { "verbose", new Dictionary<string, object> { { "type", "boolean" }, { "description", "Include full build output (default: false)" }, { "default", false } } }
+                                { "verbose", new Dictionary<string, object> { { "type", "boolean" }, { "description", "Include full build output (default: false)" }, { "default", false } } },
+                                { "quickCheck", new Dictionary<string, object> { { "type", "boolean" }, { "description", "Fast Roslyn syntax-only check instead of full build (default: false)" }, { "default", false } } },
+                                { "path", new Dictionary<string, string> { { "type", "string" }, { "description", "Specific file to check (only for quickCheck, default: all C# files)" } } }
                             }
                         },
                         { "required", Array.Empty<string>() }
@@ -705,9 +510,7 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_refresh",
-                    description = "Refresh the workspace index by re-analyzing all files.\n\n" +
-                        "WHEN TO USE: After external changes (user edited files outside of MCP tools) — ensures index is up to date.\n" +
-                        "NOT NEEDED: After using MCP write tools — they automatically update the index for modified files.",
+                    description = "Re-analyze all files to update the index. Only needed after external edits (outside MCP tools).",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -718,9 +521,7 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_shutdown",
-                    description = "Shutdown the CodeMerger MCP server.\n\n" +
-                        "WHEN TO USE: When user needs to recompile the project in Visual Studio, or wants to stop the server.\n" +
-                        "EFFECT: Server exits and releases all file locks.",
+                    description = "Shutdown the server and release all file locks.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -731,13 +532,7 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_list_projects",
-                    description = "List all available CodeMerger projects and detect shared directories between them.\n\n" +
-                        "SHOWS:\n" +
-                        "- All workspaces with directory count and load status\n" +
-                        "- Shared Directories: folders used by multiple workspaces (changes affect all)\n\n" +
-                        "IMPORTANT: When working with multiple projects, check this first to identify shared code.\n" +
-                        "If a directory like 'CryptoTraderCore' appears in both Sequoia and SmartMoney, they reference the SAME physical folder.\n\n" +
-                        "NEXT STEP: Use `switch_project` to change to a different project.",
+                    description = "List available projects and shared directories between them. Use switch_project to change.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -748,11 +543,7 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_switch_project",
-                    description = "Switch to a different CodeMerger project.\n\n" +
-                        "HOT-SWAP: Server re-indexes the new workspace without restarting — no reconnection needed.\n" +
-                        "COMBINE WORKSPACES: Pass comma-separated names (e.g., 'Sequoia, SmartMoney') to merge multiple workspaces into one virtual workspace.\n" +
-                        "Shared directories are deduplicated. Each file tracks its source workspace.\n\n" +
-                        "FIRST: Use `list_projects` to see available projects.",
+                    description = "Switch to a different project (hot-swap, no restart). Pass comma-separated names to merge workspaces.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -774,13 +565,7 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_clean_backups",
-                    description = "Delete all .bak backup files from the workspace.\n\n" +
-                        "WHEN TO USE: Only when user explicitly asks to clean up backup files, free disk space, or mentions '.bak' files.\n" +
-                        "WORKFLOW:\n" +
-                        "1. First call WITHOUT confirm parameter to preview what would be deleted\n" +
-                        "2. Show user the count, size, and folder breakdown\n" +
-                        "3. Only call with `confirm: true` AFTER user approves\n\n" +
-                        "NEVER auto-confirm - always preview first and wait for user approval.",
+                    description = "Delete .bak files. Call without confirm to preview, then with confirm: true to delete.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -795,18 +580,7 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_find_duplicates",
-                    description = "Find duplicate or highly similar code blocks across the codebase.\n\n" +
-                        "WHEN TO USE:\n" +
-                        "- User asks about code quality, technical debt, or refactoring opportunities\n" +
-                        "- User wants to reduce code duplication\n" +
-                        "- Before major refactoring to identify consolidation targets\n" +
-                        "- User asks 'what can be improved' or 'find repeated code'\n\n" +
-                        "RETURNS: Clusters ranked by impact (most duplicated first), with:\n" +
-                        "- Similarity percentage\n" +
-                        "- File locations and line numbers\n" +
-                        "- Code snippet preview\n" +
-                        "- Potential lines saved if refactored\n\n" +
-                        "FOLLOW-UP: Use `extract_method` to refactor the highest-impact duplicates.",
+                    description = "Find duplicate/similar code blocks ranked by impact. Follow up with extract_method to refactor.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -829,90 +603,24 @@ namespace CodeMerger.Services.Mcp
             {
                 new
                 {
-                    name = "codemerger_log_lesson",
-                    description = "Log a self-improvement observation when something could be done better.\n\n" +
-                        "WHEN TO USE: Call this when you notice:\n" +
-                        "- A tool description was unclear or misleading\n" +
-                        "- A workflow was inefficient (had to use multiple tools when one would be better)\n" +
-                        "- Error handling could be improved\n" +
-                        "- A new tool or feature would help\n" +
-                        "- Code in CodeMerger itself could be optimized\n\n" +
-                        "LIMIT: Maximum 100 lessons stored. If full, ask user to review and clear lessons.\n" +
-                        "TYPES: description | implementation | new_tool | workflow | performance | error_handling",
+                    name = "codemerger_lessons",
+                    description = "Manage self-improvement lessons. Commands: log, get, delete, sync, submit. Types: description|implementation|new_tool|workflow|performance|error_handling",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
                         { "properties", new Dictionary<string, object>
                             {
-                                { "type", new Dictionary<string, string> { { "type", "string" }, { "description", "Category: description, implementation, new_tool, workflow, performance, error_handling" } } },
-                                { "component", new Dictionary<string, string> { { "type", "string" }, { "description", "Which component is affected (e.g., McpToolRegistry, McpWriteToolHandler, str_replace, NEW)" } } },
-                                { "observation", new Dictionary<string, string> { { "type", "string" }, { "description", "What happened or what you noticed" } } },
-                                { "proposal", new Dictionary<string, string> { { "type", "string" }, { "description", "How it could be improved" } } },
-                                { "suggestedCode", new Dictionary<string, string> { { "type", "string" }, { "description", "Optional: code snippet showing the improvement" } } }
+                                { "command", new Dictionary<string, object> { { "type", "string" }, { "description", "Action to perform" }, { "enum", new[] { "log", "get", "delete", "sync", "submit" } } } },
+                                { "type", new Dictionary<string, string> { { "type", "string" }, { "description", "Category (for 'log'): description, implementation, new_tool, workflow, performance, error_handling" } } },
+                                { "component", new Dictionary<string, string> { { "type", "string" }, { "description", "Which component is affected (for 'log')" } } },
+                                { "observation", new Dictionary<string, string> { { "type", "string" }, { "description", "What happened or what you noticed (for 'log')" } } },
+                                { "proposal", new Dictionary<string, string> { { "type", "string" }, { "description", "How it could be improved (for 'log')" } } },
+                                { "suggestedCode", new Dictionary<string, string> { { "type", "string" }, { "description", "Optional code snippet (for 'log')" } } },
+                                { "number", new Dictionary<string, object> { { "type", "integer" }, { "description", "Lesson number (for 'delete' or 'submit')" } } },
+                                { "all", new Dictionary<string, object> { { "type", "boolean" }, { "description", "Delete all local lessons (for 'delete')" } } }
                             }
                         },
-                        { "required", new[] { "type", "component", "observation", "proposal" } }
-                    }
-                },
-                new
-                {
-                    name = "codemerger_get_lessons",
-                    description = "Get all logged self-improvement lessons.\n\n" +
-                        "WHEN TO USE: When user asks 'what did you learn?' or 'show improvements' or 'what can be improved?'\n" +
-                        "NEXT STEPS: Review lessons with user, apply improvements using code editing tools, then clear lessons.",
-                    inputSchema = new Dictionary<string, object>
-                    {
-                        { "type", "object" },
-                        { "properties", new Dictionary<string, object>() },
-                        { "required", Array.Empty<string>() }
-                    }
-                },
-                new
-                {
-                    name = "codemerger_delete_lesson",
-                    description = "Delete a specific lesson or all local lessons.\n\n" +
-                        "WHEN TO USE: After improvements have been applied, or if user wants to discard lessons.\n" +
-                        "OPTIONS: Provide 'number' to delete one, or 'all: true' to clear all local lessons. Community lessons cannot be deleted.",
-                    inputSchema = new Dictionary<string, object>
-                    {
-                        { "type", "object" },
-                        { "properties", new Dictionary<string, object>
-                            {
-                                { "number", new Dictionary<string, object> { { "type", "integer" }, { "description", "Lesson number to delete (from get_lessons display)" } } },
-                                { "all", new Dictionary<string, object> { { "type", "boolean" }, { "description", "Set to true to delete all local lessons" } } }
-                            }
-                        },
-                        { "required", Array.Empty<string>() }
-                    }
-                },
-                new
-                {
-                    name = "codemerger_sync_lessons",
-                    description = "Force-sync community lessons from the remote repository.\n\n" +
-                        "WHEN TO USE: When user wants to refresh community lessons, or after submitting a lesson.\n" +
-                        "NOTE: Community lessons auto-sync every 24 hours on GUI startup. This tool forces an immediate refresh.",
-                    inputSchema = new Dictionary<string, object>
-                    {
-                        { "type", "object" },
-                        { "properties", new Dictionary<string, object>() },
-                        { "required", Array.Empty<string>() }
-                    }
-                },
-                new
-                {
-                    name = "codemerger_submit_lesson",
-                    description = "Submit a local lesson to the community repository as a GitHub Issue for curation.\n\n" +
-                        "WHEN TO USE: When a local lesson is valuable enough to share with all CodeMerger users.\n" +
-                        "REQUIRES: GitHub sign-in configured in CodeMerger Settings > Community Lessons.",
-                    inputSchema = new Dictionary<string, object>
-                    {
-                        { "type", "object" },
-                        { "properties", new Dictionary<string, object>
-                            {
-                                { "number", new Dictionary<string, object> { { "type", "integer" }, { "description", "Lesson number to submit (from get_lessons display)" } } }
-                            }
-                        },
-                        { "required", new[] { "number" } }
+                        { "required", new[] { "command" } }
                     }
                 }
             };
@@ -924,83 +632,21 @@ namespace CodeMerger.Services.Mcp
             {
                 new
                 {
-                    name = "codemerger_get_notes",
-                    description = "Get the current project notes.\n\n" +
-                        "WHEN TO USE: To see what context has been saved about this project.",
-                    inputSchema = new Dictionary<string, object>
-                    {
-                        { "type", "object" },
-                        { "properties", new Dictionary<string, object>() },
-                        { "required", Array.Empty<string>() }
-                    }
-                },
-                new
-                {
-                    name = "codemerger_add_note",
-                    description = "Add a timestamped note to the project notes.\n\n" +
-                        "WHEN TO USE: When you notice something important — roadmap items, decisions, context.\n" +
-                        "SECTION: Optionally specify a section to organize notes.",
+                    name = "codemerger_notes",
+                    description = "Manage project notes (CODEMERGER_NOTES.md). Commands: get, add, update, delete, clear.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
                         { "properties", new Dictionary<string, object>
                             {
-                                { "note", new Dictionary<string, string> { { "type", "string" }, { "description", "The note content to add" } } },
-                                { "section", new Dictionary<string, string> { { "type", "string" }, { "description", "Optional section name (e.g., Roadmap, Decisions, Context)" } } }
+                                { "command", new Dictionary<string, object> { { "type", "string" }, { "description", "Action to perform" }, { "enum", new[] { "get", "add", "update", "delete", "clear" } } } },
+                                { "note", new Dictionary<string, string> { { "type", "string" }, { "description", "Note content (for 'add')" } } },
+                                { "section", new Dictionary<string, string> { { "type", "string" }, { "description", "Section name (for 'add', 'update', 'clear')" } } },
+                                { "content", new Dictionary<string, string> { { "type", "string" }, { "description", "New section content (for 'update')" } } },
+                                { "lineNumber", new Dictionary<string, object> { { "type", "integer" }, { "description", "Line number to delete (for 'delete')" } } }
                             }
                         },
-                        { "required", new[] { "note" } }
-                    }
-                },
-                new
-                {
-                    name = "codemerger_update_note",
-                    description = "Update or replace an entire section in the project notes.\n\n" +
-                        "WHEN TO USE: When a section needs to be rewritten.\n" +
-                        "CREATES: If the section doesn't exist, it will be created.",
-                    inputSchema = new Dictionary<string, object>
-                    {
-                        { "type", "object" },
-                        { "properties", new Dictionary<string, object>
-                            {
-                                { "section", new Dictionary<string, string> { { "type", "string" }, { "description", "Section name to update" } } },
-                                { "content", new Dictionary<string, string> { { "type", "string" }, { "description", "New content for the section" } } }
-                            }
-                        },
-                        { "required", new[] { "section", "content" } }
-                    }
-                },
-                new
-                {
-                    name = "codemerger_clear_notes",
-                    description = "Clear all notes or a specific section.\n\n" +
-                        "CAUTION: Without a section specified, deletes ALL notes.",
-                    inputSchema = new Dictionary<string, object>
-                    {
-                        { "type", "object" },
-                        { "properties", new Dictionary<string, object>
-                            {
-                                { "section", new Dictionary<string, string> { { "type", "string" }, { "description", "Optional: specific section to clear" } } }
-                            }
-                        },
-                        { "required", Array.Empty<string>() }
-                    }
-                },
-                new
-                {
-                    name = "codemerger_delete_note",
-                    description = "Delete a specific note by line number.\n\n" +
-                        "WHEN TO USE: When you need to remove a single note without clearing the entire section.\n" +
-                        "TIP: Use `get_notes` first to see line numbers.",
-                    inputSchema = new Dictionary<string, object>
-                    {
-                        { "type", "object" },
-                        { "properties", new Dictionary<string, object>
-                            {
-                                { "lineNumber", new Dictionary<string, object> { { "type", "integer" }, { "description", "Line number of the note to delete (1-indexed, shown in get_notes output)" } } }
-                            }
-                        },
-                        { "required", new[] { "lineNumber" } }
+                        { "required", new[] { "command" } }
                     }
                 }
             };
@@ -1013,8 +659,7 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_git_status",
-                    description = "Get the current git status (modified, staged, untracked files).\n\n" +
-                        "WHEN TO USE: Before committing to see what has changed.",
+                    description = "Show modified, staged, and untracked files.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -1025,14 +670,14 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_git_commit",
-                    description = "Stage all changes and commit with a message.\n\n" +
-                        "WHEN TO USE: To save changes locally without pushing.",
+                    description = "Stage all and commit. Set push: true to also push to remote.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
                         { "properties", new Dictionary<string, object>
                             {
-                                { "message", new Dictionary<string, string> { { "type", "string" }, { "description", "Commit message" } } }
+                                { "message", new Dictionary<string, string> { { "type", "string" }, { "description", "Commit message" } } },
+                                { "push", new Dictionary<string, object> { { "type", "boolean" }, { "description", "Also push to remote after committing (default: false)" }, { "default", false } } }
                             }
                         },
                         { "required", new[] { "message" } }
@@ -1041,8 +686,7 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_git_push",
-                    description = "Push committed changes to remote.\n\n" +
-                        "WHEN TO USE: After committing to sync with remote repository.",
+                    description = "Push committed changes to remote.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -1050,22 +694,6 @@ namespace CodeMerger.Services.Mcp
                         { "required", Array.Empty<string>() }
                     }
                 },
-                new
-                {
-                    name = "codemerger_git_commit_push",
-                    description = "Stage all changes, commit, and push in one operation.\n\n" +
-                        "WHEN TO USE: Quick way to save and sync all changes to remote.",
-                    inputSchema = new Dictionary<string, object>
-                    {
-                        { "type", "object" },
-                        { "properties", new Dictionary<string, object>
-                            {
-                                { "message", new Dictionary<string, string> { { "type", "string" }, { "description", "Commit message" } } }
-                            }
-                        },
-                        { "required", new[] { "message" } }
-                    }
-                }
             };
         }
     }

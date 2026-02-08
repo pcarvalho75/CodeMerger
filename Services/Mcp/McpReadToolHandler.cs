@@ -103,6 +103,19 @@ namespace CodeMerger.Services.Mcp
                 sb.AppendLine($"- {file.RelativePath}{ns}");
             }
 
+            // Tool selection guide (survives context condensation)
+            sb.AppendLine();
+            sb.AppendLine("## Tool Guide");
+            sb.AppendLine("- **Renaming** → `rename_symbol` (not str_replace). Call `get_dependencies` first, preview before applying.");
+            sb.AppendLine("- **Moving files** → `move_file` (updates usings). Preview first.");
+            sb.AppendLine("- **Adding params** → `add_parameter` (updates call sites). Preview first.");
+            sb.AppendLine("- **Editing** → `str_replace` (one edit at a time, verify with `build` between edits).");
+            sb.AppendLine("- **New files** → `write_file`. For >600 lines: skeleton first, fill via str_replace.");
+            sb.AppendLine("- **Searching** → `search_code` for symbols, `grep` for text/comments, `find_references` for semantic usages.");
+            sb.AppendLine("- **Task context** → `get_context` with natural language description.");
+            sb.AppendLine("- **WORKFLOW**: Present roadmap → pause between steps for user OK (unless told otherwise) → final Review & Cleanup step.");
+            sb.AppendLine();
+
             // Project References section
             if (_workspaceAnalysis.ProjectReferences.Count > 0)
             {
@@ -416,11 +429,16 @@ namespace CodeMerger.Services.Mcp
             foreach (var group in membersByKind)
             {
                 sb.AppendLine($"### {group.Key}s");
+
+                // Detect overloads: names that appear more than once
+                var nameCounts = group.GroupBy(m => m.Name).Where(g => g.Count() > 1).Select(g => g.Key).ToHashSet();
+
                 foreach (var member in group)
                 {
                     var sig = !string.IsNullOrEmpty(member.Signature) ? member.Signature : member.Name;
                     var ret = !string.IsNullOrEmpty(member.ReturnType) ? $" : {member.ReturnType}" : "";
-                    sb.AppendLine($"- {member.AccessModifier} {sig}{ret}");
+                    var overload = nameCounts.Contains(member.Name) ? "  [overload]" : "";
+                    sb.AppendLine($"- {member.AccessModifier} {sig}{ret}{overload}");
                 }
             }
 
@@ -468,23 +486,6 @@ namespace CodeMerger.Services.Mcp
             if (sb.Length < 50)
             {
                 sb.AppendLine("*No dependencies found.*");
-            }
-
-            return sb.ToString();
-        }
-
-        public string GetTypeHierarchy()
-        {
-            _sendActivity("Getting type hierarchy");
-
-            var sb = new StringBuilder();
-            sb.AppendLine("# Type Hierarchy");
-            sb.AppendLine();
-
-            foreach (var kvp in _workspaceAnalysis.TypeHierarchy.OrderBy(k => k.Key))
-            {
-                var inheritance = kvp.Value.Count > 0 ? $" : {string.Join(", ", kvp.Value)}" : "";
-                sb.AppendLine($"- **{kvp.Key}**{inheritance}");
             }
 
             return sb.ToString();

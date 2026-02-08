@@ -3,8 +3,10 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
-using System.Text.RegularExpressions;
 using CodeMerger.Models;
+using DiffPlex;
+using DiffPlex.DiffBuilder;
+using DiffPlex.DiffBuilder.Model;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -267,20 +269,17 @@ namespace CodeMerger.Services
                 {
                     var content = File.ReadAllText(file.FilePath);
 
-                    // Use word boundary matching to avoid partial replacements
-                    var pattern = $@"\b{Regex.Escape(oldName)}\b";
-                    var matches = Regex.Matches(content, pattern);
+                    // Use syntax tree to rename only actual identifiers (skips strings, comments)
+                    var outcome = SyntaxAwareRenamer.Rename(content, oldName, newName);
 
-                    if (matches.Count > 0)
+                    if (outcome != null)
                     {
-                        var newContent = Regex.Replace(content, pattern, newName);
-
                         affectedFiles[file.RelativePath] = new RenameFileChange
                         {
                             FilePath = file.RelativePath,
                             FullPath = file.FilePath,
-                            OccurrenceCount = matches.Count,
-                            Diff = GenerateDiff(content, newContent, file.RelativePath)
+                            OccurrenceCount = outcome.OccurrenceCount,
+                            Diff = GenerateDiff(content, outcome.ModifiedSource, file.RelativePath)
                         };
 
                         if (!preview)
@@ -288,7 +287,7 @@ namespace CodeMerger.Services
                             // Create backup only if settings allow
                             if (_settings.CreateBackupFiles)
                                 File.Copy(file.FilePath, file.FilePath + ".bak", overwrite: true);
-                            File.WriteAllText(file.FilePath, newContent);
+                            File.WriteAllText(file.FilePath, outcome.ModifiedSource);
                         }
                     }
                 }
@@ -471,15 +470,15 @@ namespace CodeMerger.Services
         }
 
         /// <summary>
-        /// Generate a proper unified diff with context and hunks.
+        /// Generate a proper unified diff with context and hunks using DiffPlex (Myers algorithm).
+        /// O(n+m) space instead of O(n*m) — safe for large files.
         /// </summary>
         private string GenerateDiff(string oldContent, string newContent, string fileName)
         {
             var oldLines = oldContent.Split('\n').Select(l => l.TrimEnd('\r')).ToArray();
             var newLines = newContent.Split('\n').Select(l => l.TrimEnd('\r')).ToArray();
 
-            // Skip expensive LCS diff for full rewrites — produces useless 100% delete + 100% add output
-            // and generates massive JSON responses that can saturate the MCP stdio pipe buffer
+            // Skip diff for full rewrites — produces useless 100% delete + 100% add output
             int commonLines = 0;
             int checkLimit = Math.Min(oldLines.Length, newLines.Length);
             for (int i = 0; i < checkLimit; i++)
@@ -495,25 +494,117 @@ namespace CodeMerger.Services
                        $"Diff skipped to avoid excessive output.)";
             }
 
+            // Use DiffPlex inline diff (Myers algorithm)
+            var diffBuilder = new InlineDiffBuilder(new Differ());
+            var diff = diffBuilder.BuildDiffModel(oldContent, newContent);
+
             var sb = new StringBuilder();
             sb.AppendLine($"--- a/{fileName}");
             sb.AppendLine($"+++ b/{fileName}");
 
-            // Find all differences using LCS-based approach
-            var hunks = ComputeHunks(oldLines, newLines, contextLines: 3);
-
-            // Cap diff output at 100 lines to prevent oversized responses
+            // Build unified diff hunks from DiffPlex output
+            const int contextLines = 3;
+            var lines = diff.Lines;
             int totalDiffLines = 0;
-            foreach (var hunk in hunks)
+
+            int lineIdx = 0;
+            while (lineIdx < lines.Count)
             {
-                sb.AppendLine($"@@ -{hunk.OldStart},{hunk.OldCount} +{hunk.NewStart},{hunk.NewCount} @@");
-                foreach (var line in hunk.Lines)
+                // Skip unchanged lines until we find a change
+                if (lines[lineIdx].Type == ChangeType.Unchanged)
                 {
-                    sb.AppendLine(line);
+                    lineIdx++;
+                    continue;
+                }
+
+                // Found a change — build a hunk with context
+                int hunkStart = Math.Max(0, lineIdx - contextLines);
+                int oldLineNum = 1, newLineNum = 1;
+
+                // Calculate line numbers up to hunk start
+                for (int i = 0; i < hunkStart; i++)
+                {
+                    if (lines[i].Type != ChangeType.Inserted) oldLineNum++;
+                    if (lines[i].Type != ChangeType.Deleted) newLineNum++;
+                }
+
+                var hunkLines = new List<string>();
+                int hunkOldStart = oldLineNum;
+                int hunkNewStart = newLineNum;
+                int hunkOldCount = 0;
+                int hunkNewCount = 0;
+
+                // Add leading context
+                for (int i = hunkStart; i < lineIdx; i++)
+                {
+                    hunkLines.Add(" " + lines[i].Text);
+                    hunkOldCount++;
+                    hunkNewCount++;
+                }
+
+                // Add changes and merge nearby hunks
+                int trailingUnchanged = 0;
+                while (lineIdx < lines.Count)
+                {
+                    var line = lines[lineIdx];
+
+                    if (line.Type == ChangeType.Unchanged)
+                    {
+                        trailingUnchanged++;
+                        if (trailingUnchanged > contextLines * 2)
+                        {
+                            // Gap too large — end this hunk (back up the extra context lines)
+                            lineIdx -= (trailingUnchanged - contextLines);
+                            trailingUnchanged = contextLines;
+                            break;
+                        }
+                        hunkLines.Add(" " + line.Text);
+                        hunkOldCount++;
+                        hunkNewCount++;
+                    }
+                    else
+                    {
+                        trailingUnchanged = 0;
+                        if (line.Type == ChangeType.Deleted)
+                        {
+                            hunkLines.Add("-" + line.Text);
+                            hunkOldCount++;
+                        }
+                        else if (line.Type == ChangeType.Inserted)
+                        {
+                            hunkLines.Add("+" + line.Text);
+                            hunkNewCount++;
+                        }
+                        else if (line.Type == ChangeType.Modified)
+                        {
+                            hunkLines.Add("-" + line.Text);
+                            hunkLines.Add("+" + line.Text);
+                            hunkOldCount++;
+                            hunkNewCount++;
+                        }
+                    }
+
+                    lineIdx++;
+                }
+
+                // Trim trailing context to exactly contextLines
+                while (trailingUnchanged > contextLines && hunkLines.Count > 0 && hunkLines[^1].StartsWith(" "))
+                {
+                    hunkLines.RemoveAt(hunkLines.Count - 1);
+                    hunkOldCount--;
+                    hunkNewCount--;
+                    trailingUnchanged--;
+                }
+
+                // Emit hunk
+                sb.AppendLine($"@@ -{hunkOldStart},{hunkOldCount} +{hunkNewStart},{hunkNewCount} @@");
+                foreach (var hl in hunkLines)
+                {
+                    sb.AppendLine(hl);
                     totalDiffLines++;
                     if (totalDiffLines >= 100)
                     {
-                        sb.AppendLine($"... (diff truncated — {hunks.Sum(h => h.Lines.Count)} total lines)");
+                        sb.AppendLine("... (diff truncated)");
                         return sb.ToString();
                     }
                 }
@@ -521,159 +612,6 @@ namespace CodeMerger.Services
 
             return sb.ToString();
         }
-
-        private List<DiffHunk> ComputeHunks(string[] oldLines, string[] newLines, int contextLines)
-        {
-            var hunks = new List<DiffHunk>();
-            var changes = ComputeChanges(oldLines, newLines);
-
-            if (changes.Count == 0)
-                return hunks;
-
-            // Group changes into hunks with context
-            int i = 0;
-            while (i < changes.Count)
-            {
-                var hunk = new DiffHunk();
-                var hunkLines = new List<string>();
-
-                // Find the start of this change group
-                int changeStart = changes[i].OldIndex;
-                int hunkOldStart = Math.Max(0, changeStart - contextLines);
-                int hunkNewStart = Math.Max(0, changes[i].NewIndex - contextLines);
-
-                // Add leading context
-                for (int c = hunkOldStart; c < changeStart && c < oldLines.Length; c++)
-                {
-                    hunkLines.Add(" " + oldLines[c]);
-                }
-
-                // Process changes until we hit a gap larger than 2*contextLines
-                while (i < changes.Count)
-                {
-                    var change = changes[i];
-
-                    // Check if there's a gap to the next change
-                    if (i > 0)
-                    {
-                        var prevChange = changes[i - 1];
-                        int gap = change.OldIndex - (prevChange.OldIndex + (prevChange.Type == ChangeType.Delete ? 1 : 0));
-                        
-                        if (gap > contextLines * 2)
-                        {
-                            // Add trailing context for previous group and start new hunk
-                            break;
-                        }
-
-                        // Add context between changes
-                        int contextStart = prevChange.OldIndex + (prevChange.Type == ChangeType.Delete ? 1 : 0);
-                        for (int c = contextStart; c < change.OldIndex && c < oldLines.Length; c++)
-                        {
-                            hunkLines.Add(" " + oldLines[c]);
-                        }
-                    }
-
-                    // Add the change itself
-                    if (change.Type == ChangeType.Delete)
-                    {
-                        hunkLines.Add("-" + oldLines[change.OldIndex]);
-                    }
-                    else if (change.Type == ChangeType.Insert)
-                    {
-                        hunkLines.Add("+" + newLines[change.NewIndex]);
-                    }
-
-                    i++;
-                }
-
-                // Add trailing context
-                int lastChangeOldIdx = i > 0 ? changes[i - 1].OldIndex : 0;
-                int trailingStart = lastChangeOldIdx + 1;
-                int trailingEnd = Math.Min(oldLines.Length, trailingStart + contextLines);
-                for (int c = trailingStart; c < trailingEnd; c++)
-                {
-                    hunkLines.Add(" " + oldLines[c]);
-                }
-
-                // Calculate hunk header numbers
-                int oldCount = hunkLines.Count(l => l.StartsWith(" ") || l.StartsWith("-"));
-                int newCount = hunkLines.Count(l => l.StartsWith(" ") || l.StartsWith("+"));
-
-                hunk.OldStart = hunkOldStart + 1; // 1-indexed
-                hunk.OldCount = oldCount;
-                hunk.NewStart = hunkNewStart + 1;
-                hunk.NewCount = newCount;
-                hunk.Lines = hunkLines;
-
-                hunks.Add(hunk);
-            }
-
-            return hunks;
-        }
-
-        private List<Change> ComputeChanges(string[] oldLines, string[] newLines)
-        {
-            var changes = new List<Change>();
-
-            // Simple LCS-based diff
-            int[,] lcs = new int[oldLines.Length + 1, newLines.Length + 1];
-
-            for (int i = 1; i <= oldLines.Length; i++)
-            {
-                for (int j = 1; j <= newLines.Length; j++)
-                {
-                    if (oldLines[i - 1] == newLines[j - 1])
-                        lcs[i, j] = lcs[i - 1, j - 1] + 1;
-                    else
-                        lcs[i, j] = Math.Max(lcs[i - 1, j], lcs[i, j - 1]);
-                }
-            }
-
-            // Backtrack to find changes
-            int oi = oldLines.Length;
-            int ni = newLines.Length;
-            var tempChanges = new List<Change>();
-
-            while (oi > 0 || ni > 0)
-            {
-                if (oi > 0 && ni > 0 && oldLines[oi - 1] == newLines[ni - 1])
-                {
-                    oi--;
-                    ni--;
-                }
-                else if (ni > 0 && (oi == 0 || lcs[oi, ni - 1] >= lcs[oi - 1, ni]))
-                {
-                    tempChanges.Add(new Change { Type = ChangeType.Insert, OldIndex = oi, NewIndex = ni - 1 });
-                    ni--;
-                }
-                else if (oi > 0)
-                {
-                    tempChanges.Add(new Change { Type = ChangeType.Delete, OldIndex = oi - 1, NewIndex = ni });
-                    oi--;
-                }
-            }
-
-            tempChanges.Reverse();
-            return tempChanges;
-        }
-
-        private class DiffHunk
-        {
-            public int OldStart { get; set; }
-            public int OldCount { get; set; }
-            public int NewStart { get; set; }
-            public int NewCount { get; set; }
-            public List<string> Lines { get; set; } = new();
-        }
-
-        private class Change
-        {
-            public ChangeType Type { get; set; }
-            public int OldIndex { get; set; }
-            public int NewIndex { get; set; }
-        }
-
-        private enum ChangeType { Delete, Insert }
     }
 
     #region Result Models

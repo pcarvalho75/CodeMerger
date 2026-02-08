@@ -555,10 +555,10 @@ namespace CodeMerger.Services
                 (name) => SwitchToWorkspace(name), // Switch workspace callback
                 SendActivity,
                 Log);
-            _lessonHandler = new McpLessonToolHandler(_lessonService, SendActivity);
+            _lessonHandler = new McpLessonToolHandler(_lessonService, _communitySyncService, SendActivity);
             
             if (_inputDirectories.Count > 0)
-                _notesHandler = new McpNotesToolHandler(_inputDirectories[0]);
+                _notesHandler = new McpNotesToolHandler(_inputDirectories[0], SendActivity);
 
             if (_inputDirectories.Count > 0)
                 _gitHandler = new McpGitToolHandler(_inputDirectories[0], SendActivity);
@@ -869,45 +869,41 @@ namespace CodeMerger.Services
                 return CreateToolResponse(id, _workspaceHandler?.Refresh() ?? "Error: Handler not initialized");
 
             if (toolName == "codemerger_build")
+            {
+                if (arguments.TryGetProperty("quickCheck", out var qcEl) && qcEl.GetBoolean())
+                    return CreateToolResponse(id, _semanticHandler?.GetDiagnostics(arguments) ?? "Error: Handler not initialized");
                 return CreateToolResponse(id, _workspaceHandler?.Build(arguments) ?? "Error: Handler not initialized");
+            }
 
-            // Lesson tools don't require workspace
-            if (toolName == "codemerger_log_lesson")
-                return CreateToolResponse(id, HandleLessonTool("log", arguments));
+            // Lesson tool (doesn't require workspace)
+            if (toolName == "codemerger_lessons")
+            {
+                var command = arguments.TryGetProperty("command", out var cmdEl) ? cmdEl.GetString() : null;
+                if (string.IsNullOrEmpty(command))
+                    return CreateToolResponse(id, "Error: 'command' parameter is required.");
+                _lessonHandler ??= new McpLessonToolHandler(_lessonService, _communitySyncService, SendActivity);
+                return CreateToolResponse(id, _lessonHandler.HandleCommand(command, arguments));
+            }
 
-            if (toolName == "codemerger_get_lessons")
-                return CreateToolResponse(id, HandleLessonTool("get", arguments));
-
-            if (toolName == "codemerger_delete_lesson")
-                return CreateToolResponse(id, HandleLessonTool("delete", arguments));
-
-            if (toolName == "codemerger_sync_lessons")
-                return CreateToolResponse(id, HandleSyncLessons());
-
-            if (toolName == "codemerger_submit_lesson")
-                return CreateToolResponse(id, HandleSubmitLesson(arguments));
-
-            // Notes tools
-            if (toolName == "codemerger_get_notes")
-                return CreateToolResponse(id, HandleNotesTool("get", arguments));
-            if (toolName == "codemerger_add_note")
-                return CreateToolResponse(id, HandleNotesTool("add", arguments));
-            if (toolName == "codemerger_update_note")
-                return CreateToolResponse(id, HandleNotesTool("update", arguments));
-            if (toolName == "codemerger_clear_notes")
-                return CreateToolResponse(id, HandleNotesTool("clear", arguments));
-            if (toolName == "codemerger_delete_note")
-                return CreateToolResponse(id, HandleNotesTool("delete", arguments));
+            // Notes tool
+            if (toolName == "codemerger_notes")
+            {
+                if (_notesHandler == null)
+                    return CreateToolResponse(id, "Error: Notes handler not initialized. Select a workspace first.");
+                var command = arguments.TryGetProperty("command", out var cmdEl) ? cmdEl.GetString() : null;
+                if (string.IsNullOrEmpty(command))
+                    return CreateToolResponse(id, "Error: 'command' parameter is required.");
+                return CreateToolResponse(id, _notesHandler.HandleCommand(command, arguments));
+            }
 
             // Git tools
-            if (toolName == "codemerger_git_status")
-                return CreateToolResponse(id, HandleGitTool("status", arguments));
-            if (toolName == "codemerger_git_commit")
-                return CreateToolResponse(id, HandleGitTool("commit", arguments));
-            if (toolName == "codemerger_git_push")
-                return CreateToolResponse(id, HandleGitTool("push", arguments));
-            if (toolName == "codemerger_git_commit_push")
-                return CreateToolResponse(id, HandleGitTool("commit_push", arguments));
+            if (toolName == "codemerger_git_status" || toolName == "codemerger_git_commit" || toolName == "codemerger_git_push")
+            {
+                if (_gitHandler == null)
+                    return CreateToolResponse(id, "Error: Git handler not initialized. Select a workspace first.");
+                var action = toolName.Replace("codemerger_git_", "");
+                return CreateToolResponse(id, _gitHandler.HandleCommand(action, arguments));
+            }
 
             // All other tools require workspace
             if (_workspaceAnalysis == null)
@@ -919,30 +915,17 @@ namespace CodeMerger.Services
             return CreateToolResponse(id, result);
         }
 
-        /// <summary>
-        /// Two-tier diagnostics: fast syntax check, then real build if syntax is clean.
-        /// </summary>
-        private string GetDiagnosticsWithBuild(JsonElement arguments)
-        {
-            // Tier 1: Syntax-only (instant)
-            var syntaxResult = _semanticHandler!.GetDiagnostics(arguments);
-
-            // If syntax passed, chain into real build (Tier 2)
-            if (syntaxResult.StartsWith("SYNTAX_OK"))
-            {
-                var cleanResult = syntaxResult.Substring("SYNTAX_OK\n".Length);
-                var buildResult = _workspaceHandler?.Build(arguments) ?? "Error: Build handler not initialized";
-                return cleanResult + "\n" + buildResult;
-            }
-
-            // Syntax errors found — return them without building
-            return syntaxResult;
-        }
-
         private string DispatchToolCall(string toolName, JsonElement arguments)
         {
             // Note: No lock here - read operations are safe, write operations
             // trigger PerformIndexing() which has its own lock for state mutation
+
+            // Guard: handlers may be null during workspace switch or before indexing completes
+            if (_readHandler == null || _writeHandler == null || _semanticHandler == null ||
+                _refactoringHandler == null || _maintenanceHandler == null)
+            {
+                return $"Error: Workspace handlers are still initializing. Please wait a moment and retry the '{toolName}' call.";
+            }
             
             var sw = Stopwatch.StartNew();
             SendActivity($"STARTED|{toolName}|");
@@ -953,42 +936,41 @@ namespace CodeMerger.Services
                 var result = toolName switch
                 {
                     // Read tools
-                    "codemerger_get_project_overview" => _readHandler!.GetWorkspaceOverview(),
-                    "codemerger_list_files" => _readHandler!.ListFiles(arguments),
-                    "codemerger_get_file" => _readHandler!.GetFile(arguments),
-                    "codemerger_search_code" => _readHandler!.SearchCode(arguments),
-                    "codemerger_get_type" => _readHandler!.GetType(arguments),
-                    "codemerger_get_dependencies" => _readHandler!.GetDependencies(arguments),
-                    "codemerger_get_type_hierarchy" => _readHandler!.GetTypeHierarchy(),
-                    "codemerger_grep" => _readHandler!.Grep(arguments),
-                    "codemerger_get_context" => _readHandler!.GetContext(arguments),
-                    "codemerger_get_lines" => _readHandler!.GetLines(arguments),
+                    "codemerger_get_project_overview" => _readHandler.GetWorkspaceOverview(),
+                    "codemerger_list_files" => _readHandler.ListFiles(arguments),
+                    "codemerger_get_file" => _readHandler.GetFile(arguments),
+                    "codemerger_search_code" => _readHandler.SearchCode(arguments),
+                    "codemerger_get_type" => _readHandler.GetType(arguments),
+                    "codemerger_get_dependencies" => _readHandler.GetDependencies(arguments),
+                    "codemerger_find_implementations" => _semanticHandler.FindImplementations(arguments),
+                    "codemerger_grep" => _readHandler.Grep(arguments),
+                    "codemerger_get_context" => _readHandler.GetContext(arguments),
+                    "codemerger_get_lines" => _readHandler.GetLines(arguments),
+                    "codemerger_get_method_body" => _semanticHandler.GetMethodBody(arguments),
 
                 // Semantic tools
-                "codemerger_find_references" => _semanticHandler!.FindReferences(arguments),
-                "codemerger_get_callers" => _semanticHandler!.GetCallers(arguments),
-                "codemerger_get_callees" => _semanticHandler!.GetCallees(arguments),
-                "codemerger_get_diagnostics" => _semanticHandler!.GetDiagnostics(arguments),
+                "codemerger_find_references" => _semanticHandler.FindReferences(arguments),
+                "codemerger_get_callers" => _semanticHandler.GetCallers(arguments),
+                "codemerger_get_callees" => _semanticHandler.GetCallees(arguments),
 
                     // Write tools
-                    "codemerger_str_replace" => _writeHandler!.StrReplace(arguments),
-                    "codemerger_write_file" => _writeHandler!.WriteFile(arguments),
-                    "codemerger_preview_write" => _writeHandler!.PreviewWriteFile(arguments),
-                    "codemerger_delete_file" => _writeHandler!.DeleteFile(arguments),
-                    "codemerger_undo" => _writeHandler!.Undo(arguments),
-                    "codemerger_move_file" => _writeHandler!.MoveFile(arguments),
+                    "codemerger_str_replace" => _writeHandler.StrReplace(arguments),
+                    "codemerger_write_file" => _writeHandler.WriteFile(arguments),
+                    "codemerger_delete_file" => _writeHandler.DeleteFile(arguments),
+                    "codemerger_undo" => _writeHandler.Undo(arguments),
+                    "codemerger_move_file" => _writeHandler.MoveFile(arguments),
 
                     // Refactoring tools
-                    "codemerger_rename_symbol" => _refactoringHandler!.RenameSymbol(arguments),
-                    "codemerger_generate_interface" => _refactoringHandler!.GenerateInterface(arguments),
-                    "codemerger_extract_method" => _refactoringHandler!.ExtractMethod(arguments),
-                    "codemerger_add_parameter" => _refactoringHandler!.AddParameter(arguments),
-                    "codemerger_implement_interface" => _refactoringHandler!.ImplementInterface(arguments),
-                    "codemerger_generate_constructor" => _refactoringHandler!.GenerateConstructor(arguments),
+                    "codemerger_rename_symbol" => _refactoringHandler.RenameSymbol(arguments),
+                    "codemerger_generate_interface" => _refactoringHandler.GenerateInterface(arguments),
+                    "codemerger_extract_method" => _refactoringHandler.ExtractMethod(arguments),
+                    "codemerger_add_parameter" => _refactoringHandler.AddParameter(arguments),
+                    "codemerger_implement_interface" => _refactoringHandler.ImplementInterface(arguments),
+                    "codemerger_generate_constructor" => _refactoringHandler.GenerateConstructor(arguments),
 
                     // Maintenance tools
-                    "codemerger_clean_backups" => _maintenanceHandler!.CleanBackups(arguments),
-                    "codemerger_find_duplicates" => _maintenanceHandler!.FindDuplicates(arguments),
+                    "codemerger_clean_backups" => _maintenanceHandler.CleanBackups(arguments),
+                    "codemerger_find_duplicates" => _maintenanceHandler.FindDuplicates(arguments),
 
                     _ => $"Unknown tool: {toolName}"
                 };
@@ -1035,201 +1017,7 @@ namespace CodeMerger.Services
             return sb.ToString();
         }
 
-        private string HandleLessonTool(string action, JsonElement arguments)
-        {
-            // Initialize lesson handler if needed (doesn't require workspace)
-            _lessonHandler ??= new McpLessonToolHandler(_lessonService, SendActivity);
 
-            return action switch
-            {
-                "log" => _lessonHandler.LogLesson(arguments),
-                "get" => _lessonHandler.GetLessons(),
-                "delete" => _lessonHandler.DeleteLesson(arguments),
-                _ => "Error: Unknown lesson action"
-            };
-        }
-
-        private string HandleSyncLessons()
-        {
-            SendActivity("Syncing community lessons...");
-            try
-            {
-                var (synced, count, message) = _communitySyncService.ForceSyncAsync().GetAwaiter().GetResult();
-                return $"# Community Lessons Sync\n\n{message}";
-            }
-            catch (Exception ex)
-            {
-                return $"# Community Lessons Sync\n\n**Error:** {ex.Message}";
-            }
-        }
-
-        private string HandleSubmitLesson(JsonElement arguments)
-        {
-            if (!arguments.TryGetProperty("number", out var numberEl))
-                return "Error: 'number' parameter is required (lesson number from get_lessons).";
-
-            var number = numberEl.GetInt32();
-            var all = _lessonService.GetLessons();
-
-            if (number < 1 || number > all.Count)
-                return $"Error: Lesson #{number} not found.";
-
-            var lesson = all[number - 1];
-            if (lesson.Source == LessonSource.Community)
-                return $"Error: Lesson #{number} is already a community lesson.";
-
-            var settings = CommunityLessonSettings.Load();
-            if (string.IsNullOrEmpty(settings.GitHubToken))
-                return "Error: GitHub sign-in required. Open CodeMerger Settings > Community Lessons and click 'Sign in with GitHub'.";
-
-            SendActivity($"Submitting lesson #{number} to community...");
-
-            try
-            {
-                var repoOwner = "pcarvalho75";
-                var repoName = "CodeMerger";
-
-                // Parse owner/repo from settings URL if available
-                if (!string.IsNullOrEmpty(settings.RepoUrl))
-                {
-                    // Handle URLs like https://github.com/owner/repo
-                    var uri = settings.RepoUrl.TrimEnd('/');
-                    var parts = uri.Split('/');
-                    if (parts.Length >= 2)
-                    {
-                        repoOwner = parts[parts.Length - 2];
-                        repoName = parts[parts.Length - 1];
-                    }
-                }
-
-                var contributor = !string.IsNullOrEmpty(settings.GitHubUsername) 
-                    ? $"@{settings.GitHubUsername}" : "Anonymous";
-
-                var title = $"[Lesson] {lesson.Type}: {lesson.Component}";
-                var body = $"## Observation\n{lesson.Observation}\n\n" +
-                           $"## Proposal\n{lesson.Proposal}\n\n" +
-                           $"**Type:** {lesson.Type}\n" +
-                           $"**Component:** {lesson.Component}\n" +
-                           $"**Contributed by:** {contributor}\n" +
-                           $"**Logged:** {lesson.Timestamp:yyyy-MM-dd HH:mm}\n";
-
-                if (!string.IsNullOrEmpty(lesson.SuggestedCode))
-                    body += $"\n## Suggested Code\n```csharp\n{lesson.SuggestedCode}\n```\n";
-
-                using var client = new System.Net.Http.HttpClient();
-                client.DefaultRequestHeaders.Add("Authorization", $"token {settings.GitHubToken}");
-                client.DefaultRequestHeaders.Add("User-Agent", "CodeMerger");
-                client.DefaultRequestHeaders.Add("Accept", "application/vnd.github.v3+json");
-
-                var payload = JsonSerializer.Serialize(new
-                {
-                    title,
-                    body,
-                    labels = new[] { "lesson", lesson.Type }
-                });
-
-                var content = new System.Net.Http.StringContent(payload, System.Text.Encoding.UTF8, "application/json");
-                var response = client.PostAsync($"https://api.github.com/repos/{repoOwner}/{repoName}/issues", content)
-                    .GetAwaiter().GetResult();
-
-                if (response.IsSuccessStatusCode)
-                {
-                    var responseJson = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
-                    using var doc = JsonDocument.Parse(responseJson);
-                    var issueUrl = doc.RootElement.GetProperty("html_url").GetString();
-                    return $"# Lesson Submitted\n\nLesson #{number} submitted as a GitHub Issue.\n**URL:** {issueUrl}";
-                }
-                else
-                {
-                    var errorBody = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
-                    return $"# Submission Failed\n\n**Status:** {(int)response.StatusCode}\n**Response:** {errorBody}";
-                }
-            }
-            catch (Exception ex)
-            {
-                return $"# Submission Failed\n\n**Error:** {ex.Message}";
-            }
-        }
-
-        private string HandleNotesTool(string action, JsonElement arguments)
-        {
-            if (_notesHandler == null)
-                return "Error: Notes handler not initialized. Select a workspace first.";
-
-            switch (action)
-            {
-                case "get":
-                    SendActivity("Reading project notes...");
-                    return _notesHandler.GetNotes();
-
-                case "add":
-                    var note = arguments.TryGetProperty("note", out var noteEl) ? noteEl.GetString() : null;
-                    if (string.IsNullOrEmpty(note))
-                        return "Error: 'note' parameter is required.";
-                    var section = arguments.TryGetProperty("section", out var sectionEl) ? sectionEl.GetString() : null;
-                    var (success, message, summary) = _notesHandler.AddNote(note, section);
-                    if (success && !string.IsNullOrEmpty(summary))
-                        SendActivity($"Note added: {summary}");
-                    return message;
-
-                case "update":
-                    var updateSection = arguments.TryGetProperty("section", out var updateSectionEl) ? updateSectionEl.GetString() : null;
-                    var content = arguments.TryGetProperty("content", out var contentEl) ? contentEl.GetString() : null;
-                    if (string.IsNullOrEmpty(updateSection))
-                        return "Error: 'section' parameter is required.";
-                    if (string.IsNullOrEmpty(content))
-                        return "Error: 'content' parameter is required.";
-                    SendActivity($"Updating section: {updateSection}");
-                    return _notesHandler.UpdateNote(updateSection, content).message;
-
-                case "clear":
-                    var clearSection = arguments.TryGetProperty("section", out var clearSectionEl) ? clearSectionEl.GetString() : null;
-                    SendActivity(string.IsNullOrEmpty(clearSection) ? "Clearing all notes..." : $"Clearing: {clearSection}");
-                    return _notesHandler.ClearNotes(clearSection).message;
-
-                case "delete":
-                    if (!arguments.TryGetProperty("lineNumber", out var lineNumEl) || lineNumEl.ValueKind != System.Text.Json.JsonValueKind.Number)
-                        return "Error: 'lineNumber' parameter is required and must be a number.";
-                    var lineNumber = lineNumEl.GetInt32();
-                    var (deleteSuccess, deleteMessage, deletedNote) = _notesHandler.DeleteNote(lineNumber);
-                    if (deleteSuccess)
-                        SendActivity($"Deleted: {deletedNote}");
-                    return deleteMessage;
-
-                default:
-                    return "Error: Unknown notes action";
-            }
-        }
-
-        private string HandleGitTool(string action, JsonElement arguments)
-        {
-            if (_gitHandler == null)
-                return "Error: Git handler not initialized. Select a workspace first.";
-
-            switch (action)
-            {
-                case "status":
-                    return _gitHandler.GetStatus();
-
-                case "commit":
-                    var commitMsg = arguments.TryGetProperty("message", out var msgEl) ? msgEl.GetString() : null;
-                    if (string.IsNullOrEmpty(commitMsg))
-                        return "Error: 'message' parameter is required.";
-                    return _gitHandler.Commit(commitMsg);
-
-                case "push":
-                    return _gitHandler.Push();
-
-                case "commit_push":
-                    var msg = arguments.TryGetProperty("message", out var m) ? m.GetString() : null;
-                    if (string.IsNullOrEmpty(msg))
-                        return "Error: 'message' parameter is required.";
-                    return _gitHandler.CommitAndPush(msg);
-
-                default:
-                    return "Error: Unknown git action";
-            }
-        }
 
         private string CreateToolResponse(int id, string content)
         {

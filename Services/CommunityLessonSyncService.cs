@@ -53,14 +53,14 @@ namespace CodeMerger.Services
             if (meta != null && (DateTime.UtcNow - meta.LastFetched).TotalHours < ttlHours)
             {
                 var cachedCount = _lessonService.GetCommunityLessons().Count;
-                return (false, cachedCount, $"Cache is fresh ({meta.LastFetched:yyyy-MM-dd HH:mm} UTC). Use sync_lessons to force refresh.");
+                return (false, cachedCount, $"Cache is fresh ({meta.LastFetched:yyyy-MM-dd HH:mm} UTC). Use `lessons` with command `sync` to force refresh.");
             }
 
             return await FetchAndCacheAsync(repoUrl);
         }
 
         /// <summary>
-        /// Forces a sync regardless of TTL. Used by sync_lessons MCP tool.
+        /// Forces a sync regardless of TTL. Used by lessons (sync command) MCP tool.
         /// </summary>
         public async Task<(bool synced, int count, string message)> ForceSyncAsync(string? repoUrl = null)
         {

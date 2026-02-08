@@ -206,8 +206,9 @@ namespace CodeMerger.Services
 
         /// <summary>
         /// Find all implementations of an interface or overrides of a virtual method.
+        /// Walks indirect chains (A → B → IFoo reports "B → IFoo").
         /// </summary>
-        public ImplementationResult FindImplementations(string interfaceOrTypeName, string? methodName = null)
+        public ImplementationResult FindImplementations(string interfaceOrTypeName, string? methodName = null, bool includeAbstract = false)
         {
             var result = new ImplementationResult
             {
@@ -215,44 +216,70 @@ namespace CodeMerger.Services
                 MethodName = methodName
             };
 
+            // Build a quick lookup: typeName → (file, typeInfo)
+            var typeMap = new Dictionary<string, (FileAnalysis file, CodeTypeInfo type)>(StringComparer.OrdinalIgnoreCase);
             foreach (var file in _workspaceAnalysis.AllFiles)
             {
                 foreach (var type in file.Types)
                 {
-                    // Check if type implements the interface or extends the base type
-                    bool implementsInterface = type.Interfaces.Any(i => 
+                    typeMap[type.Name] = (file, type);
+                }
+            }
+
+            foreach (var file in _workspaceAnalysis.AllFiles)
+            {
+                foreach (var type in file.Types)
+                {
+                    // Skip abstract classes unless requested
+                    if (type.IsAbstract && !includeAbstract)
+                        continue;
+
+                    // Check direct implementation/extension
+                    bool implementsInterface = type.Interfaces.Any(i =>
                         i.Equals(interfaceOrTypeName, StringComparison.OrdinalIgnoreCase));
                     bool extendsType = type.BaseType?.Equals(interfaceOrTypeName, StringComparison.OrdinalIgnoreCase) == true;
 
-                    if (implementsInterface || extendsType)
+                    // Check indirect: walk base type chain
+                    string inheritancePath = "";
+                    if (!implementsInterface && !extendsType)
                     {
-                        var impl = new ImplementationInfo
-                        {
-                            TypeName = type.Name,
-                            FilePath = file.RelativePath,
-                            Line = type.StartLine,
-                            IsInterface = implementsInterface,
-                            IsInheritance = extendsType
-                        };
+                        inheritancePath = GetIndirectPath(type, interfaceOrTypeName, typeMap);
+                        if (string.IsNullOrEmpty(inheritancePath))
+                            continue;
+                    }
+                    else
+                    {
+                        inheritancePath = "direct";
+                    }
 
-                        // If looking for specific method, find it
-                        if (!string.IsNullOrEmpty(methodName))
-                        {
-                            var method = type.Members.FirstOrDefault(m => 
-                                m.Name.Equals(methodName, StringComparison.OrdinalIgnoreCase) &&
-                                (m.IsOverride || type.Kind == CodeTypeKind.Interface || implementsInterface));
+                    var impl = new ImplementationInfo
+                    {
+                        TypeName = type.Name,
+                        FilePath = file.RelativePath,
+                        Line = type.StartLine,
+                        IsInterface = implementsInterface || (!extendsType && inheritancePath != "direct"),
+                        IsInheritance = extendsType || (!implementsInterface && inheritancePath != "direct"),
+                        IsAbstract = type.IsAbstract,
+                        InheritancePath = inheritancePath
+                    };
 
-                            if (method != null)
-                            {
-                                impl.ImplementedMethod = method.Signature ?? method.Name;
-                                impl.MethodLine = method.StartLine;
-                                result.Implementations.Add(impl);
-                            }
-                        }
-                        else
+                    // If looking for specific method, find it
+                    if (!string.IsNullOrEmpty(methodName))
+                    {
+                        var method = type.Members.FirstOrDefault(m =>
+                            m.Name.Equals(methodName, StringComparison.OrdinalIgnoreCase) &&
+                            (m.IsOverride || type.Kind == CodeTypeKind.Interface || implementsInterface));
+
+                        if (method != null)
                         {
+                            impl.ImplementedMethod = method.Signature ?? method.Name;
+                            impl.MethodLine = method.StartLine;
                             result.Implementations.Add(impl);
                         }
+                    }
+                    else
+                    {
+                        result.Implementations.Add(impl);
                     }
                 }
             }
@@ -261,61 +288,129 @@ namespace CodeMerger.Services
         }
 
         /// <summary>
-        /// Get a specific method's body by type and method name.
+        /// Walk the base type chain to find indirect implementations.
+        /// Returns path like "BaseProcessor → IDataProcessor" or empty if not found.
         /// </summary>
-        public MethodBodyResult GetMethodBody(string typeName, string methodName)
+        private string GetIndirectPath(CodeTypeInfo type, string targetName, Dictionary<string, (FileAnalysis file, CodeTypeInfo type)> typeMap)
+        {
+            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var chain = new List<string>();
+            var current = type.BaseType;
+
+            while (!string.IsNullOrEmpty(current) && visited.Add(current))
+            {
+                if (!typeMap.TryGetValue(current, out var entry))
+                    break;
+
+                chain.Add(current);
+                var baseType = entry.type;
+
+                // Check if this base type implements/extends our target
+                if (baseType.Interfaces.Any(i => i.Equals(targetName, StringComparison.OrdinalIgnoreCase)) ||
+                    baseType.BaseType?.Equals(targetName, StringComparison.OrdinalIgnoreCase) == true)
+                {
+                    chain.Add(targetName);
+                    return string.Join(" → ", chain);
+                }
+
+                current = baseType.BaseType;
+            }
+
+            return "";
+        }
+
+        /// <summary>
+        /// Get a specific method's body. If typeName is null, searches all types and disambiguates.
+        /// </summary>
+        public MethodBodyResult GetMethodBody(string methodName, string? typeName = null, bool includeDoc = false)
         {
             var result = new MethodBodyResult
             {
-                TypeName = typeName,
+                TypeName = typeName ?? "",
                 MethodName = methodName
             };
+
+            // Collect all matches
+            var candidates = new List<(FileAnalysis file, CodeTypeInfo type, CodeMemberInfo method)>();
 
             foreach (var file in _workspaceAnalysis.AllFiles)
             {
                 foreach (var type in file.Types)
                 {
-                    if (!type.Name.Equals(typeName, StringComparison.OrdinalIgnoreCase))
+                    if (typeName != null && !type.Name.Equals(typeName, StringComparison.OrdinalIgnoreCase))
                         continue;
 
-                    var method = type.Members.FirstOrDefault(m =>
-                        m.Name.Equals(methodName, StringComparison.OrdinalIgnoreCase) &&
-                        m.Kind == CodeMemberKind.Method || m.Kind == CodeMemberKind.Constructor);
-
-                    if (method != null)
+                    foreach (var member in type.Members)
                     {
-                        result.Found = true;
-                        result.FilePath = file.RelativePath;
-                        result.StartLine = method.StartLine;
-                        result.EndLine = method.EndLine;
-                        result.Signature = method.Signature ?? method.Name;
-                        result.ReturnType = method.ReturnType;
-                        result.Parameters = method.Parameters;
-                        result.Body = method.Body;
-                        result.IsAsync = method.IsAsync;
-                        result.IsStatic = method.IsStatic;
-                        result.AccessModifier = method.AccessModifier;
-                        result.XmlDoc = method.XmlDoc;
-
-                        // If body is empty, try to read from file
-                        if (string.IsNullOrEmpty(result.Body) && method.StartLine > 0 && method.EndLine > 0)
+                        if (member.Name.Equals(methodName, StringComparison.OrdinalIgnoreCase) &&
+                            (member.Kind == CodeMemberKind.Method || member.Kind == CodeMemberKind.Constructor))
                         {
-                            try
-                            {
-                                var lines = File.ReadAllLines(file.FilePath);
-                                var methodLines = lines.Skip(method.StartLine - 1).Take(method.EndLine - method.StartLine + 1);
-                                result.FullText = string.Join(Environment.NewLine, methodLines);
-                            }
-                            catch { }
+                            candidates.Add((file, type, member));
                         }
-
-                        return result;
                     }
                 }
             }
 
-            result.Found = false;
-            result.Error = $"Method '{methodName}' not found in type '{typeName}'";
+            if (candidates.Count == 0)
+            {
+                result.Found = false;
+                result.Error = typeName != null
+                    ? $"Method '{methodName}' not found in type '{typeName}'."
+                    : $"Method '{methodName}' not found in any type.";
+                return result;
+            }
+
+            if (candidates.Count > 1 && typeName == null)
+            {
+                result.Found = false;
+                var sb = new StringBuilder();
+                sb.AppendLine($"Ambiguous: '{methodName}' found in {candidates.Count} types. Specify typeName:");
+                sb.AppendLine();
+                sb.AppendLine("| Type | File | Line |");
+                sb.AppendLine("|------|------|------|");
+                foreach (var (f, t, m) in candidates)
+                    sb.AppendLine($"| {t.Name} | `{f.RelativePath}` | {m.StartLine} |");
+                result.Error = sb.ToString();
+                return result;
+            }
+
+            var (file2, type2, method2) = candidates[0];
+
+            result.Found = true;
+            result.TypeName = type2.Name;
+            result.FilePath = file2.RelativePath;
+            result.StartLine = method2.StartLine;
+            result.EndLine = method2.EndLine;
+            result.Signature = method2.Signature ?? method2.Name;
+            result.ReturnType = method2.ReturnType;
+            result.Parameters = method2.Parameters;
+            result.Body = method2.Body;
+            result.IsAsync = method2.IsAsync;
+            result.IsStatic = method2.IsStatic;
+            result.AccessModifier = method2.AccessModifier;
+            result.XmlDoc = includeDoc ? method2.XmlDoc : "";
+
+            // If body is empty, try to read from file
+            if (string.IsNullOrEmpty(result.Body) && method2.StartLine > 0 && method2.EndLine > 0)
+            {
+                try
+                {
+                    var lines = File.ReadAllLines(file2.FilePath);
+                    int startIdx = method2.StartLine - 1;
+
+                    // If includeDoc, scan upward for /// XML doc comments
+                    if (includeDoc && !string.IsNullOrEmpty(method2.XmlDoc))
+                    {
+                        while (startIdx > 0 && lines[startIdx - 1].TrimStart().StartsWith("///"))
+                            startIdx--;
+                    }
+
+                    var methodLines = lines.Skip(startIdx).Take(method2.EndLine - startIdx);
+                    result.FullText = string.Join(Environment.NewLine, methodLines);
+                }
+                catch { }
+            }
+
             return result;
         }
 
@@ -548,22 +643,29 @@ namespace CodeMerger.Services
 
             if (Implementations.Any())
             {
-                sb.AppendLine($"**Found:** {Implementations.Count} implementations");
+                var concrete = Implementations.Where(i => !i.IsAbstract).ToList();
+                var abstracts = Implementations.Where(i => i.IsAbstract).ToList();
+
+                sb.AppendLine($"**Found:** {concrete.Count} concrete implementation{(concrete.Count != 1 ? "s" : "")}");
+                if (abstracts.Any())
+                    sb.AppendLine($"**Abstract:** {abstracts.Count}");
                 sb.AppendLine();
 
-                foreach (var impl in Implementations.OrderBy(i => i.FilePath))
+                sb.AppendLine("| Class | File | Inherits Via |");
+                sb.AppendLine("|-------|------|-------------|");
+
+                foreach (var impl in Implementations.OrderBy(i => i.IsAbstract).ThenBy(i => i.TypeName))
                 {
-                    var marker = impl.IsInterface ? "implements" : "extends";
-                    sb.AppendLine($"- **{impl.TypeName}** ({marker}) - `{impl.FilePath}:{impl.Line}`");
-                    if (!string.IsNullOrEmpty(impl.ImplementedMethod))
-                    {
-                        sb.AppendLine($"  - `{impl.ImplementedMethod}` at line {impl.MethodLine}");
-                    }
+                    var name = impl.IsAbstract ? $"*{impl.TypeName}* (abstract)" : impl.TypeName;
+                    var method = !string.IsNullOrEmpty(impl.ImplementedMethod)
+                        ? $" — `{impl.ImplementedMethod}` line {impl.MethodLine}"
+                        : "";
+                    sb.AppendLine($"| {name} | `{impl.FilePath}:{impl.Line}` | {impl.InheritancePath}{method} |");
                 }
             }
             else
             {
-                sb.AppendLine("*No implementations found*");
+                sb.AppendLine("*No implementations found.*");
             }
 
             return sb.ToString();
@@ -577,6 +679,8 @@ namespace CodeMerger.Services
         public int Line { get; set; }
         public bool IsInterface { get; set; }
         public bool IsInheritance { get; set; }
+        public bool IsAbstract { get; set; }
+        public string InheritancePath { get; set; } = "direct";
         public string? ImplementedMethod { get; set; }
         public int MethodLine { get; set; }
     }

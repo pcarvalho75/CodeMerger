@@ -156,6 +156,42 @@ namespace CodeMerger.Services.Mcp
             return sb.ToString();
         }
 
+        public string FindImplementations(JsonElement arguments)
+        {
+            if (!arguments.TryGetProperty("typeName", out var typeEl))
+                return "Error: 'typeName' parameter is required.";
+
+            var typeName = typeEl.GetString() ?? "";
+            _sendActivity($"Finding implementations of: {typeName}");
+
+            bool includeAbstract = false;
+            if (arguments.TryGetProperty("includeAbstract", out var abstractEl))
+                includeAbstract = abstractEl.GetBoolean();
+
+            var result = _semanticAnalyzer.FindImplementations(typeName, includeAbstract: includeAbstract);
+            return result.ToMarkdown();
+        }
+
+        public string GetMethodBody(JsonElement arguments)
+        {
+            if (!arguments.TryGetProperty("methodName", out var methodEl))
+                return "Error: 'methodName' parameter is required.";
+
+            var methodName = methodEl.GetString() ?? "";
+            _sendActivity($"Getting method body: {methodName}");
+
+            string? typeName = null;
+            if (arguments.TryGetProperty("typeName", out var typeEl))
+                typeName = typeEl.GetString();
+
+            bool includeDoc = false;
+            if (arguments.TryGetProperty("includeDoc", out var docEl))
+                includeDoc = docEl.GetBoolean();
+
+            var result = _semanticAnalyzer.GetMethodBody(methodName, typeName, includeDoc);
+            return result.ToMarkdown();
+        }
+
         public string GetDiagnostics(JsonElement arguments)
         {
             string? specificPath = null;
@@ -232,7 +268,7 @@ namespace CodeMerger.Services.Mcp
             }
             catch (Exception ex)
             {
-                return $"Error running diagnostics: {ex.Message}\n\n💡 **Tip:** Use `codemerger_build` for reliable compilation.";
+                return $"Error running diagnostics: {ex.Message}\n\n💡 **Tip:** Use `build` (without quickCheck) for full compilation.";
             }
             finally
             {

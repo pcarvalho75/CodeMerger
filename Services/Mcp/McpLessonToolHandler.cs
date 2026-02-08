@@ -11,12 +11,30 @@ namespace CodeMerger.Services.Mcp
     public class McpLessonToolHandler
     {
         private readonly LessonService _lessonService;
+        private readonly CommunityLessonSyncService _communitySyncService;
         private readonly Action<string> _sendActivity;
 
-        public McpLessonToolHandler(LessonService lessonService, Action<string> sendActivity)
+        public McpLessonToolHandler(LessonService lessonService, CommunityLessonSyncService communitySyncService, Action<string> sendActivity)
         {
             _lessonService = lessonService;
+            _communitySyncService = communitySyncService;
             _sendActivity = sendActivity;
+        }
+
+        /// <summary>
+        /// Routes a lesson command to the appropriate handler method.
+        /// </summary>
+        public string HandleCommand(string command, JsonElement arguments)
+        {
+            return command switch
+            {
+                "log" => LogLesson(arguments),
+                "get" => GetLessons(),
+                "delete" => DeleteLesson(arguments),
+                "sync" => SyncLessons(),
+                "submit" => SubmitLesson(arguments),
+                _ => "Error: Unknown lesson command. Use: log, get, delete, sync, submit"
+            };
         }
 
         /// <summary>
@@ -49,7 +67,7 @@ namespace CodeMerger.Services.Mcp
                 var count = _lessonService.GetLessonCount();
                 return $"# Lesson Not Logged\n\n" +
                        $"**Reason:** Local lesson storage is full ({count}/100).\n\n" +
-                       $"Ask the user to review lessons with `get_lessons` and either apply improvements or clear lessons with `delete_lesson`.";
+                       $"Ask the user to review lessons with `lessons` (command `get`) and either apply improvements or clear with `lessons` (command `delete`).";
             }
 
             var success = _lessonService.LogLesson(type, component, observation, proposal, suggestedCode);
@@ -161,11 +179,118 @@ namespace CodeMerger.Services.Mcp
 
             if (!success)
             {
-                return $"# Lesson Not Deleted\n\n{message}\n\n*Use `get_lessons` to see available lessons.*";
+                return $"# Lesson Not Deleted\n\n{message}\n\n*Use `lessons` (command `get`) to see available lessons.*";
             }
 
             var remaining = _lessonService.GetLessonCount();
             return $"# Lesson Deleted\n\n{message}\n**Remaining local:** {remaining}/100";
+        }
+
+        /// <summary>
+        /// Syncs community lessons from the remote repository.
+        /// </summary>
+        public string SyncLessons()
+        {
+            _sendActivity("Syncing community lessons...");
+            try
+            {
+                var (synced, count, message) = _communitySyncService.ForceSyncAsync().GetAwaiter().GetResult();
+                return $"# Community Lessons Sync\n\n{message}";
+            }
+            catch (Exception ex)
+            {
+                return $"# Community Lessons Sync\n\n**Error:** {ex.Message}";
+            }
+        }
+
+        /// <summary>
+        /// Submits a local lesson to the community repository as a GitHub Issue.
+        /// </summary>
+        public string SubmitLesson(JsonElement arguments)
+        {
+            if (!arguments.TryGetProperty("number", out var numberEl))
+                return "Error: 'number' parameter is required (lesson number from `lessons` with command `get`).";
+
+            var number = numberEl.GetInt32();
+            var all = _lessonService.GetLessons();
+
+            if (number < 1 || number > all.Count)
+                return $"Error: Lesson #{number} not found.";
+
+            var lesson = all[number - 1];
+            if (lesson.Source == LessonSource.Community)
+                return $"Error: Lesson #{number} is already a community lesson.";
+
+            var settings = CommunityLessonSettings.Load();
+            if (string.IsNullOrEmpty(settings.GitHubToken))
+                return "Error: GitHub sign-in required. Open CodeMerger Settings > Community Lessons and click 'Sign in with GitHub'.";
+
+            _sendActivity($"Submitting lesson #{number} to community...");
+
+            try
+            {
+                var repoOwner = "pcarvalho75";
+                var repoName = "CodeMerger";
+
+                // Parse owner/repo from settings URL if available
+                if (!string.IsNullOrEmpty(settings.RepoUrl))
+                {
+                    var uri = settings.RepoUrl.TrimEnd('/');
+                    var parts = uri.Split('/');
+                    if (parts.Length >= 2)
+                    {
+                        repoOwner = parts[parts.Length - 2];
+                        repoName = parts[parts.Length - 1];
+                    }
+                }
+
+                var contributor = !string.IsNullOrEmpty(settings.GitHubUsername)
+                    ? $"@{settings.GitHubUsername}" : "Anonymous";
+
+                var title = $"[Lesson] {lesson.Type}: {lesson.Component}";
+                var body = $"## Observation\n{lesson.Observation}\n\n" +
+                           $"## Proposal\n{lesson.Proposal}\n\n" +
+                           $"**Type:** {lesson.Type}\n" +
+                           $"**Component:** {lesson.Component}\n" +
+                           $"**Contributed by:** {contributor}\n" +
+                           $"**Logged:** {lesson.Timestamp:yyyy-MM-dd HH:mm}\n";
+
+                if (!string.IsNullOrEmpty(lesson.SuggestedCode))
+                    body += $"\n## Suggested Code\n```csharp\n{lesson.SuggestedCode}\n```\n";
+
+                using var client = new System.Net.Http.HttpClient();
+                client.DefaultRequestHeaders.Add("Authorization", $"token {settings.GitHubToken}");
+                client.DefaultRequestHeaders.Add("User-Agent", "CodeMerger");
+                client.DefaultRequestHeaders.Add("Accept", "application/vnd.github.v3+json");
+
+                var payload = JsonSerializer.Serialize(new
+                {
+                    title,
+                    body,
+                    labels = new[] { "lesson", lesson.Type }
+                });
+
+                var content = new System.Net.Http.StringContent(payload, System.Text.Encoding.UTF8, "application/json");
+                var response = client.PostAsync($"https://api.github.com/repos/{repoOwner}/{repoName}/issues", content)
+                    .GetAwaiter().GetResult();
+
+                if (response.IsSuccessStatusCode)
+                {
+                    var responseJson = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+                    using var doc = JsonDocument.Parse(responseJson);
+                    var issueUrl = doc.RootElement.GetProperty("html_url").GetString();
+                    return $"# Lesson Submitted\n\nLesson #{number} submitted as a GitHub Issue.\n**URL:** {issueUrl}";
+                }
+                else
+                {
+                    var errorBody = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+                    return $"# Submission Failed\n\n**Status:** {(int)response.StatusCode}\n**Response:** {errorBody}";
+                }
+            }
+            catch (Exception ex)
+            {
+                return $"# Submission Failed\n\n**Error:** {ex.Message}";
+            }
         }
     }
 }

@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
+using System.Text.Json;
 
 namespace CodeMerger.Services.Mcp
 {
@@ -17,6 +18,31 @@ namespace CodeMerger.Services.Mcp
         {
             _workspacePath = workspacePath;
             _sendActivity = sendActivity;
+        }
+
+        /// <summary>
+        /// Routes a git command to the appropriate handler method.
+        /// </summary>
+        public string HandleCommand(string action, JsonElement arguments)
+        {
+            switch (action)
+            {
+                case "status":
+                    return GetStatus();
+
+                case "commit":
+                    var commitMsg = arguments.TryGetProperty("message", out var msgEl) ? msgEl.GetString() : null;
+                    if (string.IsNullOrEmpty(commitMsg))
+                        return "Error: 'message' parameter is required.";
+                    var shouldPush = arguments.TryGetProperty("push", out var pushEl) && pushEl.GetBoolean();
+                    return shouldPush ? CommitAndPush(commitMsg) : Commit(commitMsg);
+
+                case "push":
+                    return Push();
+
+                default:
+                    return "Error: Unknown git action. Use: status, commit, push";
+            }
         }
 
         public string GetStatus()

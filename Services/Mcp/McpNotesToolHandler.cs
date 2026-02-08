@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace CodeMerger.Services.Mcp
@@ -17,10 +18,62 @@ namespace CodeMerger.Services.Mcp
         private const int WarnThresholdBytes = 16 * 1024; // Warn at ~80% capacity
 
         private readonly string _workspacePath;
+        private readonly Action<string> _sendActivity;
 
-        public McpNotesToolHandler(string workspacePath)
+        public McpNotesToolHandler(string workspacePath, Action<string> sendActivity)
         {
             _workspacePath = workspacePath;
+            _sendActivity = sendActivity;
+        }
+
+        /// <summary>
+        /// Routes a notes command to the appropriate handler method.
+        /// </summary>
+        public string HandleCommand(string command, JsonElement arguments)
+        {
+            switch (command)
+            {
+                case "get":
+                    _sendActivity("Reading project notes...");
+                    return GetNotes();
+
+                case "add":
+                    var note = arguments.TryGetProperty("note", out var noteEl) ? noteEl.GetString() : null;
+                    if (string.IsNullOrEmpty(note))
+                        return "Error: 'note' parameter is required.";
+                    var section = arguments.TryGetProperty("section", out var sectionEl) ? sectionEl.GetString() : null;
+                    var (success, message, summary) = AddNote(note, section);
+                    if (success && !string.IsNullOrEmpty(summary))
+                        _sendActivity($"Note added: {summary}");
+                    return message;
+
+                case "update":
+                    var updateSection = arguments.TryGetProperty("section", out var updateSectionEl) ? updateSectionEl.GetString() : null;
+                    var content = arguments.TryGetProperty("content", out var contentEl) ? contentEl.GetString() : null;
+                    if (string.IsNullOrEmpty(updateSection))
+                        return "Error: 'section' parameter is required.";
+                    if (string.IsNullOrEmpty(content))
+                        return "Error: 'content' parameter is required.";
+                    _sendActivity($"Updating section: {updateSection}");
+                    return UpdateNote(updateSection, content).message;
+
+                case "clear":
+                    var clearSection = arguments.TryGetProperty("section", out var clearSectionEl) ? clearSectionEl.GetString() : null;
+                    _sendActivity(string.IsNullOrEmpty(clearSection) ? "Clearing all notes..." : $"Clearing: {clearSection}");
+                    return ClearNotes(clearSection).message;
+
+                case "delete":
+                    if (!arguments.TryGetProperty("lineNumber", out var lineNumEl) || lineNumEl.ValueKind != System.Text.Json.JsonValueKind.Number)
+                        return "Error: 'lineNumber' parameter is required and must be a number.";
+                    var lineNumber = lineNumEl.GetInt32();
+                    var (deleteSuccess, deleteMessage, deletedNote) = DeleteNote(lineNumber);
+                    if (deleteSuccess)
+                        _sendActivity($"Deleted: {deletedNote}");
+                    return deleteMessage;
+
+                default:
+                    return "Error: Unknown notes action. Use: get, add, update, clear, delete";
+            }
         }
 
         private string NotesFilePath => Path.Combine(_workspacePath, NotesFileName);
@@ -29,7 +82,7 @@ namespace CodeMerger.Services.Mcp
         {
             if (!File.Exists(NotesFilePath))
             {
-                return "# Project Notes\n\nNo notes yet. Use `add_note` to start taking notes.";
+                return "# Project Notes\n\nNo notes yet. Use `notes` (command `add`) to start taking notes.";
             }
 
             var lines = File.ReadAllLines(NotesFilePath);

@@ -226,6 +226,7 @@ namespace CodeMerger.Services
                     typeInfo.Name = classDecl.Identifier.Text;
                     typeInfo.FullName = string.IsNullOrEmpty(namespaceName) ? typeInfo.Name : $"{namespaceName}.{typeInfo.Name}";
                     typeInfo.Kind = CodeTypeKind.Class;
+                    typeInfo.IsAbstract = classDecl.Modifiers.Any(m => m.IsKind(SyntaxKind.AbstractKeyword));
                     typeInfo.XmlDoc = GetXmlDoc(classDecl);
                     ExtractBaseTypes(classDecl.BaseList, typeInfo);
                     ExtractMembers(classDecl.Members, typeInfo, code, filePath, typeInfo.Name);
@@ -363,8 +364,8 @@ namespace CodeMerger.Services
                     info.IsVirtual = method.Modifiers.Any(m => m.IsKind(SyntaxKind.VirtualKeyword));
                     info.IsOverride = method.Modifiers.Any(m => m.IsKind(SyntaxKind.OverrideKeyword));
                     info.IsAbstract = method.Modifiers.Any(m => m.IsKind(SyntaxKind.AbstractKeyword));
-                    info.Parameters = method.ParameterList.Parameters.Select(p => $"{p.Type} {p.Identifier}").ToList();
-                    info.Signature = $"{info.Name}({string.Join(", ", method.ParameterList.Parameters.Select(p => p.Type?.ToString() ?? "var"))})";
+                    info.Parameters = method.ParameterList.Parameters.Select(p => $"{p.Type?.ToString() ?? "var"} {p.Identifier}").ToList();
+                    info.Signature = $"{info.Name}({string.Join(", ", method.ParameterList.Parameters.Select(p => $"{p.Type?.ToString() ?? "var"} {p.Identifier}"))})";
 
                     if (method.Body != null)
                     {
@@ -412,8 +413,8 @@ namespace CodeMerger.Services
                     info.Kind = CodeMemberKind.Constructor;
                     info.AccessModifier = GetAccessModifier(ctor.Modifiers);
                     info.IsStatic = ctor.Modifiers.Any(m => m.IsKind(SyntaxKind.StaticKeyword));
-                    info.Parameters = ctor.ParameterList.Parameters.Select(p => $"{p.Type} {p.Identifier}").ToList();
-                    info.Signature = $"{info.Name}({string.Join(", ", ctor.ParameterList.Parameters.Select(p => p.Type?.ToString() ?? "var"))})";
+                    info.Parameters = ctor.ParameterList.Parameters.Select(p => $"{p.Type?.ToString() ?? "var"} {p.Identifier}").ToList();
+                    info.Signature = $"{info.Name}({string.Join(", ", ctor.ParameterList.Parameters.Select(p => $"{p.Type?.ToString() ?? "var"} {p.Identifier}"))})";
 
                     if (ctor.Body != null)
                     {

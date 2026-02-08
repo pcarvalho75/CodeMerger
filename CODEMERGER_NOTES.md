@@ -7,3 +7,17 @@ Phase 4 — Live Pulse Tray Icon — Icon visually changes per state: gray/green
 Phase 5 — Quick Workspace Switcher — Switch workspace from tray context menu without opening window
 Phase 6 — Stdio Relay Fallback — Handle MCP child process crashes gracefully with tray notifications
 Phase 7 — Polish & Resilience — Port conflicts, graceful shutdown, Explorer restart survival, settings persistence, final review
+
+## Tool Overhaul Summary
+
+Completed 2026-02-08. Phases 1-6 and 8 done. Phase 7 (get_xaml_bindings) skipped — not useful without MVVM.
+
+Final state: 37 tools (down from 45). Description tokens reduced ~32% (McpToolRegistry.cs: 15,791 → 10,797).
+
+Key changes:
+- Consolidated: get_diagnostics→build(quickCheck), preview_write→write_file(preview), git_commit_push→git_commit(push), 5 lesson tools→1, 5 note tools→1
+- Replaced: get_type_hierarchy → find_implementations
+- Added: get_method_body
+- Enhanced: get_type shows full signatures with param names + [overload] markers
+- get_project_overview now includes Tool Guide section
+- All stale tool name references cleaned up

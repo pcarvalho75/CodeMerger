@@ -397,6 +397,10 @@ namespace CodeMerger.Services.Mcp
             if (!arguments.TryGetProperty("content", out var contentEl))
                 return "Error: 'content' parameter is required.";
 
+            // Preview mode — show diff without writing
+            if (arguments.TryGetProperty("preview", out var previewEl) && previewEl.GetBoolean())
+                return PreviewWriteFile(arguments);
+
             var path = pathEl.GetString() ?? "";
             var content = contentEl.GetString() ?? "";
 

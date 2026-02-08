@@ -1,5 +1,4 @@
 using System;
-using System.Collections.ObjectModel;
 using System.Windows.Media;
 using CodeMerger.Models;
 
@@ -66,15 +65,6 @@ namespace CodeMerger.Controls
 
         // Current workspace
         public Workspace? CurrentWorkspace { get; set; }
-
-        // Session stats
-        public McpSessionStats SessionStats { get; } = new();
-
-        // Activity log
-        public ObservableCollection<ActivityLogEntry> ActivityLog { get; } = new();
-
-        // Found files
-        public ObservableCollection<string> FoundFiles { get; } = new();
 
         // Events for cross-control communication
         public event Action<string, Brush>? StatusUpdated;
