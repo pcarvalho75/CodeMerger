@@ -517,7 +517,11 @@ namespace CodeMerger.Services.Mcp
             if (arguments.TryGetProperty("maxResults", out var maxEl))
                 maxResults = maxEl.GetInt32();
 
-            var result = _contextAnalyzer.SearchContent(pattern, isRegex, caseSensitive, contextLines, maxResults);
+            var summaryOnly = false;
+            if (arguments.TryGetProperty("summaryOnly", out var summaryEl))
+                summaryOnly = summaryEl.GetBoolean();
+
+            var result = _contextAnalyzer.SearchContent(pattern, isRegex, caseSensitive, contextLines, maxResults, summaryOnly);
             return result.ToMarkdown();
         }
 

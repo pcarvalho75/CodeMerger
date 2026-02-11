@@ -129,16 +129,19 @@ namespace CodeMerger.Services
         /// <summary>
         /// Searches file contents for a pattern and returns matches with context.
         /// </summary>
-        public ContentSearchResult SearchContent(string pattern, bool isRegex = true, bool caseSensitive = false, int contextLines = 2, int maxResults = 50)
+        public ContentSearchResult SearchContent(string pattern, bool isRegex = true, bool caseSensitive = false, int contextLines = 2, int maxResults = 50, bool summaryOnly = false)
         {
             var result = new ContentSearchResult
             {
                 Pattern = pattern,
                 IsRegex = isRegex,
-                CaseSensitive = caseSensitive
+                CaseSensitive = caseSensitive,
+                IsSummaryOnly = summaryOnly
             };
 
             var matches = new List<ContentMatch>();
+            var fileSummaries = new Dictionary<string, int>();
+            int actualTotal = 0;
             var regexOptions = caseSensitive ? RegexOptions.None : RegexOptions.IgnoreCase;
 
             Regex regex;
@@ -156,44 +159,55 @@ namespace CodeMerger.Services
 
             foreach (var file in _workspaceAnalysis.AllFiles)
             {
-                if (matches.Count >= maxResults)
-                    break;
-
                 try
                 {
                     var lines = File.ReadAllLines(file.FilePath);
+                    int fileMatchCount = 0;
 
-                    for (int i = 0; i < lines.Length && matches.Count < maxResults; i++)
+                    for (int i = 0; i < lines.Length; i++)
                     {
                         var line = lines[i];
                         var match = regex.Match(line);
 
                         if (match.Success)
                         {
-                            // Get context lines
-                            var contextBefore = new List<string>();
-                            var contextAfter = new List<string>();
+                            fileMatchCount++;
+                            actualTotal++;
 
-                            for (int j = Math.Max(0, i - contextLines); j < i; j++)
-                                contextBefore.Add(lines[j]);
+                            // In summary mode, skip collecting individual matches
+                            if (summaryOnly)
+                                continue;
 
-                            for (int j = i + 1; j <= Math.Min(lines.Length - 1, i + contextLines); j++)
-                                contextAfter.Add(lines[j]);
-
-                            matches.Add(new ContentMatch
+                            // In normal mode, collect matches up to maxResults
+                            if (matches.Count < maxResults)
                             {
-                                FilePath = file.RelativePath,
-                                LineNumber = i + 1,
-                                Line = line,
-                                MatchStart = match.Index,
-                                MatchLength = match.Length,
-                                MatchedText = match.Value,
-                                ContextBefore = contextBefore,
-                                ContextAfter = contextAfter,
-                                FileClassification = file.Classification.ToString()
-                            });
+                                var contextBefore = new List<string>();
+                                var contextAfter = new List<string>();
+
+                                for (int j = Math.Max(0, i - contextLines); j < i; j++)
+                                    contextBefore.Add(lines[j]);
+
+                                for (int j = i + 1; j <= Math.Min(lines.Length - 1, i + contextLines); j++)
+                                    contextAfter.Add(lines[j]);
+
+                                matches.Add(new ContentMatch
+                                {
+                                    FilePath = file.RelativePath,
+                                    LineNumber = i + 1,
+                                    Line = line,
+                                    MatchStart = match.Index,
+                                    MatchLength = match.Length,
+                                    MatchedText = match.Value,
+                                    ContextBefore = contextBefore,
+                                    ContextAfter = contextAfter,
+                                    FileClassification = file.Classification.ToString()
+                                });
+                            }
                         }
                     }
+
+                    if (fileMatchCount > 0)
+                        fileSummaries[file.RelativePath] = fileMatchCount;
                 }
                 catch
                 {
@@ -203,7 +217,10 @@ namespace CodeMerger.Services
 
             result.Matches = matches;
             result.TotalMatches = matches.Count;
+            result.ActualTotalMatches = actualTotal;
             result.FilesSearched = _workspaceAnalysis.AllFiles.Count;
+            result.FilesWithMatches = fileSummaries.Count;
+            result.FileSummaries = fileSummaries;
 
             return result;
         }
@@ -674,7 +691,11 @@ namespace CodeMerger.Services
         public bool CaseSensitive { get; set; }
         public List<ContentMatch> Matches { get; set; } = new();
         public int TotalMatches { get; set; }
+        public int ActualTotalMatches { get; set; }
         public int FilesSearched { get; set; }
+        public int FilesWithMatches { get; set; }
+        public Dictionary<string, int> FileSummaries { get; set; } = new();
+        public bool IsSummaryOnly { get; set; }
         public string? Error { get; set; }
 
         public string ToMarkdown()
@@ -687,9 +708,18 @@ namespace CodeMerger.Services
                 return sb.ToString();
             }
 
+            if (IsSummaryOnly)
+                return ToSummaryMarkdown();
+
             sb.AppendLine($"# Search Results: `{Pattern}`");
             sb.AppendLine();
-            sb.AppendLine($"**Found:** {TotalMatches} matches in {Matches.Select(m => m.FilePath).Distinct().Count()} files");
+
+            var shownFiles = Matches.Select(m => m.FilePath).Distinct().Count();
+            if (ActualTotalMatches > TotalMatches)
+                sb.AppendLine($"**Found:** {TotalMatches} matches shown ({ActualTotalMatches} total) in {shownFiles} of {FilesWithMatches} files");
+            else
+                sb.AppendLine($"**Found:** {TotalMatches} matches in {shownFiles} files");
+
             sb.AppendLine($"**Files searched:** {FilesSearched}");
             sb.AppendLine($"**Options:** Regex={IsRegex}, CaseSensitive={CaseSensitive}");
             sb.AppendLine();
@@ -721,6 +751,35 @@ namespace CodeMerger.Services
                     sb.AppendLine("```");
                     sb.AppendLine();
                 }
+            }
+
+            return sb.ToString();
+        }
+
+        private string ToSummaryMarkdown()
+        {
+            var sb = new StringBuilder();
+
+            sb.AppendLine($"# Search Summary: `{Pattern}`");
+            sb.AppendLine();
+            sb.AppendLine($"**Total matches:** {ActualTotalMatches} in {FilesWithMatches} files");
+            sb.AppendLine($"**Files searched:** {FilesSearched}");
+            sb.AppendLine($"**Options:** Regex={IsRegex}, CaseSensitive={CaseSensitive}");
+            sb.AppendLine();
+
+            if (FileSummaries.Count > 0)
+            {
+                sb.AppendLine("| File | Matches |");
+                sb.AppendLine("|------|---------|");
+
+                foreach (var kvp in FileSummaries.OrderByDescending(x => x.Value))
+                {
+                    sb.AppendLine($"| `{kvp.Key}` | {kvp.Value} |");
+                }
+            }
+            else
+            {
+                sb.AppendLine("*No matches found.*");
             }
 
             return sb.ToString();

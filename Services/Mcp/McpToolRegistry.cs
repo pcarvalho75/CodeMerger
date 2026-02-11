@@ -32,7 +32,7 @@ namespace CodeMerger.Services.Mcp
                 {
                     name = "codemerger_get_project_overview",
                     description = "Get high-level project info: framework, namespaces, file breakdown, entry points, project references.\n" +
-                        "Call this first. Then: list_files to drill in, or get_context for task-based exploration.",
+                        "Call this once at the start of a session. Then: get_context for task-based exploration, or list_files to drill into a namespace.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -60,7 +60,9 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_get_file",
-                    description = "Get full file content. For large files (>300 lines), prefer get_lines. Always verify before str_replace.",
+                    description = "Get full file content. For large files (>300 lines), prefer get_lines.\n" +
+                        "If you only need one method, use get_method_body instead — it's faster and returns exactly what you need.\n" +
+                        "Always verify content before str_replace.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -75,7 +77,8 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_search_code",
-                    description = "Search the semantic index for type/method/namespace names. Use grep instead for literal text, comments, or string values.",
+                    description = "Search the semantic index for type/method/namespace names. PREFER THIS over grep for finding C# symbols.\n" +
+                        "Use grep ONLY for literal text in comments, strings, XAML, or non-C# files.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -91,7 +94,8 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_get_type",
-                    description = "Get type details: members with full signatures, base types, interfaces. Call get_dependencies before modifying.",
+                    description = "Get type details: members with full signatures, base types, interfaces.\n" +
+                        "Use to understand a class's API before modifying it. Call get_dependencies before making changes.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -106,7 +110,9 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_get_dependencies",
-                    description = "Get what a type uses and what uses it. ESSENTIAL before rename_symbol, move_file, or changing public members.",
+                    description = "Get what a type uses and what uses it. ALWAYS call before modifying any public type, method signature, or property.\n" +
+                        "Essential before: rename_symbol, move_file, changing public members, adding/removing properties.\n" +
+                        "Prevents breaking unknown consumers — catches errors before they happen instead of at build time.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -148,7 +154,11 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_grep",
-                    description = "Regex/text search in file contents with line numbers and context. Use search_code instead for type/method names.",
+                    description = "Regex/text search in file contents with line numbers and context.\n" +
+                        "ONLY use for: XAML content, string literals, comments, non-C# files, or when you need line-level context.\n" +
+                        "DO NOT use for: finding C# symbol usages (use find_references), finding types/methods (use search_code), " +
+                        "checking who calls a method (use get_callers), or verifying property usage across files (use find_references).\n" +
+                        "When tempted to grep a C# symbol name, stop and use the semantic tool instead.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -158,7 +168,8 @@ namespace CodeMerger.Services.Mcp
                                 { "isRegex", new Dictionary<string, object> { { "type", "boolean" }, { "description", "Treat pattern as regex (default: true)" }, { "default", true } } },
                                 { "caseSensitive", new Dictionary<string, object> { { "type", "boolean" }, { "description", "Case-sensitive search (default: false)" }, { "default", false } } },
                                 { "contextLines", new Dictionary<string, object> { { "type", "integer" }, { "description", "Lines of context before/after match (default: 2)" }, { "default", 2 } } },
-                                { "maxResults", new Dictionary<string, object> { { "type", "integer" }, { "description", "Maximum results to return (default: 50)" }, { "default", 50 } } }
+                                { "maxResults", new Dictionary<string, object> { { "type", "integer" }, { "description", "Maximum results to return (default: 50)" }, { "default", 50 } } },
+                                { "summaryOnly", new Dictionary<string, object> { { "type", "boolean" }, { "description", "Return only a file-by-file match count table instead of full line matches. Useful for getting an overview of where a pattern appears across the project (default: false)" }, { "default", false } } }
                             }
                         },
                         { "required", new[] { "pattern" } }
@@ -167,7 +178,9 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_get_context",
-                    description = "Describe a task in natural language, get relevant files ranked by relevance with call-graph expansion. Best starting point for new tasks.",
+                    description = "START HERE for any new task. Describe what you want to do in natural language, get relevant files ranked by relevance with call-graph expansion.\n" +
+                        "Returns file contents so you can understand the codebase before making changes.\n" +
+                        "More efficient than manually calling get_file on multiple files — one call replaces 3-5 individual file reads.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -201,7 +214,9 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_get_method_body",
-                    description = "Get one method's source code by name. If ambiguous, returns disambiguation list — specify typeName to resolve.",
+                    description = "Get one method's source code by name. PREFER THIS over get_file when you only need one method.\n" +
+                        "Much more efficient than loading an entire file just to read a single method.\n" +
+                        "If ambiguous (multiple methods with same name), returns disambiguation list — specify typeName to resolve.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -225,7 +240,9 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_find_references",
-                    description = "Find all references to a symbol using semantic analysis. Use grep instead for plain text search.",
+                    description = "Find all references to a symbol using semantic analysis. PREFER THIS over grep for verifying C# symbol usage.\n" +
+                        "Use to: check if a property/method/type is used, verify wiring after adding new members, find all consumers before refactoring.\n" +
+                        "Only use grep instead when searching for non-C# content (XAML, comments, string literals).",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -241,7 +258,8 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_get_callers",
-                    description = "Get all methods that call a specific method. Check before modifying signatures. Pair with get_callees.",
+                    description = "Get all methods that call a specific method. PREFER THIS over grep when tracing call chains.\n" +
+                        "Essential before modifying method signatures — shows exactly what will break. Pair with get_callees for full call graph.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -257,7 +275,8 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_get_callees",
-                    description = "Get all methods that a specific method calls. Pair with get_callers for full call graph.",
+                    description = "Get all methods that a specific method calls. Use to understand a method's dependencies before modifying it.\n" +
+                        "Pair with get_callers for full call graph understanding.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
