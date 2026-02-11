@@ -6,6 +6,8 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.IO;
+using System.IO.Pipes;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
@@ -60,6 +62,8 @@ namespace CodeMerger
             {
                 SaveCurrentWorkspace();
                 await ScanFilesAsync();
+                if (_mcpConnectionService?.IsConnected == true)
+                    _mcpConnectionService.SendCommand("RESYNC");
             };
             sourceDirectoriesTab.UIStateRequested += (s, enabled) => SetUIState(enabled);
 
@@ -330,6 +334,10 @@ namespace CodeMerger
                             headerBar.SwitchWorkspaceFromMcp(matchingWorkspace);
                             _isSwitchingFromMcp = false;
                         }
+
+                        // Refresh file list and workspace data to match the new workspace
+                        if (matchingWorkspace != null)
+                            _workspaceManager.SelectWorkspace(matchingWorkspace);
                         
                         // Update connection status text
                         _appState.SetClaudeConnected(switchedName);
@@ -688,5 +696,6 @@ namespace CodeMerger
             mainGrid.IsEnabled = isEnabled;
             statusBar.SetScanningState(isEnabled);
         }
+
     }
 }

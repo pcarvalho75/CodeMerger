@@ -88,6 +88,7 @@ namespace CodeMerger.Services
         public event Action<string>? OnSseMessageReceived;
 
         public const string ActivityPipeName = "codemerger_activity";
+        public const string CommandPipeName = "codemerger_command";
 
         private static readonly JsonSerializerOptions JsonOptions = new()
         {
@@ -140,7 +141,7 @@ namespace CodeMerger.Services
         /// Loads the new workspace config and re-indexes.
         /// Supports comma-separated names for merged workspace mode (e.g., "SmartMoney,Sequoia").
         /// </summary>
-        public bool SwitchToWorkspace(string workspaceName)
+        public bool SwitchToWorkspace(string workspaceName, bool notifyGui = true)
         {
             // Check for merged workspace request (comma-separated names)
             if (workspaceName.Contains(','))
@@ -153,7 +154,7 @@ namespace CodeMerger.Services
 
                 if (names.Length > 1)
                 {
-                    return LoadMergedWorkspaces(names);
+                    return LoadMergedWorkspaces(names, notifyGui);
                 }
                 // Single name after split, treat as normal
                 workspaceName = names.FirstOrDefault() ?? workspaceName;
@@ -229,7 +230,8 @@ namespace CodeMerger.Services
             LogWithMemory($"Switched to workspace: {workspaceName} ({_workspaceAnalysis?.TotalFiles ?? 0} files)");
             
             // Notify GUI about workspace switch
-            SendActivity($"WORKSPACE_SWITCHED|{workspaceName}|");
+            if (notifyGui)
+                SendActivity($"WORKSPACE_SWITCHED|{workspaceName}|");
             
             return true;
         }
@@ -239,7 +241,7 @@ namespace CodeMerger.Services
         /// Files are tagged with their source workspace for clear project boundaries.
         /// Shared directories appear with both workspace tags.
         /// </summary>
-        private bool LoadMergedWorkspaces(string[] workspaceNames)
+        private bool LoadMergedWorkspaces(string[] workspaceNames, bool notifyGui = true)
         {
             _logger.LogSeparator($"MERGE: {string.Join(", ", workspaceNames)}");
             Log($"Loading merged workspaces: {string.Join(", ", workspaceNames)}");
@@ -336,7 +338,8 @@ namespace CodeMerger.Services
             LogWithMemory($"Merged workspaces loaded: {_workspaceName} ({_workspaceAnalysis?.TotalFiles ?? 0} files)");
             
             // Notify GUI about workspace switch (use first workspace name for merged)
-            SendActivity($"WORKSPACE_SWITCHED|{_workspaceName}|");
+            if (notifyGui)
+                SendActivity($"WORKSPACE_SWITCHED|{_workspaceName}|");
             
             return true;
         }
@@ -579,6 +582,7 @@ namespace CodeMerger.Services
             Log("MCP Server starting...");
 
             var parentMonitorTask = StartParentProcessMonitor(token);
+            StartCommandListener(token);
 
             _serverTask = Task.Run(async () =>
             {
@@ -623,6 +627,45 @@ namespace CodeMerger.Services
 
             await _serverTask;
             _cancellationTokenSource.Cancel();
+        }
+
+        private void StartCommandListener(CancellationToken token)
+        {
+            Task.Run(async () =>
+            {
+                Log("Command listener started");
+                while (!token.IsCancellationRequested)
+                {
+                    try
+                    {
+                        using var pipe = new NamedPipeServerStream(
+                            CommandPipeName,
+                            PipeDirection.In,
+                            NamedPipeServerStream.MaxAllowedServerInstances,
+                            PipeTransmissionMode.Byte,
+                            PipeOptions.Asynchronous);
+
+                        await pipe.WaitForConnectionAsync(token);
+                        using var reader = new StreamReader(pipe);
+                        var command = await reader.ReadLineAsync();
+
+                        if (string.IsNullOrWhiteSpace(command)) continue;
+
+                        Log($"Command received: {command}");
+
+                        if (command.Equals("RESYNC", StringComparison.OrdinalIgnoreCase))
+                        {
+                            SwitchToWorkspace(_workspaceName, notifyGui: false);
+                        }
+                    }
+                    catch (OperationCanceledException) { break; }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError("CommandListener", ex);
+                    }
+                }
+                Log("Command listener stopped");
+            }, token);
         }
 
         private Task StartParentProcessMonitor(CancellationToken token)

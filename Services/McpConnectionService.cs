@@ -281,6 +281,22 @@ namespace CodeMerger.Services
             }
         }
 
+        public void SendCommand(string command)
+        {
+            Task.Run(() =>
+            {
+                try
+                {
+                    using var pipe = new NamedPipeClientStream(".", McpServer.CommandPipeName, PipeDirection.Out);
+                    pipe.Connect(500);
+                    using var writer = new StreamWriter(pipe);
+                    writer.WriteLine(command);
+                    writer.Flush();
+                }
+                catch { }
+            });
+        }
+
         public void Dispose()
         {
             if (_disposed) return;
