@@ -171,7 +171,7 @@ namespace CodeMerger.Services
                     "codemerger_find_implementations", "codemerger_grep", "codemerger_get_context",
                     "codemerger_get_lines", "codemerger_get_method_body", "codemerger_find_references", "codemerger_get_callers",
                     "codemerger_get_callees", "codemerger_str_replace",
-                    "codemerger_write_file", "codemerger_delete_file",
+                    "codemerger_write_file", "codemerger_delete_file", "codemerger_grep_replace",
                     "codemerger_undo", "codemerger_move_file", "codemerger_rename_symbol",
                     "codemerger_generate_interface", "codemerger_extract_method", "codemerger_add_parameter",
                     "codemerger_implement_interface", "codemerger_generate_constructor", "codemerger_build",
@@ -179,7 +179,8 @@ namespace CodeMerger.Services
                     "codemerger_switch_project", "codemerger_clean_backups", "codemerger_find_duplicates",
                     "codemerger_lessons", "codemerger_notes",
                     "codemerger_git_status", "codemerger_git_commit",
-                    "codemerger_git_push"
+                    "codemerger_git_push",
+                    "codemerger_help"
                 )
             };
 

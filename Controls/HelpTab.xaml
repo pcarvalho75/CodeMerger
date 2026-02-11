@@ -1,0 +1,40 @@
+<UserControl x:Class="CodeMerger.Controls.HelpTab"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid Margin="0,16,0,0">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="200"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- Table of Contents -->
+        <Grid Grid.Column="0" Margin="0,0,12,0">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <TextBlock Text="User Manual" FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" Margin="0,0,0,8"/>
+            <ListBox x:Name="tocListBox" Grid.Row="1" Style="{StaticResource ModernListBox}" 
+                     SelectionChanged="TocListBox_SelectionChanged" DisplayMemberPath="Title"/>
+        </Grid>
+
+        <!-- Content -->
+        <Border Grid.Column="1" Background="{StaticResource BackgroundDark}" CornerRadius="8" Padding="20">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+                <TextBlock x:Name="sectionTitle" Text="Welcome" FontSize="16" FontWeight="SemiBold" 
+                           Foreground="{StaticResource AccentColor}" Margin="0,0,0,12"/>
+                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                    <TextBox x:Name="sectionContent" IsReadOnly="True" TextWrapping="Wrap"
+                             AcceptsReturn="True"
+                             Background="Transparent" Foreground="{StaticResource TextPrimary}" 
+                             BorderThickness="0" FontSize="12.5"
+                             Padding="0"/>
+                </ScrollViewer>
+            </Grid>
+        </Border>
+    </Grid>
+</UserControl>

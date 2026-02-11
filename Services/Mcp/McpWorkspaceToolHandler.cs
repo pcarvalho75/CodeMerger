@@ -331,7 +331,25 @@ namespace CodeMerger.Services.Mcp
                     sb.AppendLine("## Errors");
                     foreach (var error in errors.Take(50))
                     {
-                        sb.AppendLine($"- ❌ {error}");
+                        sb.AppendLine($"- ❌ {error.display}");
+                        // Show source context if we have file + line info
+                        if (error.fullPath != null && error.line > 0)
+                        {
+                            try
+                            {
+                                var sourceLines = File.ReadAllLines(error.fullPath);
+                                int startLine = Math.Max(0, error.line - 2);
+                                int endLine = Math.Min(sourceLines.Length - 1, error.line + 1);
+                                sb.AppendLine("  ```");
+                                for (int i = startLine; i <= endLine; i++)
+                                {
+                                    var marker = (i == error.line - 1) ? ">>>" : "   ";
+                                    sb.AppendLine($"  {marker} {i + 1}: {sourceLines[i]}");
+                                }
+                                sb.AppendLine("  ```");
+                            }
+                            catch { /* skip if file can't be read */ }
+                        }
                     }
                     if (errors.Count > 50)
                         sb.AppendLine($"- ... and {errors.Count - 50} more errors");
@@ -402,9 +420,9 @@ namespace CodeMerger.Services.Mcp
             return (null, "none");
         }
 
-        private (List<string> errors, List<string> warnings) ParseBuildOutput(string output)
+        private (List<(string display, string? fullPath, int line)> errors, List<string> warnings) ParseBuildOutput(string output)
         {
-            var errors = new List<string>();
+            var errors = new List<(string display, string? fullPath, int line)>();
             var warnings = new List<string>();
 
             // MSBuild/dotnet build output patterns:
@@ -415,11 +433,13 @@ namespace CodeMerger.Services.Mcp
 
             foreach (Match match in errorPattern.Matches(output))
             {
-                var file = Path.GetFileName(match.Groups[1].Value);
-                var line = match.Groups[2].Value;
+                var fullPath = match.Groups[1].Value.Trim();
+                var lineNum = int.TryParse(match.Groups[2].Value, out var l) ? l : 0;
+                var file = Path.GetFileName(fullPath);
                 var code = match.Groups[4].Value;
                 var message = match.Groups[5].Value;
-                errors.Add($"`{file}:{line}` [{code}] {message}");
+                var resolvedPath = File.Exists(fullPath) ? fullPath : null;
+                errors.Add(($"`{file}:{lineNum}` [{code}] {message}", resolvedPath, lineNum));
             }
 
             foreach (Match match in warningPattern.Matches(output))
@@ -438,8 +458,8 @@ namespace CodeMerger.Services.Mcp
                 var code = match.Groups[1].Value;
                 var message = match.Groups[2].Value;
                 var errorText = $"[{code}] {message}";
-                if (!errors.Any(e => e.Contains(message)))
-                    errors.Add(errorText);
+                if (!errors.Any(e => e.display.Contains(message)))
+                    errors.Add((errorText, null, 0));
             }
 
             return (errors, warnings);

@@ -230,36 +230,59 @@ namespace CodeMerger.Services
             var keywords = new List<string>();
             var text = taskDescription.ToLowerInvariant();
 
-            // Common programming concepts to look for
-            var conceptPatterns = new Dictionary<string, string[]>
+            // Step 1: Extract ALL meaningful words (3+ chars, not stop words)
+            var stopWords = new HashSet<string>
             {
-                { "mcp", new[] { "mcp", "tool", "server", "protocol" } },
-                { "ui", new[] { "ui", "view", "window", "xaml", "button", "dialog", "form" } },
-                { "data", new[] { "model", "data", "entity", "dto", "database", "repository" } },
-                { "service", new[] { "service", "api", "endpoint", "handler" } },
-                { "analysis", new[] { "analyze", "parse", "process", "scan" } },
-                { "file", new[] { "file", "read", "write", "load", "save", "io" } },
-                { "search", new[] { "search", "find", "query", "filter", "match" } },
-                { "dependency", new[] { "dependency", "reference", "import", "using" } },
-                { "type", new[] { "type", "class", "interface", "struct", "enum" } },
-                { "method", new[] { "method", "function", "call", "invoke" } },
-                { "config", new[] { "config", "setting", "option", "preference" } },
-                { "test", new[] { "test", "unit", "spec", "mock", "assert" } },
-                { "error", new[] { "error", "exception", "catch", "try", "handle" } },
-                { "async", new[] { "async", "await", "task", "thread", "parallel" } },
-                { "json", new[] { "json", "serialize", "deserialize", "parse" } },
-                { "index", new[] { "index", "generate", "build", "create" } }
+                "the", "and", "for", "that", "this", "with", "from", "have", "are", "was",
+                "will", "can", "has", "but", "not", "you", "all", "any", "been", "each",
+                "how", "its", "may", "new", "now", "old", "see", "way", "who", "did",
+                "get", "got", "let", "say", "she", "too", "use", "her", "him", "his",
+                "what", "when", "where", "which", "while", "about", "after", "before",
+                "being", "below", "between", "both", "could", "does", "doing", "down",
+                "during", "into", "just", "more", "most", "only", "other", "over",
+                "same", "should", "some", "such", "than", "them", "then", "there",
+                "these", "they", "those", "through", "under", "very", "were", "would",
+                "also", "want", "need", "like", "make", "look", "find", "take", "give"
             };
 
-            foreach (var concept in conceptPatterns)
+            var wordPattern = new Regex(@"\b([a-zA-Z]{3,})\b");
+            var allWords = wordPattern.Matches(taskDescription)
+                .Cast<Match>()
+                .Select(m => m.Value.ToLowerInvariant())
+                .Where(w => !stopWords.Contains(w))
+                .Distinct()
+                .ToList();
+
+            // Step 2: Match words directly against workspace type and method names (highest value)
+            var typeNames = _workspaceAnalysis.AllFiles
+                .SelectMany(f => f.Types)
+                .Select(t => t.Name)
+                .Distinct()
+                .ToList();
+
+            var methodNames = _workspaceAnalysis.AllFiles
+                .SelectMany(f => f.Types)
+                .SelectMany(t => t.Members)
+                .Select(m => m.Name)
+                .Distinct()
+                .ToList();
+
+            foreach (var word in allWords)
             {
-                if (concept.Value.Any(term => text.Contains(term)))
+                // Check if this word matches part of any type name
+                foreach (var typeName in typeNames)
                 {
-                    keywords.Add(concept.Key);
+                    if (typeName.ToLowerInvariant().Contains(word) && word.Length >= 4)
+                    {
+                        keywords.Add(typeName); // Add the actual type name for precise matching
+                    }
                 }
             }
 
-            // Extract specific identifiers (PascalCase, camelCase words)
+            // Step 3: Add all meaningful content words as keywords (for file/member matching)
+            keywords.AddRange(allWords);
+
+            // Step 4: Extract specific identifiers (PascalCase, camelCase words)
             var identifierPattern = new Regex(@"\b([A-Z][a-zA-Z0-9]*|[a-z][a-zA-Z0-9]*[A-Z][a-zA-Z0-9]*)\b");
             var identifiers = identifierPattern.Matches(taskDescription)
                 .Cast<Match>()
@@ -269,7 +292,7 @@ namespace CodeMerger.Services
 
             keywords.AddRange(identifiers);
 
-            // Extract quoted terms
+            // Step 5: Extract quoted terms
             var quotedPattern = new Regex(@"[""']([^""']+)[""']");
             var quoted = quotedPattern.Matches(taskDescription)
                 .Cast<Match>()
@@ -287,79 +310,72 @@ namespace CodeMerger.Services
             var fileLower = file.RelativePath.ToLowerInvariant();
             var fileNameLower = file.FileName.ToLowerInvariant();
 
-            // Direct file name mention (highest weight)
             foreach (var keyword in keywords)
             {
-                if (fileNameLower.Contains(keyword.ToLowerInvariant()))
+                var kwLower = keyword.ToLowerInvariant();
+
+                // Direct file name match
+                if (fileNameLower.Contains(kwLower))
                     score += 10;
+
+                // Path match (e.g., keyword "dashboard" matching "Live\Dashboard\")
+                if (fileLower.Contains(kwLower))
+                    score += 4;
+
+                foreach (var type in file.Types)
+                {
+                    var typeLower = type.Name.ToLowerInvariant();
+
+                    // Exact type name match (highest value - keyword IS a type name)
+                    if (typeLower == kwLower)
+                        score += 20;
+
+                    // Partial type name match
+                    else if (typeLower.Contains(kwLower) && kwLower.Length >= 4)
+                        score += 10;
+
+                    // Member name matches
+                    foreach (var member in type.Members)
+                    {
+                        var memberLower = member.Name.ToLowerInvariant();
+                        if (memberLower.Contains(kwLower) && kwLower.Length >= 4)
+                            score += 5;
+                    }
+                }
             }
 
-            // Type name matches
+            // Call graph scoring: files with heavily-called methods are important
             foreach (var type in file.Types)
             {
-                var typeLower = type.Name.ToLowerInvariant();
-                foreach (var keyword in keywords)
-                {
-                    if (typeLower.Contains(keyword.ToLowerInvariant()))
-                        score += 8;
-                }
-
-                // Method name matches
                 foreach (var member in type.Members)
                 {
-                    var memberLower = member.Name.ToLowerInvariant();
-                    foreach (var keyword in keywords)
-                    {
-                        if (memberLower.Contains(keyword.ToLowerInvariant()))
-                            score += 3;
-                    }
-
-                    // Call graph scoring: methods that are called by many others are important
                     var methodKey = $"{type.Name}.{member.Name}";
                     if (_callers.TryGetValue(methodKey, out var callerSet))
                     {
-                        score += Math.Min(callerSet.Count * 0.5, 5); // Up to +5 for heavily called methods
+                        score += Math.Min(callerSet.Count * 0.5, 5);
                     }
                 }
             }
 
-            // Classification bonus based on task type
+            // Classification bonus based on task keywords
             if (taskLower.Contains("tool") || taskLower.Contains("mcp"))
             {
                 if (fileLower.Contains("mcp") || fileLower.Contains("server"))
                     score += 15;
             }
 
-            if (taskLower.Contains("ui") || taskLower.Contains("view") || taskLower.Contains("window"))
+            if (taskLower.Contains("ui") || taskLower.Contains("view") || taskLower.Contains("window") || taskLower.Contains("xaml"))
             {
                 if (file.Classification == FileClassification.View)
                     score += 10;
             }
 
-            if (taskLower.Contains("model") || taskLower.Contains("data"))
-            {
-                if (file.Classification == FileClassification.Model)
-                    score += 10;
-            }
-
-            if (taskLower.Contains("service") || taskLower.Contains("logic"))
-            {
-                if (file.Classification == FileClassification.Service)
-                    score += 10;
-            }
-
-            if (taskLower.Contains("analyze") || taskLower.Contains("parse"))
-            {
-                if (fileLower.Contains("analyzer") || fileLower.Contains("parser"))
-                    score += 12;
-            }
-
-            // Dependency-based scoring - if a high-scoring file depends on this one
+            // Dependency-based scoring
             foreach (var type in file.Types)
             {
                 if (_workspaceAnalysis.DependencyMap.Values.Any(deps => deps.Contains(type.Name)))
                 {
-                    score += 2; // Files that others depend on are valuable context
+                    score += 2;
                 }
             }
 

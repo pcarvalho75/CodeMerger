@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using CodeMerger.Models;
 
 namespace CodeMerger.Services.Mcp
@@ -348,34 +349,84 @@ namespace CodeMerger.Services.Mcp
             sb.AppendLine();
 
             // Show what we were looking for
-            var lines = searchStr.Split('\n');
-            sb.AppendLine($"**Looking for ({lines.Length} lines):**");
+            var searchLines = searchStr.Split('\n');
+            sb.AppendLine($"**Looking for ({searchLines.Length} lines):**");
             sb.AppendLine("```");
-            foreach (var line in lines.Take(10))
+            foreach (var line in searchLines.Take(10))
             {
                 sb.AppendLine(line.TrimEnd('\r'));
             }
-            if (lines.Length > 10)
-                sb.AppendLine($"... ({lines.Length - 10} more lines)");
+            if (searchLines.Length > 10)
+                sb.AppendLine($"... ({searchLines.Length - 10} more lines)");
             sb.AppendLine("```");
             sb.AppendLine();
 
-            // Try to find first line in file for hints
-            var firstLine = lines.FirstOrDefault(l => l.Trim().Length > 5)?.Trim();
-            if (!string.IsNullOrEmpty(firstLine))
+            // Find best fuzzy match
+            var contentLines = content.Split('\n');
+            var searchTrimmed = searchLines.Select(l => l.TrimEnd('\r')).ToArray();
+            var firstSearchLine = searchTrimmed.FirstOrDefault(l => l.Trim().Length > 5)?.Trim() ?? "";
+
+            int bestMatchLine = -1;
+            int bestMatchScore = 0;
+
+            if (!string.IsNullOrEmpty(firstSearchLine))
             {
-                var contentLines = content.Split('\n');
+                // Find candidate lines that contain part of the first meaningful search line
+                var searchSnippet = firstSearchLine.Substring(0, Math.Min(30, firstSearchLine.Length));
                 for (int i = 0; i < contentLines.Length; i++)
                 {
-                    if (contentLines[i].Contains(firstLine.Substring(0, Math.Min(20, firstLine.Length))))
+                    if (contentLines[i].Contains(searchSnippet))
                     {
-                        sb.AppendLine($"**Possible match at line {i + 1}:**");
-                        sb.AppendLine("```");
-                        sb.AppendLine(contentLines[i].TrimEnd('\r'));
-                        sb.AppendLine("```");
-                        sb.AppendLine();
-                        break;
+                        // Score this candidate: how many subsequent lines also match?
+                        int score = 0;
+                        for (int j = 0; j < searchTrimmed.Length && (i + j) < contentLines.Length; j++)
+                        {
+                            if (contentLines[i + j].TrimEnd('\r').Trim() == searchTrimmed[j].Trim())
+                                score += 2;
+                            else if (contentLines[i + j].Contains(searchTrimmed[j].Trim().Substring(0, Math.Min(15, searchTrimmed[j].Trim().Length))))
+                                score += 1;
+                        }
+                        if (score > bestMatchScore)
+                        {
+                            bestMatchScore = score;
+                            bestMatchLine = i;
+                        }
                     }
+                }
+            }
+
+            if (bestMatchLine >= 0)
+            {
+                sb.AppendLine($"**Possible match at line {bestMatchLine + 1}:**");
+                sb.AppendLine("```");
+                int showLines = Math.Min(searchTrimmed.Length + 2, contentLines.Length - bestMatchLine);
+                for (int i = bestMatchLine; i < bestMatchLine + showLines && i < contentLines.Length; i++)
+                {
+                    sb.AppendLine(contentLines[i].TrimEnd('\r'));
+                }
+                sb.AppendLine("```");
+                sb.AppendLine();
+
+                // Show differences
+                var diffs = new List<string>();
+                for (int j = 0; j < searchTrimmed.Length && (bestMatchLine + j) < contentLines.Length; j++)
+                {
+                    var expected = searchTrimmed[j];
+                    var actual = contentLines[bestMatchLine + j].TrimEnd('\r');
+                    if (expected != actual)
+                    {
+                        if (expected.Trim() == actual.Trim())
+                            diffs.Add($"Line {bestMatchLine + j + 1}: **indentation differs** (content identical)");
+                        else
+                            diffs.Add($"Line {bestMatchLine + j + 1}: content differs");
+                    }
+                }
+                if (diffs.Count > 0)
+                {
+                    sb.AppendLine("**Differences found:**");
+                    foreach (var diff in diffs.Take(5))
+                        sb.AppendLine($"- {diff}");
+                    sb.AppendLine();
                 }
             }
 
@@ -506,6 +557,141 @@ namespace CodeMerger.Services.Mcp
             {
                 return $"Error: {ex.Message}";
             }
+        }
+
+        public string GrepReplace(JsonElement arguments)
+        {
+            if (!arguments.TryGetProperty("pattern", out var patternEl))
+                return "Error: 'pattern' parameter is required.";
+            if (!arguments.TryGetProperty("replacement", out var replacementEl))
+                return "Error: 'replacement' parameter is required.";
+
+            var pattern = patternEl.GetString() ?? "";
+            var replacement = replacementEl.GetString() ?? "";
+
+            var preview = true;
+            if (arguments.TryGetProperty("preview", out var previewEl))
+                preview = previewEl.GetBoolean();
+
+            var caseSensitive = false;
+            if (arguments.TryGetProperty("caseSensitive", out var caseEl))
+                caseSensitive = caseEl.GetBoolean();
+
+            string? fileFilter = null;
+            if (arguments.TryGetProperty("fileFilter", out var filterEl))
+                fileFilter = filterEl.GetString();
+
+            _sendActivity($"GrepReplace: {pattern} → {replacement}{(preview ? " (preview)" : "")}");
+
+            var regexOptions = caseSensitive ? RegexOptions.None : RegexOptions.IgnoreCase;
+            Regex regex;
+            try
+            {
+                regex = new Regex(pattern, regexOptions | RegexOptions.Compiled);
+            }
+            catch (ArgumentException ex)
+            {
+                return $"Error: Invalid regex pattern: {ex.Message}";
+            }
+
+            var changes = new List<(string relativePath, string filePath, int matchCount, List<(int line, string before, string after)> lineChanges)>();
+            int totalMatches = 0;
+
+            foreach (var file in _workspaceAnalysis.AllFiles)
+            {
+                if (fileFilter != null && !file.RelativePath.Contains(fileFilter, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                try
+                {
+                    var lines = File.ReadAllLines(file.FilePath);
+                    var fileChanges = new List<(int line, string before, string after)>();
+
+                    for (int i = 0; i < lines.Length; i++)
+                    {
+                        if (regex.IsMatch(lines[i]))
+                        {
+                            var newLine = regex.Replace(lines[i], replacement);
+                            if (newLine != lines[i])
+                                fileChanges.Add((i + 1, lines[i], newLine));
+                        }
+                    }
+
+                    if (fileChanges.Count > 0)
+                    {
+                        totalMatches += fileChanges.Count;
+                        changes.Add((file.RelativePath, file.FilePath, fileChanges.Count, fileChanges));
+                    }
+                }
+                catch { /* skip unreadable files */ }
+            }
+
+            if (changes.Count == 0)
+                return $"No matches found for pattern: `{pattern}`";
+
+            var sb = new StringBuilder();
+
+            if (preview)
+            {
+                sb.AppendLine("# Grep Replace Preview");
+                sb.AppendLine();
+                sb.AppendLine($"**Pattern:** `{pattern}`");
+                sb.AppendLine($"**Replacement:** `{replacement}`");
+                sb.AppendLine($"**Total:** {totalMatches} replacements in {changes.Count} files");
+                sb.AppendLine();
+
+                foreach (var (relativePath, _, matchCount, lineChanges) in changes)
+                {
+                    sb.AppendLine($"## `{relativePath}` ({matchCount} changes)");
+                    sb.AppendLine();
+                    foreach (var (line, before, after) in lineChanges.Take(10))
+                    {
+                        sb.AppendLine($"**Line {line}:**");
+                        sb.AppendLine($"- `{before.Trim()}`");
+                        sb.AppendLine($"+ `{after.Trim()}`");
+                    }
+                    if (lineChanges.Count > 10)
+                        sb.AppendLine($"*... and {lineChanges.Count - 10} more changes*");
+                    sb.AppendLine();
+                }
+                sb.AppendLine("*Call again with `preview: false` to apply changes.*");
+            }
+            else
+            {
+                // Apply changes
+                foreach (var (relativePath, filePath, _, lineChanges) in changes)
+                {
+                    try
+                    {
+                        if (_settings.CreateBackupFiles)
+                            File.Copy(filePath, filePath + ".bak", true);
+
+                        var content = File.ReadAllText(filePath);
+                        content = regex.Replace(content, replacement);
+                        File.WriteAllText(filePath, content);
+                        _updateFileIndex(filePath);
+                    }
+                    catch (Exception ex)
+                    {
+                        sb.AppendLine($"Error writing `{relativePath}`: {ex.Message}");
+                    }
+                }
+
+                sb.AppendLine("# Grep Replace Result");
+                sb.AppendLine();
+                sb.AppendLine($"**Pattern:** `{pattern}`");
+                sb.AppendLine($"**Replacement:** `{replacement}`");
+                sb.AppendLine($"**Applied:** {totalMatches} replacements in {changes.Count} files");
+                sb.AppendLine();
+                foreach (var (relativePath, _, matchCount, _) in changes)
+                {
+                    sb.AppendLine($"- `{relativePath}` ({matchCount} changes)");
+                }
+
+                _log($"GrepReplace: {totalMatches} replacements in {changes.Count} files");
+            }
+
+            return sb.ToString();
         }
 
         public string Undo(JsonElement arguments)

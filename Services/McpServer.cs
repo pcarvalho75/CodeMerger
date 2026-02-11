@@ -905,6 +905,16 @@ namespace CodeMerger.Services
                 return CreateToolResponse(id, _gitHandler.HandleCommand(action, arguments));
             }
 
+            // Help tool (doesn't require workspace)
+            if (toolName == "codemerger_help")
+            {
+                var topic = arguments.TryGetProperty("topic", out var topicEl) ? topicEl.GetString() : null;
+                var helpText = string.IsNullOrWhiteSpace(topic)
+                    ? Models.HelpManual.GetFullManual()
+                    : Models.HelpManual.SearchByTopic(topic);
+                return CreateToolResponse(id, helpText);
+            }
+
             // All other tools require workspace
             if (_workspaceAnalysis == null)
             {
@@ -958,6 +968,7 @@ namespace CodeMerger.Services
                     "codemerger_str_replace" => _writeHandler.StrReplace(arguments),
                     "codemerger_write_file" => _writeHandler.WriteFile(arguments),
                     "codemerger_delete_file" => _writeHandler.DeleteFile(arguments),
+                    "codemerger_grep_replace" => _writeHandler.GrepReplace(arguments),
                     "codemerger_undo" => _writeHandler.Undo(arguments),
                     "codemerger_move_file" => _writeHandler.MoveFile(arguments),
 

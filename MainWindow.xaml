@@ -113,6 +113,11 @@
                     <TabItem Header="🤖 LLMs">
                         <controls:LLMsTab x:Name="llmsTab"/>
                     </TabItem>
+
+                    <!-- Tab 7: Help -->
+                    <TabItem Header="❓ Help">
+                        <controls:HelpTab x:Name="helpTab"/>
+                    </TabItem>
                 </TabControl>
             </Border>
         </Grid>

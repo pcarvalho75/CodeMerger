@@ -387,6 +387,27 @@ namespace CodeMerger.Services.Mcp
                 },
                 new
                 {
+                    name = "codemerger_grep_replace",
+                    description = "Regex find-and-replace across all project files. ALWAYS preview first (default), then apply.\n" +
+                        "Use for: renaming strings in XAML, updating text patterns across many files, bulk find-replace.\n" +
+                        "NOT for: renaming C# symbols (use rename_symbol instead).",
+                    inputSchema = new Dictionary<string, object>
+                    {
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>
+                            {
+                                { "pattern", new Dictionary<string, string> { { "type", "string" }, { "description", "Regex pattern to search for" } } },
+                                { "replacement", new Dictionary<string, string> { { "type", "string" }, { "description", "Replacement string (supports regex groups like $1, $2)" } } },
+                                { "preview", new Dictionary<string, object> { { "type", "boolean" }, { "description", "If true, only show what would change without applying (default: true)" }, { "default", true } } },
+                                { "caseSensitive", new Dictionary<string, object> { { "type", "boolean" }, { "description", "Case-sensitive matching (default: false)" }, { "default", false } } },
+                                { "fileFilter", new Dictionary<string, string> { { "type", "string" }, { "description", "Optional: only match files whose path contains this string (e.g., '.xaml', 'Services/')" } } }
+                            }
+                        },
+                        { "required", new[] { "pattern", "replacement" } }
+                    }
+                },
+                new
+                {
                     name = "codemerger_undo",
                     description = "Restore a file from its .bak backup. Only restores the most recent backup.",
                     inputSchema = new Dictionary<string, object>
@@ -602,6 +623,25 @@ namespace CodeMerger.Services.Mcp
                             }
                         },
                         { "required", new[] { "projectName" } }
+                    }
+                },
+                new
+                {
+                    name = "codemerger_help",
+                    description = "Get the CodeMerger user manual. Returns setup instructions, tool reference, workflows, tips, and troubleshooting.\n" +
+                        "Use without topic for full manual, or specify a topic to get a specific section.\n" +
+                        "Available topics: overview, requirements, install-claude, install-codemerger, quickstart, ui, workspaces, " +
+                        "tools-exploration, tools-semantic, tools-editing, tools-refactoring, tools-build, tools-project, " +
+                        "tools-maintenance, tools-notes, tools-lessons, tools-git, workflows, tips, troubleshooting.",
+                    inputSchema = new Dictionary<string, object>
+                    {
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>
+                            {
+                                { "topic", new Dictionary<string, string> { { "type", "string" }, { "description", "Specific topic to look up (e.g., 'quickstart', 'troubleshooting', 'str_replace'). Omit for full manual." } } }
+                            }
+                        },
+                        { "required", Array.Empty<string>() }
                     }
                 }
             };
