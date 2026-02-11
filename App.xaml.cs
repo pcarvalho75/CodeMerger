@@ -69,7 +69,7 @@ namespace CodeMerger
 
         protected override void OnExit(ExitEventArgs e)
         {
-            _singleInstanceMutex?.ReleaseMutex();
+            try { _singleInstanceMutex?.ReleaseMutex(); } catch { }
             _singleInstanceMutex?.Dispose();
             base.OnExit(e);
         }

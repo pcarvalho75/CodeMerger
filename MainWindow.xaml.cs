@@ -71,10 +71,10 @@ namespace CodeMerger
             lessonsTab.Initialize(() => this);
             lessonsTab.StatusUpdate += (s, msg) => UpdateStatus(msg, Brushes.OrangeRed);
 
-            // Wire up BottomBar
-            bottomBar.Initialize(_claudeDesktopService, () => _currentWorkspace, _appState);
-            bottomBar.StatusUpdate += (s, msg) => UpdateStatus(msg, Brushes.LightGreen);
-            bottomBar.ProgressUpdate += (s, args) =>
+            // Wire up LLMs tab
+            llmsTab.Initialize(_claudeDesktopService, () => _currentWorkspace, _appState);
+            llmsTab.StatusUpdate += (s, msg) => UpdateStatus(msg, Brushes.LightGreen);
+            llmsTab.ProgressUpdate += (s, args) =>
             {
                 statusBar.SetProgress(args.Progress, args.Visible);
             };
@@ -206,7 +206,7 @@ namespace CodeMerger
                 UpdateStatus(message, Brushes.LightGreen);
             }
 
-            bottomBar.RefreshClaudeDesktopStatus();
+            llmsTab.RefreshClaudeDesktopStatus();
             _mcpConnectionService.Start();
 
             // Background sync community lessons (fire-and-forget, non-blocking)
@@ -448,7 +448,7 @@ namespace CodeMerger
             activityStrip.StopTimer();
             _statsUpdateTimer?.Stop();
             _mcpConnectionService.Dispose();
-            bottomBar.Cleanup();
+            llmsTab.Cleanup();
         }
 
         private void LoadWorkspaceList()
@@ -490,7 +490,7 @@ namespace CodeMerger
             await LoadWorkspaceDataAsync(workspace);
 
             EnsureClaudeConfig();
-            bottomBar.RefreshClaudeDesktopStatus();
+            llmsTab.RefreshClaudeDesktopStatus();
         }
 
         private void EnsureClaudeConfig()

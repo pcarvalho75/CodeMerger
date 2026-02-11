@@ -19,6 +19,7 @@
                           Fill="White" Stretch="Uniform" Width="20" Height="20"/>
                 </Border>
                 <TextBlock Text="CodeMerger" FontSize="22" FontWeight="Bold" Foreground="{StaticResource TextPrimary}" VerticalAlignment="Center"/>
+                <TextBlock x:Name="versionText" FontSize="10" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Bottom" Margin="6,0,0,3"/>
             </StackPanel>
 
             <!-- Project Selection -->

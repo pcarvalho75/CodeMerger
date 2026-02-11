@@ -19,7 +19,6 @@
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
         <!-- System Tray Icon -->
@@ -109,15 +108,17 @@
                     <TabItem Header="📊 Activity Log">
                         <controls:ActivityLogTab x:Name="activityLogTab"/>
                     </TabItem>
+
+                    <!-- Tab 6: LLMs -->
+                    <TabItem Header="🤖 LLMs">
+                        <controls:LLMsTab x:Name="llmsTab"/>
+                    </TabItem>
                 </TabControl>
             </Border>
         </Grid>
 
-        <!-- BOTTOM BAR -->
-        <controls:BottomBar x:Name="bottomBar" Grid.Row="4"/>
-
         <!-- STATUS BAR -->
-        <controls:StatusBar x:Name="statusBar" Grid.Row="5"/>
+        <controls:StatusBar x:Name="statusBar" Grid.Row="4"/>
 
     </Grid>
 </Window>

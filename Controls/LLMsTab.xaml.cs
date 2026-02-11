@@ -11,7 +11,7 @@ using System.Windows.Media;
 
 namespace CodeMerger.Controls
 {
-    public partial class BottomBar : UserControl
+    public partial class LLMsTab : UserControl
     {
         private const int DefaultSsePort = 52780;
 
@@ -28,7 +28,7 @@ namespace CodeMerger.Controls
         /// <summary>Raised when the progress bar needs updating. Args = (progress 0-100, visible).</summary>
         public event EventHandler<(double Progress, bool Visible)>? ProgressUpdate;
 
-        public BottomBar()
+        public LLMsTab()
         {
             InitializeComponent();
         }
@@ -108,7 +108,7 @@ namespace CodeMerger.Controls
             chatGptStatusText.Foreground = new SolidColorBrush(Color.FromRgb(136, 146, 160));
             chatGptIndicator.Fill = new SolidColorBrush(Color.FromRgb(136, 146, 160));
             if (_appState != null) _appState.ChatGptState = ChatGptState.Stopped;
-            publicUrlTextBox.Text = "Click 'Start ChatGPT Server' to get URL";
+            publicUrlTextBox.Text = "Click 'Start Server' to generate URL";
             copyUrlButton.IsEnabled = false;
             ProgressUpdate?.Invoke(this, (0, false));
 

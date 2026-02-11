@@ -29,6 +29,22 @@ namespace CodeMerger.Controls
         public HeaderBar()
         {
             InitializeComponent();
+            SetVersionText();
+        }
+
+        private void SetVersionText()
+        {
+            // ClickOnce sets this env var at runtime
+            var clickOnceVersion = Environment.GetEnvironmentVariable("ClickOnce_CurrentVersion");
+            if (!string.IsNullOrEmpty(clickOnceVersion))
+            {
+                versionText.Text = $"v{clickOnceVersion}";
+            }
+            else
+            {
+                var asm = System.Reflection.Assembly.GetEntryAssembly()?.GetName().Version;
+                versionText.Text = asm != null ? $"v{asm.Major}.{asm.Minor}.{asm.Build} (dev)" : "";
+            }
         }
 
         public void Initialize(AppState appState)
