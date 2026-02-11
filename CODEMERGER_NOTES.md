@@ -21,3 +21,17 @@ Key changes:
 - Enhanced: get_type shows full signatures with param names + [overload] markers
 - get_project_overview now includes Tool Guide section
 - All stale tool name references cleaned up
+
+## Architecture
+
+- [2026-02-10 23:13] WPF MCP server for Claude Desktop integration. Provides semantic code analysis tools over stdio.
+- McpServer: stdio transport, routes JSON-RPC to tool handlers
+- McpToolRegistry: all tool definitions and descriptions (single source of truth)
+- McpReadToolHandler: get_project_overview, get_file, get_context, list_files, search_code, grep, get_lines, get_method_body
+- McpSemanticToolHandler: find_references, get_callers, get_callees, find_implementations, get_type, get_dependencies
+- McpRefactoringToolHandler: str_replace, write_file, rename_symbol, move_file, add_parameter, extract_method
+- CodeAnalyzer: Roslyn syntax-tree parsing (NOT semantic compilation). Extracts types, members, call sites per file
+- SemanticAnalyzer: consumes CodeAnalyzer output. Cross-file analysis via string-based heuristics on call sites
+- WorkspaceAnalysis: holds all FileAnalysis objects, the unified project model
+- ProjectManager: multi-project support, hot-swap via switch_project
+- Dark theme WPF UI with activity monitor panel

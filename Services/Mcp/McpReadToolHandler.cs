@@ -115,6 +115,24 @@ namespace CodeMerger.Services.Mcp
             sb.AppendLine("- **Task context** → `get_context` with natural language description.");
             sb.AppendLine("- **WORKFLOW**: Present roadmap → pause between steps for user OK (unless told otherwise) → final Review & Cleanup step.");
             sb.AppendLine();
+            sb.AppendLine("## Search Decision Tree");
+            sb.AppendLine("- Need to find a C# type or method? → `search_code` (NEVER grep)");
+            sb.AppendLine("- Need to see who uses a symbol? → `find_references` (NEVER grep)");
+            sb.AppendLine("- Need to see who calls a method? → `get_callers` (NEVER grep)");
+            sb.AppendLine("- Need to see what a method calls? → `get_callees`");
+            sb.AppendLine("- Need to understand a class API? → `get_type`");
+            sb.AppendLine("- Need to read one method? → `get_method_body` (not get_file)");
+            sb.AppendLine("- Need XAML bindings, string literals, comments? → `grep` (ONLY valid use)");
+            sb.AppendLine("- Need to understand XAML layout/structure? → `get_xaml_tree` (not grep or get_lines)");
+            sb.AppendLine("- Need to explore for a task? → `get_context` with natural language");
+            sb.AppendLine();
+            sb.AppendLine("## Mandatory Session Workflow");
+            sb.AppendLine("1. `get_project_overview` → orientation");
+            sb.AppendLine("2. `notes get` → read architecture context (skip rediscovery)");
+            sb.AppendLine("3. `get_context` → task-specific file discovery");
+            sb.AppendLine("4. `get_type` / `get_method_body` → drill into specifics");
+            sb.AppendLine("5. Make changes with `str_replace` → `build` → verify");
+            sb.AppendLine();
 
             // Project References section
             if (_workspaceAnalysis.ProjectReferences.Count > 0)
@@ -602,6 +620,25 @@ namespace CodeMerger.Services.Mcp
             {
                 return $"Error reading file: {ex.Message}";
             }
+        }
+
+        public string GetXamlTree(JsonElement arguments)
+        {
+            if (!arguments.TryGetProperty("path", out var pathEl))
+                return "Error: 'path' parameter is required.";
+
+            var path = pathEl.GetString() ?? "";
+            _sendActivity($"XAML tree: {path}");
+
+            var (file, error) = _pathResolver.FindFile(path);
+            if (file == null)
+                return $"Error: {error}";
+
+            if (!file.Extension.Equals(".xaml", StringComparison.OrdinalIgnoreCase))
+                return $"Error: '{file.RelativePath}' is not a XAML file.";
+
+            var result = XamlAnalyzer.Analyze(file.FilePath, file.RootDirectory);
+            return result.ToMarkdown();
         }
 
         /// <summary>

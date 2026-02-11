@@ -946,6 +946,7 @@ namespace CodeMerger.Services
                     "codemerger_grep" => _readHandler.Grep(arguments),
                     "codemerger_get_context" => _readHandler.GetContext(arguments),
                     "codemerger_get_lines" => _readHandler.GetLines(arguments),
+                    "codemerger_get_xaml_tree" => _readHandler.GetXamlTree(arguments),
                     "codemerger_get_method_body" => _semanticHandler.GetMethodBody(arguments),
 
                 // Semantic tools

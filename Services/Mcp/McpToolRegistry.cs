@@ -32,7 +32,8 @@ namespace CodeMerger.Services.Mcp
                 {
                     name = "codemerger_get_project_overview",
                     description = "Get high-level project info: framework, namespaces, file breakdown, entry points, project references.\n" +
-                        "Call this once at the start of a session. Then: get_context for task-based exploration, or list_files to drill into a namespace.",
+                        "Call this once at the start of a session. Then: get_notes to read architecture context, then get_context for task-based exploration.\n" +
+                        "MANDATORY FIRST CALL when switching projects or starting a new conversation.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -78,7 +79,8 @@ namespace CodeMerger.Services.Mcp
                 {
                     name = "codemerger_search_code",
                     description = "Search the semantic index for type/method/namespace names. PREFER THIS over grep for finding C# symbols.\n" +
-                        "Use grep ONLY for literal text in comments, strings, XAML, or non-C# files.",
+                        "Use grep ONLY for literal text in comments, strings, XAML, or non-C# files.\n" +
+                        "Examples: 'where is the Save method?' → search_code. 'Find TODO comments' → grep.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -95,7 +97,8 @@ namespace CodeMerger.Services.Mcp
                 {
                     name = "codemerger_get_type",
                     description = "Get type details: members with full signatures, base types, interfaces.\n" +
-                        "Use to understand a class's API before modifying it. Call get_dependencies before making changes.",
+                        "Use to understand a class's API before modifying it. Call get_dependencies before making changes.\n" +
+                        "PREFER THIS over get_file when you need to understand what a class exposes — faster and more structured.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -112,7 +115,8 @@ namespace CodeMerger.Services.Mcp
                     name = "codemerger_get_dependencies",
                     description = "Get what a type uses and what uses it. ALWAYS call before modifying any public type, method signature, or property.\n" +
                         "Essential before: rename_symbol, move_file, changing public members, adding/removing properties.\n" +
-                        "Prevents breaking unknown consumers — catches errors before they happen instead of at build time.",
+                        "Prevents breaking unknown consumers — catches errors before they happen instead of at build time.\n" +
+                        "MANDATORY before any refactoring that touches public API surface.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -158,7 +162,10 @@ namespace CodeMerger.Services.Mcp
                         "ONLY use for: XAML content, string literals, comments, non-C# files, or when you need line-level context.\n" +
                         "DO NOT use for: finding C# symbol usages (use find_references), finding types/methods (use search_code), " +
                         "checking who calls a method (use get_callers), or verifying property usage across files (use find_references).\n" +
-                        "When tempted to grep a C# symbol name, stop and use the semantic tool instead.",
+                        "When tempted to grep a C# symbol name, stop and use the semantic tool instead.\n" +
+                        "DECISION AID: Is the target a C# identifier (class, method, property, field)? → WRONG TOOL. Use search_code, find_references, or get_callers.\n" +
+                        "Need to understand XAML layout/structure? → WRONG TOOL. Use get_xaml_tree.\n" +
+                        "Is the target inside a string literal, a comment, or a specific text pattern? → CORRECT TOOL.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -180,7 +187,8 @@ namespace CodeMerger.Services.Mcp
                     name = "codemerger_get_context",
                     description = "START HERE for any new task. Describe what you want to do in natural language, get relevant files ranked by relevance with call-graph expansion.\n" +
                         "Returns file contents so you can understand the codebase before making changes.\n" +
-                        "More efficient than manually calling get_file on multiple files — one call replaces 3-5 individual file reads.",
+                        "More efficient than manually calling get_file on multiple files — one call replaces 3-5 individual file reads.\n" +
+                        "MANDATORY: Call this BEFORE writing any code or making edits. Do not skip this to 'save time' — it prevents wrong assumptions.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -216,7 +224,8 @@ namespace CodeMerger.Services.Mcp
                     name = "codemerger_get_method_body",
                     description = "Get one method's source code by name. PREFER THIS over get_file when you only need one method.\n" +
                         "Much more efficient than loading an entire file just to read a single method.\n" +
-                        "If ambiguous (multiple methods with same name), returns disambiguation list — specify typeName to resolve.",
+                        "If ambiguous (multiple methods with same name), returns disambiguation list — specify typeName to resolve.\n" +
+                        "WRONG: get_file then scroll to find the method. RIGHT: get_method_body methodName='HandleTrade'.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -228,6 +237,24 @@ namespace CodeMerger.Services.Mcp
                             }
                         },
                         { "required", new[] { "methodName" } }
+                    }
+                },
+                new
+                {
+                    name = "codemerger_get_xaml_tree",
+                    description = "Parse a XAML file and return a compact visual hierarchy with line numbers, element names, x:Name, Headers, Bindings, and Content.\n" +
+                        "USE THIS instead of grep or get_lines when you need to understand XAML layout structure.\n" +
+                        "Returns: element tree with line ranges, named elements list, and all {Binding} references.\n" +
+                        "One call replaces 5-8 grep/get_lines calls when navigating XAML files.",
+                    inputSchema = new Dictionary<string, object>
+                    {
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>
+                            {
+                                { "path", new Dictionary<string, string> { { "type", "string" }, { "description", "Relative path to the XAML file" } } }
+                            }
+                        },
+                        { "required", new[] { "path" } }
                     }
                 }
             };
@@ -242,7 +269,9 @@ namespace CodeMerger.Services.Mcp
                     name = "codemerger_find_references",
                     description = "Find all references to a symbol using semantic analysis. PREFER THIS over grep for verifying C# symbol usage.\n" +
                         "Use to: check if a property/method/type is used, verify wiring after adding new members, find all consumers before refactoring.\n" +
-                        "Only use grep instead when searching for non-C# content (XAML, comments, string literals).",
+                        "Only use grep instead when searching for non-C# content (XAML, comments, string literals).\n" +
+                        "EXAMPLES: 'Is SaveTrade used anywhere?' → find_references. 'Who implements IDataStream?' → find_references.\n" +
+                        "WRONG: grep 'SaveTrade' to find usages. RIGHT: find_references symbolName='SaveTrade'.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -259,7 +288,8 @@ namespace CodeMerger.Services.Mcp
                 {
                     name = "codemerger_get_callers",
                     description = "Get all methods that call a specific method. PREFER THIS over grep when tracing call chains.\n" +
-                        "Essential before modifying method signatures — shows exactly what will break. Pair with get_callees for full call graph.",
+                        "Essential before modifying method signatures — shows exactly what will break. Pair with get_callees for full call graph.\n" +
+                        "WRONG: grep 'MethodName' to find who calls it. RIGHT: get_callers methodName='MethodName'.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -652,7 +682,9 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_notes",
-                    description = "Manage project notes (CODEMERGER_NOTES.md). Commands: get, add, update, delete, clear.",
+                    description = "Manage project notes (CODEMERGER_NOTES.md). Commands: get, add, update, delete, clear.\n" +
+                        "IMPORTANT: Call 'get' after get_project_overview to load architecture context and avoid rediscovering the project from scratch.\n" +
+                        "Notes contain architecture summaries, conventions, and gotchas that save 5-10 exploratory tool calls.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
