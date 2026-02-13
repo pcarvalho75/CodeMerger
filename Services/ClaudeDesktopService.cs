@@ -170,7 +170,7 @@ namespace CodeMerger.Services
                     "codemerger_search_code", "codemerger_get_type", "codemerger_get_dependencies",
                     "codemerger_find_implementations", "codemerger_grep", "codemerger_get_context",
                     "codemerger_get_lines", "codemerger_get_method_body", "codemerger_find_references", "codemerger_get_callers",
-                    "codemerger_get_callees", "codemerger_str_replace",
+                    "codemerger_get_callees", "codemerger_str_replace", "codemerger_replace_lines",
                     "codemerger_write_file", "codemerger_delete_file", "codemerger_grep_replace",
                     "codemerger_undo", "codemerger_move_file", "codemerger_rename_symbol",
                     "codemerger_generate_interface", "codemerger_extract_method", "codemerger_add_parameter",
