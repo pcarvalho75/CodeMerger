@@ -125,6 +125,7 @@ namespace CodeMerger.Services.Mcp
             sb.AppendLine("- Need XAML bindings, string literals, comments? → `grep` (ONLY valid use)");
             sb.AppendLine("- Need to understand XAML layout/structure? → `get_xaml_tree` (not grep or get_lines)");
             sb.AppendLine("- Need to explore for a task? → `get_context` with natural language");
+            sb.AppendLine("- find_references results seem incomplete? → follow up with `grep` as safety net");
             sb.AppendLine();
             sb.AppendLine("## Mandatory Session Workflow");
             sb.AppendLine("1. `get_project_overview` → orientation");

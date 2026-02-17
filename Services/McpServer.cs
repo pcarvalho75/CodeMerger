@@ -28,11 +28,8 @@ namespace CodeMerger.Services
         // Thread safety lock for workspace state
         private readonly object _stateLock = new object();
 
-        // Background update control - prevents memory explosion from concurrent updates
-        private readonly SemaphoreSlim _updateSemaphore = new SemaphoreSlim(1, 1);
-        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTime> _pendingUpdates = new();
-        private readonly TimeSpan _debounceDelay = TimeSpan.FromMilliseconds(500);
         private CodeAnalyzer? _updateAnalyzer; // Reusable analyzer for incremental updates
+        private DateTime _lastEditTimestamp = DateTime.UtcNow; // Updated by every write tool
 
         // Workspace state
         private WorkspaceAnalysis? _workspaceAnalysis;
@@ -203,7 +200,6 @@ namespace CodeMerger.Services
 
             // Clear update state to free memory
             _updateAnalyzer = null;
-            _pendingUpdates.Clear();
 
             // CRITICAL: Null out handlers FIRST to release references to old workspace
             _readHandler = null;
@@ -314,7 +310,6 @@ namespace CodeMerger.Services
 
             // Clear update state to free memory
             _updateAnalyzer = null;
-            _pendingUpdates.Clear();
 
             // CRITICAL: Null out handlers FIRST to release references to old workspace
             _readHandler = null;
@@ -435,109 +430,89 @@ namespace CodeMerger.Services
         /// Runs in background to avoid blocking MCP responses.
         /// Uses debouncing and a semaphore to prevent memory issues from rapid/concurrent updates.
         /// </summary>
-        private void UpdateSingleFileAsync(string filePath)
+        /// <summary>
+        /// Core re-index logic for a single file. Must be called under _stateLock.
+        /// </summary>
+        private void ReindexFile(string filePath)
         {
-            var now = DateTime.UtcNow;
-            _pendingUpdates[filePath] = now;
+            if (_workspaceAnalysis == null) return;
 
-            // Fire and forget - but controlled by semaphore
-            _ = Task.Run(async () =>
+            var baseDir = _inputDirectories.FirstOrDefault(dir =>
+                filePath.StartsWith(dir, StringComparison.OrdinalIgnoreCase));
+
+            if (baseDir == null) return;
+
+            // Remove old analysis for this file
+            var existingFile = _workspaceAnalysis.AllFiles
+                .FirstOrDefault(f => f.FilePath.Equals(filePath, StringComparison.OrdinalIgnoreCase));
+
+            if (existingFile != null)
             {
-                try
+                _workspaceAnalysis.AllFiles.Remove(existingFile);
+
+                // Remove old call sites from this file
+                _callSites.RemoveAll(cs => cs.FilePath.Equals(filePath, StringComparison.OrdinalIgnoreCase));
+
+                // Remove old types from hierarchy
+                foreach (var type in existingFile.Types)
                 {
-                    // Wait for debounce period
-                    await Task.Delay(_debounceDelay);
-
-                    // Check if this is still the latest update request for this file
-                    if (_pendingUpdates.TryGetValue(filePath, out var scheduledTime) && scheduledTime != now)
-                    {
-                        // A newer update was scheduled, skip this one
-                        return;
-                    }
-
-                    // Remove from pending
-                    _pendingUpdates.TryRemove(filePath, out _);
-
-                    // Only one update at a time to prevent memory explosion
-                    if (!await _updateSemaphore.WaitAsync(TimeSpan.FromSeconds(5)))
-                    {
-                        Log($"Skipped update for {Path.GetFileName(filePath)} - semaphore timeout");
-                        return;
-                    }
-
-                    try
-                    {
-                        lock (_stateLock)
-                        {
-                            if (_workspaceAnalysis == null) return;
-
-                            var baseDir = _inputDirectories.FirstOrDefault(dir =>
-                                filePath.StartsWith(dir, StringComparison.OrdinalIgnoreCase));
-
-                            if (baseDir == null) return;
-
-                            // Remove old analysis for this file
-                            var existingFile = _workspaceAnalysis.AllFiles
-                                .FirstOrDefault(f => f.FilePath.Equals(filePath, StringComparison.OrdinalIgnoreCase));
-
-                            if (existingFile != null)
-                            {
-                                _workspaceAnalysis.AllFiles.Remove(existingFile);
-
-                                // Remove old call sites from this file
-                                _callSites.RemoveAll(cs => cs.FilePath.Equals(filePath, StringComparison.OrdinalIgnoreCase));
-
-                                // Remove old types from hierarchy
-                                foreach (var type in existingFile.Types)
-                                {
-                                    _workspaceAnalysis.TypeHierarchy.Remove(type.Name);
-                                }
-                            }
-
-                            // Re-analyze the single file
-                            if (File.Exists(filePath))
-                            {
-                                // Reuse analyzer instance to avoid Roslyn memory accumulation
-                                _updateAnalyzer ??= new CodeAnalyzer();
-                                _updateAnalyzer.CallSites.Clear();
-
-                                var newAnalysis = _updateAnalyzer.AnalyzeFile(filePath, baseDir);
-
-                                // Set source workspace when in merged mode
-                                if (_isMergedMode && _directoryToWorkspace.TryGetValue(baseDir, out var sourceWorkspace))
-                                {
-                                    newAnalysis.SourceWorkspace = sourceWorkspace;
-                                }
-
-                                _workspaceAnalysis.AllFiles.Add(newAnalysis);
-
-                                // Add new call sites
-                                _callSites.AddRange(_updateAnalyzer.CallSites);
-
-                                // Update type hierarchy for types in this file
-                                foreach (var type in newAnalysis.Types)
-                                {
-                                    var inheritance = new List<string>();
-                                    if (!string.IsNullOrEmpty(type.BaseType))
-                                        inheritance.Add(type.BaseType);
-                                    inheritance.AddRange(type.Interfaces);
-                                    _workspaceAnalysis.TypeHierarchy[type.Name] = inheritance;
-                                }
-                            }
-
-                            Log($"Updated index for: {Path.GetFileName(filePath)}");
-                        }
-                    }
-                    finally
-                    {
-                        _updateSemaphore.Release();
-                    }
+                    _workspaceAnalysis.TypeHierarchy.Remove(type.Name);
                 }
-                catch (Exception ex)
+            }
+
+            // Re-analyze the single file
+            if (File.Exists(filePath))
+            {
+                // Reuse analyzer instance to avoid Roslyn memory accumulation
+                _updateAnalyzer ??= new CodeAnalyzer();
+                _updateAnalyzer.CallSites.Clear();
+
+                var newAnalysis = _updateAnalyzer.AnalyzeFile(filePath, baseDir);
+
+                // Set source workspace when in merged mode
+                if (_isMergedMode && _directoryToWorkspace.TryGetValue(baseDir, out var sourceWorkspace))
                 {
-                    Log($"Error updating index: {ex.Message}");
+                    newAnalysis.SourceWorkspace = sourceWorkspace;
                 }
-            });
+
+                _workspaceAnalysis.AllFiles.Add(newAnalysis);
+                newAnalysis.LastIndexedUtc = DateTime.UtcNow;
+
+                // Add new call sites
+                _callSites.AddRange(_updateAnalyzer.CallSites);
+
+                // Update type hierarchy for types in this file
+                foreach (var type in newAnalysis.Types)
+                {
+                    var inheritance = new List<string>();
+                    if (!string.IsNullOrEmpty(type.BaseType))
+                        inheritance.Add(type.BaseType);
+                    inheritance.AddRange(type.Interfaces);
+                    _workspaceAnalysis.TypeHierarchy[type.Name] = inheritance;
+                }
+            }
+
+            Log($"Updated index for: {Path.GetFileName(filePath)}");
+        }
+
+        /// <summary>
+        /// Synchronously re-index a single file. Used by write tools (str_replace, write_file, etc.)
+        /// so that subsequent read/semantic tools see fresh data immediately.
+        /// </summary>
+        private void UpdateSingleFileSync(string filePath)
+        {
+            try
+            {
+                lock (_stateLock)
+                {
+                    ReindexFile(filePath);
+                    _lastEditTimestamp = DateTime.UtcNow;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"Error updating index (sync): {ex.Message}");
+            }
         }
 
         private void InitializeHandlers()
@@ -545,8 +520,8 @@ namespace CodeMerger.Services
             if (_workspaceAnalysis == null || _refactoringService == null) return;
 
             _readHandler = new McpReadToolHandler(_workspaceAnalysis, _callSites, _inputDirectories, SendActivity);
-            _writeHandler = new McpWriteToolHandler(_workspaceAnalysis, _refactoringService, _inputDirectories, _workspaceSettings, UpdateSingleFileAsync, SendActivity, Log);
-            _semanticHandler = new McpSemanticToolHandler(_workspaceAnalysis, _callSites, SendActivity);
+            _writeHandler = new McpWriteToolHandler(_workspaceAnalysis, _refactoringService, _inputDirectories, _workspaceSettings, UpdateSingleFileSync, SendActivity, Log);
+            _semanticHandler = new McpSemanticToolHandler(_workspaceAnalysis, _callSites, SendActivity, () => _lastEditTimestamp);
             _refactoringHandler = new McpRefactoringToolHandler(_workspaceAnalysis, _refactoringService, _callSites, _workspaceSettings, SendActivity, Log);
             _maintenanceHandler = new McpMaintenanceToolHandler(_workspaceAnalysis, _inputDirectories, SendActivity);
             _workspaceHandler = new McpWorkspaceToolHandler(
@@ -750,7 +725,6 @@ namespace CodeMerger.Services
 
             // Clean up all resources
             _updateAnalyzer = null;
-            _pendingUpdates.Clear();
 
             // Release handler references
             _readHandler = null;
@@ -1013,6 +987,7 @@ namespace CodeMerger.Services
                     "codemerger_delete_file" => _writeHandler.DeleteFile(arguments),
                     "codemerger_grep_replace" => _writeHandler.GrepReplace(arguments),
                     "codemerger_undo" => _writeHandler.Undo(arguments),
+                    "codemerger_replace_lines" => _writeHandler.ReplaceLines(arguments),
                     "codemerger_move_file" => _writeHandler.MoveFile(arguments),
 
                     // Refactoring tools

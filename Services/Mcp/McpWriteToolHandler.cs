@@ -581,7 +581,37 @@ namespace CodeMerger.Services.Mcp
             if (arguments.TryGetProperty("fileFilter", out var filterEl))
                 fileFilter = filterEl.GetString();
 
+            // Parse excludeMatches (match indices to skip)
+            var excludeSet = new HashSet<int>();
+            if (arguments.TryGetProperty("excludeMatches", out var excludeEl) && excludeEl.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in excludeEl.EnumerateArray())
+                {
+                    if (item.TryGetInt32(out var idx))
+                        excludeSet.Add(idx);
+                }
+            }
+
+            // Parse excludePattern (lines matching this regex are skipped)
+            Regex? excludeRegex = null;
+            if (arguments.TryGetProperty("excludePattern", out var exPatEl))
+            {
+                var exPat = exPatEl.GetString();
+                if (!string.IsNullOrEmpty(exPat))
+                {
+                    try
+                    {
+                        excludeRegex = new Regex(exPat, (caseSensitive ? RegexOptions.None : RegexOptions.IgnoreCase) | RegexOptions.Compiled);
+                    }
+                    catch (ArgumentException ex)
+                    {
+                        return $"Error: Invalid excludePattern regex: {ex.Message}";
+                    }
+                }
+            }
+
             _sendActivity($"GrepReplace: {pattern} → {replacement}{(preview ? " (preview)" : "")}");
+
 
             var regexOptions = caseSensitive ? RegexOptions.None : RegexOptions.IgnoreCase;
             Regex regex;
@@ -594,8 +624,9 @@ namespace CodeMerger.Services.Mcp
                 return $"Error: Invalid regex pattern: {ex.Message}";
             }
 
-            var changes = new List<(string relativePath, string filePath, int matchCount, List<(int line, string before, string after)> lineChanges)>();
+            var changes = new List<(string relativePath, string filePath, int matchCount, List<(int line, string before, string after, int globalIndex)> lineChanges)>();
             int totalMatches = 0;
+            int globalMatchIndex = 0;
 
             foreach (var file in _workspaceAnalysis.AllFiles)
             {
@@ -605,15 +636,21 @@ namespace CodeMerger.Services.Mcp
                 try
                 {
                     var lines = File.ReadAllLines(file.FilePath);
-                    var fileChanges = new List<(int line, string before, string after)>();
+                    var fileChanges = new List<(int line, string before, string after, int globalIndex)>();
 
                     for (int i = 0; i < lines.Length; i++)
                     {
+                        if (excludeRegex != null && excludeRegex.IsMatch(lines[i]))
+                            continue; // Skip lines matching excludePattern
+
                         if (regex.IsMatch(lines[i]))
                         {
                             var newLine = regex.Replace(lines[i], replacement);
                             if (newLine != lines[i])
-                                fileChanges.Add((i + 1, lines[i], newLine));
+                            {
+                                globalMatchIndex++;
+                                fileChanges.Add((i + 1, lines[i], newLine, globalMatchIndex));
+                            }
                         }
                     }
 
@@ -644,9 +681,9 @@ namespace CodeMerger.Services.Mcp
                 {
                     sb.AppendLine($"## `{relativePath}` ({matchCount} changes)");
                     sb.AppendLine();
-                    foreach (var (line, before, after) in lineChanges.Take(10))
+                    foreach (var (line, before, after, gIdx) in lineChanges.Take(10))
                     {
-                        sb.AppendLine($"**Line {line}:**");
+                        sb.AppendLine($"**Match #{gIdx} — Line {line}:**");
                         sb.AppendLine($"- `{before.Trim()}`");
                         sb.AppendLine($"+ `{after.Trim()}`");
                     }
@@ -654,41 +691,88 @@ namespace CodeMerger.Services.Mcp
                         sb.AppendLine($"*... and {lineChanges.Count - 10} more changes*");
                     sb.AppendLine();
                 }
-                sb.AppendLine("*Call again with `preview: false` to apply changes.*");
+                sb.AppendLine("*Call again with `preview: false` to apply. Use `excludeMatches: [#]` to skip specific matches.*");
             }
             else
             {
-                // Apply changes
+                // Apply changes line-by-line (matches preview logic exactly)
+                int applied = 0;
+                int skipped = 0;
+
                 foreach (var (relativePath, filePath, _, lineChanges) in changes)
                 {
+                    // Determine which line numbers to skip in this file
+                    var skipLineNumbers = new HashSet<int>();
+                    foreach (var (line, _, _, gIdx) in lineChanges)
+                    {
+                        if (excludeSet.Contains(gIdx))
+                            skipLineNumbers.Add(line);
+                    }
+
+                    // If all matches in this file are excluded, skip the file entirely
+                    if (skipLineNumbers.Count == lineChanges.Count)
+                    {
+                        skipped += lineChanges.Count;
+                        continue;
+                    }
+
                     try
                     {
                         if (_settings.CreateBackupFiles)
                             File.Copy(filePath, filePath + ".bak", true);
 
-                        var content = File.ReadAllText(filePath);
-                        content = regex.Replace(content, replacement);
-                        File.WriteAllText(filePath, content);
+                        var lines = File.ReadAllLines(filePath);
+
+                        for (int i = 0; i < lines.Length; i++)
+                        {
+                            if (skipLineNumbers.Contains(i + 1))
+                                continue; // Skip excluded match
+                            if (excludeRegex != null && excludeRegex.IsMatch(lines[i]))
+                                continue; // Skip lines matching excludePattern
+
+                            if (regex.IsMatch(lines[i]))
+                            {
+                                var newLine = regex.Replace(lines[i], replacement);
+                                if (newLine != lines[i])
+                                {
+                                    lines[i] = newLine;
+                                    applied++;
+                                }
+                            }
+                        }
+
+                        // Preserve original line endings
+                        var rawContent = File.ReadAllText(filePath);
+                        var lineEnding = rawContent.Contains("\r\n") ? "\r\n" : "\n";
+                        File.WriteAllText(filePath, string.Join(lineEnding, lines));
                         _updateFileIndex(filePath);
                     }
                     catch (Exception ex)
                     {
                         sb.AppendLine($"Error writing `{relativePath}`: {ex.Message}");
                     }
+
+                    skipped += skipLineNumbers.Count;
                 }
 
                 sb.AppendLine("# Grep Replace Result");
                 sb.AppendLine();
                 sb.AppendLine($"**Pattern:** `{pattern}`");
                 sb.AppendLine($"**Replacement:** `{replacement}`");
-                sb.AppendLine($"**Applied:** {totalMatches} replacements in {changes.Count} files");
+                sb.AppendLine($"**Applied:** {applied} replacements in {changes.Count} files");
+                if (skipped > 0)
+                    sb.AppendLine($"**Skipped:** {skipped} (excluded)");
                 sb.AppendLine();
-                foreach (var (relativePath, _, matchCount, _) in changes)
+                foreach (var (relativePath, _, matchCount, lineChanges) in changes)
                 {
-                    sb.AppendLine($"- `{relativePath}` ({matchCount} changes)");
+                    var fileSkipped = lineChanges.Count(lc => excludeSet.Contains(lc.globalIndex));
+                    if (fileSkipped > 0)
+                        sb.AppendLine($"- `{relativePath}` ({matchCount - fileSkipped} applied, {fileSkipped} skipped)");
+                    else
+                        sb.AppendLine($"- `{relativePath}` ({matchCount} changes)");
                 }
 
-                _log($"GrepReplace: {totalMatches} replacements in {changes.Count} files");
+                _log($"GrepReplace: {applied} applied, {skipped} skipped in {changes.Count} files");
             }
 
             return sb.ToString();
@@ -747,6 +831,147 @@ namespace CodeMerger.Services.Mcp
                 sb.AppendLine();
                 sb.AppendLine($"**File:** `{relativePath}`");
                 sb.AppendLine($"**Status:** Restored from backup");
+
+                return sb.ToString();
+            }
+            catch (Exception ex)
+            {
+                return $"Error: {ex.Message}";
+            }
+        }
+
+        public string ReplaceLines(JsonElement arguments)
+        {
+            if (!arguments.TryGetProperty("path", out var pathEl))
+                return "Error: 'path' parameter is required.";
+            if (!arguments.TryGetProperty("startLine", out var startEl))
+                return "Error: 'startLine' parameter is required.";
+            if (!arguments.TryGetProperty("endLine", out var endEl))
+                return "Error: 'endLine' parameter is required.";
+            if (!arguments.TryGetProperty("newContent", out var contentEl))
+                return "Error: 'newContent' parameter is required.";
+
+            var path = pathEl.GetString() ?? "";
+            var startLine = startEl.GetInt32();
+            var endLine = endEl.GetInt32();
+            var newContent = contentEl.GetString() ?? "";
+
+            var preview = false;
+            if (arguments.TryGetProperty("preview", out var previewEl))
+                preview = previewEl.GetBoolean();
+
+            var createBackup = _settings.CreateBackupFiles;
+            if (arguments.TryGetProperty("createBackup", out var backupEl))
+                createBackup = backupEl.GetBoolean();
+
+            _sendActivity($"ReplaceLines: {path} [{startLine}-{endLine}]{(preview ? " (preview)" : "")}");
+
+            var (file, findError) = _pathResolver.FindFile(path);
+            if (file == null)
+                return findError!;
+
+            try
+            {
+                var lines = File.ReadAllLines(file.FilePath).ToList();
+                var totalLines = lines.Count;
+
+                // Validate range
+                if (startLine < 1 || startLine > totalLines)
+                    return $"Error: startLine {startLine} is out of range (file has {totalLines} lines).";
+                if (endLine < startLine || endLine > totalLines)
+                    return $"Error: endLine {endLine} is out of range (startLine={startLine}, file has {totalLines} lines).";
+
+                // Convert to 0-based
+                int startIdx = startLine - 1;
+                int endIdx = endLine; // endLine is inclusive, so remove [startIdx..endIdx)
+
+                // Split new content into lines
+                var replacementLines = newContent.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None).ToList();
+
+                // Build context for preview/result
+                var sb = new StringBuilder();
+                int contextSize = 3;
+
+                if (preview)
+                {
+                    sb.AppendLine("# Replace Lines Preview");
+                    sb.AppendLine();
+                    sb.AppendLine($"**File:** `{file.RelativePath}`");
+                    sb.AppendLine($"**Replacing:** lines {startLine}–{endLine} ({endLine - startLine + 1} lines → {replacementLines.Count} lines)");
+                    sb.AppendLine();
+
+                    // Show context before
+                    int ctxStart = Math.Max(0, startIdx - contextSize);
+                    if (ctxStart < startIdx)
+                    {
+                        sb.AppendLine("**Context before:**");
+                        sb.AppendLine("```");
+                        for (int i = ctxStart; i < startIdx; i++)
+                            sb.AppendLine($"{i + 1,4}: {lines[i]}");
+                        sb.AppendLine("```");
+                    }
+
+                    // Show lines being removed
+                    sb.AppendLine("**Removing:**");
+                    sb.AppendLine("```diff");
+                    for (int i = startIdx; i < endIdx; i++)
+                        sb.AppendLine($"- {lines[i]}");
+                    sb.AppendLine("```");
+
+                    // Show replacement
+                    sb.AppendLine("**Inserting:**");
+                    sb.AppendLine("```diff");
+                    foreach (var line in replacementLines)
+                        sb.AppendLine($"+ {line}");
+                    sb.AppendLine("```");
+
+                    // Show context after
+                    int ctxEnd = Math.Min(totalLines, endIdx + contextSize);
+                    if (endIdx < ctxEnd)
+                    {
+                        sb.AppendLine("**Context after:**");
+                        sb.AppendLine("```");
+                        for (int i = endIdx; i < ctxEnd; i++)
+                            sb.AppendLine($"{i + 1,4}: {lines[i]}");
+                        sb.AppendLine("```");
+                    }
+
+                    sb.AppendLine();
+                    sb.AppendLine("*Call again with `preview: false` to apply.*");
+                    return sb.ToString();
+                }
+
+                // Apply the replacement
+                if (createBackup && File.Exists(file.FilePath))
+                    File.Copy(file.FilePath, file.FilePath + ".bak", true);
+
+                // Remove old lines and insert new ones
+                lines.RemoveRange(startIdx, endIdx - startIdx);
+                lines.InsertRange(startIdx, replacementLines);
+
+                // Detect line ending from original file
+                var rawContent = File.ReadAllText(file.FilePath);
+                var lineEnding = rawContent.Contains("\r\n") ? "\r\n" : "\n";
+
+                File.WriteAllText(file.FilePath, string.Join(lineEnding, lines));
+
+                _log($"ReplaceLines: {path} [{startLine}-{endLine}]");
+                _updateFileIndex(file.FilePath);
+
+                sb.AppendLine("# Replace Lines Result");
+                sb.AppendLine();
+                sb.AppendLine($"**File:** `{file.RelativePath}`");
+                sb.AppendLine($"**Status:** Success - replaced lines {startLine}–{endLine} ({endLine - startLine + 1} lines → {replacementLines.Count} lines)");
+                sb.AppendLine();
+
+                // Show surrounding context after replacement
+                int showStart = Math.Max(0, startIdx - contextSize);
+                int showEnd = Math.Min(lines.Count, startIdx + replacementLines.Count + contextSize);
+                sb.AppendLine("**Result:**");
+                sb.AppendLine("```");
+                for (int i = showStart; i < showEnd; i++)
+                    sb.AppendLine($"{i + 1,4}: {lines[i]}");
+                sb.AppendLine("```");
 
                 return sb.ToString();
             }

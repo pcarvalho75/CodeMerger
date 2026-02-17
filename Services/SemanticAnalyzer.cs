@@ -84,10 +84,10 @@ namespace CodeMerger.Services
                 result.Usages.Add(new SymbolUsage
                 {
                     SymbolName = symbolName,
-                    SymbolKind = "Method",
+                    SymbolKind = callSite.IsPropertyAccess ? "Property" : "Method",
                     FilePath = relativePath,
                     Line = callSite.Line,
-                    UsageKind = UsageKind.Invocation,
+                    UsageKind = callSite.IsPropertyAccess ? UsageKind.Reference : UsageKind.Invocation,
                     Context = $"{callSite.CallerType}.{callSite.CallerMethod} → {callSite.CalledMethod}"
                 });
             }

@@ -388,6 +388,29 @@ namespace CodeMerger.Services
                     info.IsVirtual = property.Modifiers.Any(m => m.IsKind(SyntaxKind.VirtualKeyword));
                     info.IsOverride = property.Modifiers.Any(m => m.IsKind(SyntaxKind.OverrideKeyword));
                     info.IsAbstract = property.Modifiers.Any(m => m.IsKind(SyntaxKind.AbstractKeyword));
+
+                    // Expression body: public bool IsOpen => Status == PositionStatus.Open;
+                    if (property.ExpressionBody != null)
+                    {
+                        info.Body = property.ExpressionBody.ToString();
+                        ExtractMethodCalls(property.ExpressionBody, filePath, typeName, info.Name);
+                    }
+                    // Accessor blocks: get { return ...; } set { ... = value; }
+                    else if (property.AccessorList != null)
+                    {
+                        foreach (var accessor in property.AccessorList.Accessors)
+                        {
+                            if (accessor.Body != null)
+                                ExtractMethodCalls(accessor.Body, filePath, typeName, info.Name);
+                            else if (accessor.ExpressionBody != null)
+                                ExtractMethodCalls(accessor.ExpressionBody, filePath, typeName, info.Name);
+                        }
+                    }
+                    // Initializer: public int X { get; } = Foo();
+                    if (property.Initializer != null)
+                    {
+                        ExtractMethodCalls(property.Initializer.Value, filePath, typeName, info.Name);
+                    }
                     break;
 
                 case FieldDeclarationSyntax field:
@@ -398,6 +421,12 @@ namespace CodeMerger.Services
                     info.ReturnType = field.Declaration.Type.ToString();
                     info.AccessModifier = GetAccessModifier(field.Modifiers);
                     info.IsStatic = field.Modifiers.Any(m => m.IsKind(SyntaxKind.StaticKeyword));
+
+                    // Field initializer: private readonly X _x = new X(); or = SomeMethod();
+                    if (variable.Initializer != null)
+                    {
+                        ExtractMethodCalls(variable.Initializer.Value, filePath, typeName, info.Name);
+                    }
                     break;
 
                 case EventDeclarationSyntax eventDecl:
@@ -421,6 +450,11 @@ namespace CodeMerger.Services
                         info.Body = ctor.Body.ToString();
                         ExtractMethodCalls(ctor.Body, filePath, typeName, ".ctor");
                     }
+                    else if (ctor.ExpressionBody != null)
+                    {
+                        info.Body = ctor.ExpressionBody.ToString();
+                        ExtractMethodCalls(ctor.ExpressionBody, filePath, typeName, ".ctor");
+                    }
                     break;
 
                 default:
@@ -432,10 +466,17 @@ namespace CodeMerger.Services
 
         private void ExtractMethodCalls(SyntaxNode body, string filePath, string callerType, string callerMethod)
         {
+            // Track invocation expressions to avoid double-counting member accesses that are part of method calls
+            var invocationExpressions = new HashSet<SyntaxNode>();
+
             var invocations = body.DescendantNodes().OfType<InvocationExpressionSyntax>();
 
             foreach (var invocation in invocations)
             {
+                // Mark the member access part of invocations so we skip them below
+                if (invocation.Expression is MemberAccessExpressionSyntax invMa)
+                    invocationExpressions.Add(invMa);
+
                 var callSite = new CallSite
                 {
                     CallerType = callerType,
@@ -461,6 +502,65 @@ namespace CodeMerger.Services
                     CallSites.Add(callSite);
                 }
             }
+
+            // Capture property/field accesses (reads and writes) that aren't part of method invocations
+            var memberAccesses = body.DescendantNodes().OfType<MemberAccessExpressionSyntax>();
+            foreach (var ma in memberAccesses)
+            {
+                // Skip if this member access is the expression of an invocation (already captured above)
+                if (invocationExpressions.Contains(ma))
+                    continue;
+
+                // Skip chained accesses — only capture the outermost (e.g., for a.b.c, skip a.b)
+                if (ma.Parent is MemberAccessExpressionSyntax)
+                    continue;
+
+                var memberName = ma.Name.Identifier.Text;
+
+                // Skip common noise: LINQ, string methods, collection methods, type conversions
+                if (IsCommonFrameworkMember(memberName))
+                    continue;
+
+                CallSites.Add(new CallSite
+                {
+                    CallerType = callerType,
+                    CallerMethod = callerMethod,
+                    CalledType = ma.Expression.ToString(),
+                    CalledMethod = memberName,
+                    FilePath = filePath,
+                    Line = ma.GetLocation().GetLineSpan().StartLinePosition.Line + 1,
+                    IsPropertyAccess = true
+                });
+            }
+        }
+
+        /// <summary>
+        /// Filter out common .NET framework members that would add noise to references.
+        /// </summary>
+        private static bool IsCommonFrameworkMember(string name)
+        {
+            return name switch
+            {
+                // String/collection
+                "Length" or "Count" or "ToString" or "Equals" or "GetHashCode" or "GetType" => true,
+                // LINQ
+                "Where" or "Select" or "Any" or "All" or "First" or "FirstOrDefault" or "Last" or "LastOrDefault" => true,
+                "OrderBy" or "OrderByDescending" or "ThenBy" or "ThenByDescending" => true,
+                "ToList" or "ToArray" or "ToDictionary" or "ToHashSet" => true,
+                "Sum" or "Min" or "Max" or "Average" or "Aggregate" => true,
+                "Contains" or "Except" or "Intersect" or "Union" or "Distinct" or "Concat" => true,
+                "Skip" or "Take" or "SkipWhile" or "TakeWhile" => true,
+                "GroupBy" or "SelectMany" or "Zip" or "OfType" or "Cast" => true,
+                // Collection mutations
+                "Add" or "Remove" or "RemoveAll" or "Insert" or "Clear" or "AddRange" or "RemoveAt" => true,
+                // Task/async
+                "ConfigureAwait" or "GetAwaiter" or "GetResult" or "WaitAsync" => true,
+                // Math
+                "Abs" or "Round" or "Floor" or "Ceiling" or "Sqrt" or "Pow" => true,
+                // Common value types
+                "HasValue" or "Value" or "TryParse" or "Parse" => true,
+                _ => false
+            };
         }
 
         private string GetAccessModifier(SyntaxTokenList modifiers)

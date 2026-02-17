@@ -30,6 +30,11 @@ namespace CodeMerger.Models
         /// Primary namespace declared in this file (first namespace found)
         /// </summary>
         public string Namespace { get; set; } = string.Empty;
+
+        /// <summary>
+        /// When this file was last indexed/analyzed.
+        /// </summary>
+        public DateTime LastIndexedUtc { get; set; } = DateTime.UtcNow;
     }
 
     public class CodeTypeInfo
@@ -81,6 +86,8 @@ namespace CodeMerger.Models
         public string CalledMethod { get; set; } = string.Empty;
         public string FilePath { get; set; } = string.Empty;
         public int Line { get; set; }
+        /// <summary>True if this is a property/field access rather than a method invocation.</summary>
+        public bool IsPropertyAccess { get; set; }
     }
 
     // Symbol usage information

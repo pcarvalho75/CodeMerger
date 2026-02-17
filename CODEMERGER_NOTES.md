@@ -35,3 +35,10 @@ Key changes:
 - WorkspaceAnalysis: holds all FileAnalysis objects, the unified project model
 - ProjectManager: multi-project support, hot-swap via switch_project
 - Dark theme WPF UI with activity monitor panel
+- [2026-02-12 18:01] CodeAnalyzer.ExtractMethodCalls now tracks both method invocations AND property/field accesses (reads/writes). Common .NET/LINQ members filtered via IsCommonFrameworkMember(). CallSite.IsPropertyAccess flag distinguishes the two. SemanticAnalyzer.FindUsages labels property accesses as UsageKind.Reference. Property expression bodies, accessor blocks, initializers, field initializers, and constructor expression bodies all extract references. Write tools (str_replace, write_file, etc.) use synchronous re-indexing via UpdateSingleFileSync so find_references sees fresh data immediately after edits.
+- [2026-02-16 23:21] ## Recent Changes (Feb 2026)
+- Added `codemerger_replace_lines` tool (McpWriteToolHandler) — line-range replacement with preview support
+- `grep_replace` now has: numbered matches in preview, `excludeMatches` param to skip specific matches, line-by-line apply (matches preview logic)
+- `write_file` warns when new .cs files are created outside any .csproj directory (CheckCsprojProximity in RefactoringService)
+- `find_references` shows staleness warning when files indexed before last edit (LastIndexedUtc on FileAnalysis, _lastEditTimestamp on McpServer)
+- McpSemanticToolHandler constructor now takes Func&lt;DateTime&gt; getLastEditTimestamp parameter

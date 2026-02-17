@@ -141,6 +141,14 @@ namespace CodeMerger.Services
                 result.FullPath = fullPath;
                 result.Success = true;
                 result.BytesWritten = content.Length;
+
+                // Warn if new file is outside any .csproj directory
+                if (result.IsNewFile && fullPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+                {
+                    var csprojWarning = CheckCsprojProximity(fullPath, baseDir);
+                    if (csprojWarning != null)
+                        result.Warning = csprojWarning;
+                }
             }
             catch (Exception ex)
             {
@@ -149,6 +157,58 @@ namespace CodeMerger.Services
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// Check if a file path has a .csproj in its directory or any parent up to baseDir.
+        /// Returns a warning string if not, null if OK.
+        /// </summary>
+        private string? CheckCsprojProximity(string fullPath, string baseDir)
+        {
+            var dir = Path.GetDirectoryName(fullPath);
+            var normalizedBase = Path.GetFullPath(baseDir).TrimEnd('\\', '/');
+
+            while (!string.IsNullOrEmpty(dir))
+            {
+                var normalizedDir = Path.GetFullPath(dir).TrimEnd('\\', '/');
+
+                // Check for .csproj in this directory
+                try
+                {
+                    if (Directory.EnumerateFiles(dir, "*.csproj").Any())
+                        return null; // Found — no warning
+                }
+                catch { /* skip inaccessible dirs */ }
+
+                // Stop if we've reached or passed the workspace root
+                if (normalizedDir.Equals(normalizedBase, StringComparison.OrdinalIgnoreCase) ||
+                    !normalizedDir.StartsWith(normalizedBase, StringComparison.OrdinalIgnoreCase))
+                    break;
+
+                dir = Path.GetDirectoryName(dir);
+            }
+
+            // No .csproj found — find the nearest one for a suggestion
+            var csprojFiles = new List<string>();
+            try
+            {
+                csprojFiles = Directory.EnumerateFiles(baseDir, "*.csproj", SearchOption.AllDirectories).Take(5).ToList();
+            }
+            catch { }
+
+            if (csprojFiles.Count == 0)
+                return null; // No .csproj in workspace at all — probably not a .NET project structure
+
+            var csprojDirs = csprojFiles.Select(f => Path.GetDirectoryName(f)!).Distinct().ToList();
+            var suggestions = csprojDirs.Select(d =>
+            {
+                var relDir = d.Substring(normalizedBase.Length).TrimStart('\\', '/');
+                var fileName = Path.GetFileName(fullPath);
+                return string.IsNullOrEmpty(relDir) ? fileName : $"{relDir.Replace('\\', '/')}/{fileName}";
+            }).ToList();
+
+            return $"⚠️ **Warning:** This file was created outside any .csproj directory and may not be included in the build.\n" +
+                   $"**Did you mean:** {string.Join(" or ", suggestions.Select(s => $"`{s}`"))}";
         }
 
         /// <summary>
@@ -625,6 +685,7 @@ namespace CodeMerger.Services
         public bool IsPreview { get; set; }
         public string? BackupPath { get; set; }
         public string? Error { get; set; }
+        public string? Warning { get; set; }
         public string? Diff { get; set; }
         public int BytesWritten { get; set; }
 
@@ -663,6 +724,12 @@ namespace CodeMerger.Services
                     sb.AppendLine("```diff");
                     sb.AppendLine(Diff);
                     sb.AppendLine("```");
+                }
+
+                if (!string.IsNullOrEmpty(Warning))
+                {
+                    sb.AppendLine();
+                    sb.AppendLine(Warning);
                 }
             }
             else

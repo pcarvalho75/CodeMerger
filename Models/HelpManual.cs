@@ -128,9 +128,11 @@ write_file — Write complete file content (create or overwrite). Creates .bak b
 
 delete_file — Delete a file with .bak backup. Use undo to restore.
 
-grep_replace — Regex find-and-replace across all project files. Always preview first (default). Supports regex capture groups ($1, $2). Optional fileFilter to limit scope.
+grep_replace — Regex find-and-replace across all project files. Always preview first (default). Supports regex capture groups ($1, $2). Optional fileFilter to limit scope. Preview numbers each match; use excludeMatches to skip specific matches, or excludePattern to skip lines matching a regex.
 
 undo — Restore a file from its most recent .bak backup.
+
+replace_lines — Replace a range of lines by line number. Use when you know exact line numbers from get_lines. Simpler than str_replace for line-range edits. Supports preview mode. Creates .bak backup.
 
 move_file — Move or rename a file and update all using statements and references. Always preview first."),
 

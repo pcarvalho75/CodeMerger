@@ -18,12 +18,14 @@ namespace CodeMerger.Services.Mcp
         private readonly WorkspaceAnalysis _workspaceAnalysis;
         private readonly SemanticAnalyzer _semanticAnalyzer;
         private readonly Action<string> _sendActivity;
+        private readonly Func<DateTime> _getLastEditTimestamp;
 
-        public McpSemanticToolHandler(WorkspaceAnalysis workspaceAnalysis, List<CallSite> callSites, Action<string> sendActivity)
+        public McpSemanticToolHandler(WorkspaceAnalysis workspaceAnalysis, List<CallSite> callSites, Action<string> sendActivity, Func<DateTime> getLastEditTimestamp)
         {
             _workspaceAnalysis = workspaceAnalysis;
             _semanticAnalyzer = new SemanticAnalyzer(workspaceAnalysis, callSites);
             _sendActivity = sendActivity;
+            _getLastEditTimestamp = getLastEditTimestamp;
         }
 
         public string FindReferences(JsonElement arguments)
@@ -41,7 +43,7 @@ namespace CodeMerger.Services.Mcp
                 symbolKind = kindEl.GetString();
 
             var result = _semanticAnalyzer.FindUsages(symbolName, symbolKind);
-            return result.ToMarkdown();
+            return AppendStalenessWarning(result.ToMarkdown());
         }
 
         public string GetCallers(JsonElement arguments)
@@ -97,7 +99,7 @@ namespace CodeMerger.Services.Mcp
                 sb.AppendLine("*No callers found. This may be an entry point or unused method.*");
             }
 
-            return sb.ToString();
+            return AppendStalenessWarning(sb.ToString());
         }
 
         public string GetCallees(JsonElement arguments)
@@ -153,7 +155,7 @@ namespace CodeMerger.Services.Mcp
                 sb.AppendLine("*No outgoing calls found.*");
             }
 
-            return sb.ToString();
+            return AppendStalenessWarning(sb.ToString());
         }
 
         public string FindImplementations(JsonElement arguments)
@@ -274,6 +276,25 @@ namespace CodeMerger.Services.Mcp
             {
                 GC.Collect(2, GCCollectionMode.Aggressive, blocking: true);
             }
+        }
+
+        /// <summary>
+        /// Appends a staleness warning if any .cs files were indexed before the last edit.
+        /// </summary>
+        private string AppendStalenessWarning(string markdown)
+        {
+            var lastEdit = _getLastEditTimestamp();
+            var staleCount = _workspaceAnalysis.AllFiles
+                .Count(f => f.Extension == ".cs" && f.LastIndexedUtc < lastEdit.AddSeconds(-5));
+
+            if (staleCount > 0)
+            {
+                markdown += "\n\n⚠️ **Note:** Some files may have stale index data (" +
+                            staleCount + " files indexed before the last edit). " +
+                            "Use `codemerger_refresh` if results seem incomplete.";
+            }
+
+            return markdown;
         }
     }
 }

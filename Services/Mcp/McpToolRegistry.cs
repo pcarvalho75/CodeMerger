@@ -160,6 +160,7 @@ namespace CodeMerger.Services.Mcp
                     name = "codemerger_grep",
                     description = "Regex/text search in file contents with line numbers and context.\n" +
                         "ONLY use for: XAML content, string literals, comments, non-C# files, or when you need line-level context.\n" +
+                        "Also valid as a SAFETY NET after find_references if results seem incomplete (e.g., lambdas, dynamic calls, nameof()).\n" +
                         "DO NOT use for: finding C# symbol usages (use find_references), finding types/methods (use search_code), " +
                         "checking who calls a method (use get_callers), or verifying property usage across files (use find_references).\n" +
                         "When tempted to grep a C# symbol name, stop and use the semantic tool instead.\n" +
@@ -269,6 +270,11 @@ namespace CodeMerger.Services.Mcp
                     name = "codemerger_find_references",
                     description = "Find all references to a symbol using semantic analysis. PREFER THIS over grep for verifying C# symbol usage.\n" +
                         "Use to: check if a property/method/type is used, verify wiring after adding new members, find all consumers before refactoring.\n" +
+                        "Tracks: method invocations, property/field accesses (reads and writes), type inheritance, interface implementations.\n" +
+                        "LIMITATION: Uses syntax-tree heuristics, not full semantic compilation. May miss references in: " +
+                        "lambdas assigned to variables, dynamic/reflection calls, or nameof() expressions. " +
+                        "Common .NET/LINQ members (Where, Select, Add, Count, etc.) are filtered out to reduce noise. " +
+                        "If results seem incomplete, follow up with grep as a safety net.\n" +
                         "Only use grep instead when searching for non-C# content (XAML, comments, string literals).\n" +
                         "EXAMPLES: 'Is SaveTrade used anywhere?' → find_references. 'Who implements IDataStream?' → find_references.\n" +
                         "WRONG: grep 'SaveTrade' to find usages. RIGHT: find_references symbolName='SaveTrade'.",
@@ -287,7 +293,7 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_get_callers",
-                    description = "Get all methods that call a specific method. PREFER THIS over grep when tracing call chains.\n" +
+                    description = "Get all methods that call a specific method or access a specific property/field. PREFER THIS over grep when tracing call chains.\n" +
                         "Essential before modifying method signatures — shows exactly what will break. Pair with get_callees for full call graph.\n" +
                         "WRONG: grep 'MethodName' to find who calls it. RIGHT: get_callers methodName='MethodName'.",
                     inputSchema = new Dictionary<string, object>
@@ -390,7 +396,8 @@ namespace CodeMerger.Services.Mcp
                     name = "codemerger_grep_replace",
                     description = "Regex find-and-replace across all project files. ALWAYS preview first (default), then apply.\n" +
                         "Use for: renaming strings in XAML, updating text patterns across many files, bulk find-replace.\n" +
-                        "NOT for: renaming C# symbols (use rename_symbol instead).",
+                        "NOT for: renaming C# symbols (use rename_symbol instead).\n" +
+                        "Preview numbers each match. Use excludeMatches to skip specific matches, or excludePattern to skip lines matching a regex.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -400,8 +407,10 @@ namespace CodeMerger.Services.Mcp
                                 { "replacement", new Dictionary<string, string> { { "type", "string" }, { "description", "Replacement string (supports regex groups like $1, $2)" } } },
                                 { "preview", new Dictionary<string, object> { { "type", "boolean" }, { "description", "If true, only show what would change without applying (default: true)" }, { "default", true } } },
                                 { "caseSensitive", new Dictionary<string, object> { { "type", "boolean" }, { "description", "Case-sensitive matching (default: false)" }, { "default", false } } },
-                                { "fileFilter", new Dictionary<string, string> { { "type", "string" }, { "description", "Optional: only match files whose path contains this string (e.g., '.xaml', 'Services/')" } } }
-                            }
+                            { "fileFilter", new Dictionary<string, string> { { "type", "string" }, { "description", "Optional: only match files whose path contains this string (e.g., '.xaml', 'Services/')" } } },
+                            { "excludeMatches", new Dictionary<string, object> { { "type", "array" }, { "items", new Dictionary<string, string> { { "type", "integer" } } }, { "description", "Optional: match indices to skip when applying (from preview output). E.g., [3] to skip match #3." } } },
+                            { "excludePattern", new Dictionary<string, string> { { "type", "string" }, { "description", "Optional: regex pattern — lines matching this are skipped (not replaced). E.g., 'private.*BuildFullInput' to skip the definition." } } }
+                        }
                         },
                         { "required", new[] { "pattern", "replacement" } }
                     }
@@ -419,6 +428,27 @@ namespace CodeMerger.Services.Mcp
                             }
                         },
                         { "required", new[] { "path" } }
+                    }
+                },
+                new
+                {
+                    name = "codemerger_replace_lines",
+                    description = "Replace a range of lines in a file with new content. Use when you know exact line numbers from get_lines.\n" +
+                        "Simpler than str_replace when line numbers are known. Creates .bak backup.",
+                    inputSchema = new Dictionary<string, object>
+                    {
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>
+                            {
+                                { "path", new Dictionary<string, string> { { "type", "string" }, { "description", "Relative path to the file" } } },
+                                { "startLine", new Dictionary<string, string> { { "type", "integer" }, { "description", "First line to replace (1-indexed)" } } },
+                                { "endLine", new Dictionary<string, string> { { "type", "integer" }, { "description", "Last line to replace (1-indexed, inclusive)" } } },
+                                { "newContent", new Dictionary<string, string> { { "type", "string" }, { "description", "Replacement content (replaces all lines from startLine to endLine)" } } },
+                                { "createBackup", new Dictionary<string, object> { { "type", "boolean" }, { "description", "Create .bak backup before modifying (default: true)" }, { "default", true } } },
+                                { "preview", new Dictionary<string, object> { { "type", "boolean" }, { "description", "Preview the replacement without applying (default: false)" }, { "default", false } } }
+                            }
+                        },
+                        { "required", new[] { "path", "startLine", "endLine", "newContent" } }
                     }
                 },
                 new

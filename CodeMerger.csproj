@@ -10,6 +10,7 @@
     <AssemblyName>CodeMerger</AssemblyName>
     <RootNamespace>CodeMerger</RootNamespace>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <UpdateRequired>true</UpdateRequired>
     <MinimumRequiredVersion>$(ApplicationVersion)</MinimumRequiredVersion>
   </PropertyGroup>
