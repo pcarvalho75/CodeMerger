@@ -988,7 +988,6 @@ namespace CodeMerger.Services
                     "codemerger_delete_file" => _writeHandler.DeleteFile(arguments),
                     "codemerger_grep_replace" => _writeHandler.GrepReplace(arguments),
                     "codemerger_undo" => _writeHandler.Undo(arguments),
-                    "codemerger_replace_lines" => _writeHandler.ReplaceLines(arguments),
                     "codemerger_move_file" => _writeHandler.MoveFile(arguments),
 
                     // Refactoring tools
