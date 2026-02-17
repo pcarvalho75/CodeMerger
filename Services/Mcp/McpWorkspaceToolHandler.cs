@@ -262,10 +262,20 @@ namespace CodeMerger.Services.Mcp
             try
             {
                 // Find project or solution file
-                var (projectFile, projectType) = FindProjectFile();
+                string? explicitPath = null;
+                if (arguments.TryGetProperty("path", out var pathEl))
+                    explicitPath = pathEl.GetString();
+
+                var (projectFile, projectType) = FindProjectFile(explicitPath);
 
                 if (projectFile == null)
                 {
+                    var available = GetAllProjectFiles();
+                    if (available.Count > 0)
+                    {
+                        var listing = string.Join("\n", available.Select(p => $"  - `{Path.GetFileName(p)}` ({p})"));
+                        return $"Error: Could not resolve '{explicitPath}'. Available build targets:\n{listing}";
+                    }
                     return "Error: No .csproj or .sln file found in the workspace directories.";
                 }
 
@@ -384,18 +394,63 @@ namespace CodeMerger.Services.Mcp
             }
         }
 
-        private (string? path, string type) FindProjectFile()
+        private (string? path, string type) FindProjectFile(string? explicitPath = null)
         {
-            // First look for .sln files
+            // If caller specified an explicit path, resolve and use it directly
+            if (!string.IsNullOrEmpty(explicitPath))
+            {
+                bool IsSolution(string p) => p.EndsWith(".sln", StringComparison.OrdinalIgnoreCase)
+                    || p.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase);
+
+                // Try as-is first (absolute path)
+                if (File.Exists(explicitPath))
+                    return (explicitPath, IsSolution(explicitPath) ? "solution" : "project");
+
+                // Try resolving relative to each input directory
+                foreach (var dir in _inputDirectories)
+                {
+                    var resolved = Path.GetFullPath(Path.Combine(dir, explicitPath));
+                    if (File.Exists(resolved))
+                        return (resolved, IsSolution(resolved) ? "solution" : "project");
+                }
+
+                // Try matching by filename across all known project files
+                var allProjects = GetAllProjectFiles();
+                var match = allProjects.FirstOrDefault(p =>
+                    Path.GetFileName(p).Equals(explicitPath, StringComparison.OrdinalIgnoreCase));
+                if (match != null)
+                    return (match, IsSolution(match) ? "solution" : "project");
+
+                return (null, "none");
+            }
+
+            // Auto-detect: first look for .sln/.slnx in input directories
             foreach (var dir in _inputDirectories)
             {
                 if (!Directory.Exists(dir)) continue;
-                var slnFiles = Directory.GetFiles(dir, "*.sln", SearchOption.TopDirectoryOnly);
+                var slnFiles = Directory.GetFiles(dir, "*.sln", SearchOption.TopDirectoryOnly)
+                    .Concat(Directory.GetFiles(dir, "*.slnx", SearchOption.TopDirectoryOnly))
+                    .ToArray();
                 if (slnFiles.Length > 0)
                     return (slnFiles[0], "solution");
             }
 
-            // Then look for .csproj files in root
+            // Check parent directories for .sln/.slnx (common layout: solution root contains .sln, subdirs contain .csproj)
+            var checkedParents = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var dir in _inputDirectories)
+            {
+                var parent = Directory.GetParent(dir)?.FullName;
+                if (parent != null && checkedParents.Add(parent) && Directory.Exists(parent))
+                {
+                    var slnFiles = Directory.GetFiles(parent, "*.sln", SearchOption.TopDirectoryOnly)
+                        .Concat(Directory.GetFiles(parent, "*.slnx", SearchOption.TopDirectoryOnly))
+                        .ToArray();
+                    if (slnFiles.Length > 0)
+                        return (slnFiles[0], "solution");
+                }
+            }
+
+            // Then look for .csproj files in input directories
             foreach (var dir in _inputDirectories)
             {
                 if (!Directory.Exists(dir)) continue;
@@ -418,6 +473,48 @@ namespace CodeMerger.Services.Mcp
             }
 
             return (null, "none");
+        }
+
+        /// <summary>
+        /// Discovers all .sln and .csproj files in and around the workspace directories.
+        /// </summary>
+        public List<string> GetAllProjectFiles()
+        {
+            var results = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var checkedParents = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var dir in _inputDirectories)
+            {
+                if (!Directory.Exists(dir)) continue;
+
+                // Search within input directory
+                try
+                {
+                    foreach (var f in Directory.GetFiles(dir, "*.sln", SearchOption.TopDirectoryOnly))
+                        results.Add(f);
+                    foreach (var f in Directory.GetFiles(dir, "*.slnx", SearchOption.TopDirectoryOnly))
+                        results.Add(f);
+                    foreach (var f in Directory.GetFiles(dir, "*.csproj", SearchOption.AllDirectories))
+                        results.Add(f);
+                }
+                catch { }
+
+                // Search parent directory for .sln/.slnx
+                var parent = Directory.GetParent(dir)?.FullName;
+                if (parent != null && checkedParents.Add(parent) && Directory.Exists(parent))
+                {
+                    try
+                    {
+                        foreach (var f in Directory.GetFiles(parent, "*.sln", SearchOption.TopDirectoryOnly))
+                            results.Add(f);
+                        foreach (var f in Directory.GetFiles(parent, "*.slnx", SearchOption.TopDirectoryOnly))
+                            results.Add(f);
+                    }
+                    catch { }
+                }
+            }
+
+            return results.OrderBy(f => f).ToList();
         }
 
         private (List<(string display, string? fullPath, int line)> errors, List<string> warnings) ParseBuildOutput(string output)

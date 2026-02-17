@@ -16,6 +16,7 @@ namespace CodeMerger.Services.Mcp
         private readonly WorkspaceAnalysis _workspaceAnalysis;
         private readonly ContextAnalyzer _contextAnalyzer;
         private readonly FilePathResolver _pathResolver;
+        private readonly List<string> _inputDirectories;
         private readonly Action<string> _sendActivity;
 
         public McpReadToolHandler(WorkspaceAnalysis workspaceAnalysis, List<CallSite> callSites, List<string> inputDirectories, Action<string> sendActivity)
@@ -23,6 +24,7 @@ namespace CodeMerger.Services.Mcp
             _workspaceAnalysis = workspaceAnalysis;
             _contextAnalyzer = new ContextAnalyzer(workspaceAnalysis, callSites);
             _pathResolver = new FilePathResolver(workspaceAnalysis, inputDirectories);
+            _inputDirectories = inputDirectories;
             _sendActivity = sendActivity;
         }
 
@@ -135,6 +137,20 @@ namespace CodeMerger.Services.Mcp
             sb.AppendLine("5. Make changes with `str_replace` → `build` → verify");
             sb.AppendLine();
 
+            // Buildable Projects section — show .sln and .csproj files available for `build`
+            var buildTargets = DiscoverBuildTargets();
+            if (buildTargets.Count > 0)
+            {
+                sb.AppendLine();
+                sb.AppendLine("## Build Targets");
+                sb.AppendLine("Use `build path=\"Filename.sln\"` or `build path=\"Project.csproj\"` to target a specific project.");
+                sb.AppendLine();
+                foreach (var target in buildTargets)
+                {
+                    sb.AppendLine($"- `{Path.GetFileName(target)}` — {target}");
+                }
+            }
+
             // Project References section
             if (_workspaceAnalysis.ProjectReferences.Count > 0)
             {
@@ -161,6 +177,46 @@ namespace CodeMerger.Services.Mcp
             }
 
             return sb.ToString();
+        }
+
+        /// <summary>
+        /// Discovers all .sln and .csproj files in and around the workspace directories.
+        /// </summary>
+        private List<string> DiscoverBuildTargets()
+        {
+            var results = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var checkedParents = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var dir in _inputDirectories)
+            {
+                if (!Directory.Exists(dir)) continue;
+
+                try
+                {
+                    foreach (var f in Directory.GetFiles(dir, "*.sln", SearchOption.TopDirectoryOnly))
+                        results.Add(f);
+                    foreach (var f in Directory.GetFiles(dir, "*.slnx", SearchOption.TopDirectoryOnly))
+                        results.Add(f);
+                    foreach (var f in Directory.GetFiles(dir, "*.csproj", SearchOption.AllDirectories))
+                        results.Add(f);
+                }
+                catch { }
+
+                var parent = Directory.GetParent(dir)?.FullName;
+                if (parent != null && checkedParents.Add(parent) && Directory.Exists(parent))
+                {
+                    try
+                    {
+                        foreach (var f in Directory.GetFiles(parent, "*.sln", SearchOption.TopDirectoryOnly))
+                            results.Add(f);
+                        foreach (var f in Directory.GetFiles(parent, "*.slnx", SearchOption.TopDirectoryOnly))
+                            results.Add(f);
+                    }
+                    catch { }
+                }
+            }
+
+            return results.OrderBy(f => Path.GetExtension(f)).ThenBy(f => f).ToList();
         }
 
         public string ListFiles(JsonElement arguments)

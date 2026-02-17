@@ -2,6 +2,7 @@ using CodeMerger.Models;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 
 namespace CodeMerger.Services
@@ -60,6 +61,8 @@ namespace CodeMerger.Services
                         var workspace = JsonSerializer.Deserialize<Workspace>(json);
                         if (workspace != null)
                         {
+                            if (MergeDefaultExtensions(workspace))
+                                SaveWorkspace(workspace);
                             workspaces.Add(workspace);
                         }
                     }
@@ -120,7 +123,10 @@ namespace CodeMerger.Services
             try
             {
                 var json = File.ReadAllText(configPath);
-                return JsonSerializer.Deserialize<Workspace>(json);
+                var workspace = JsonSerializer.Deserialize<Workspace>(json);
+                if (workspace != null && MergeDefaultExtensions(workspace))
+                    SaveWorkspace(workspace);
+                return workspace;
             }
             catch
             {
@@ -239,6 +245,29 @@ namespace CodeMerger.Services
         {
             var filePath = GetActiveWorkspaceFilePath();
             File.WriteAllText(filePath, workspaceName);
+        }
+
+        /// <summary>
+        /// Merges any missing default extensions into an existing workspace.
+        /// Returns true if the workspace was modified (needs saving).
+        /// </summary>
+        private static bool MergeDefaultExtensions(Workspace workspace)
+        {
+            var defaults = new Workspace();
+            var defaultExts = new HashSet<string>(
+                defaults.Extensions.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+                StringComparer.OrdinalIgnoreCase);
+
+            var currentExts = new HashSet<string>(
+                workspace.Extensions.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+                StringComparer.OrdinalIgnoreCase);
+
+            var missing = defaultExts.Where(e => !currentExts.Contains(e)).ToList();
+            if (missing.Count == 0) return false;
+
+            workspace.Extensions = workspace.Extensions.TrimEnd().TrimEnd(',')
+                + ", " + string.Join(", ", missing);
+            return true;
         }
 
         /// <summary>

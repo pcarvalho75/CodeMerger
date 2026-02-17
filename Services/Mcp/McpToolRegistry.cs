@@ -601,7 +601,7 @@ namespace CodeMerger.Services.Mcp
                                 { "configuration", new Dictionary<string, object> { { "type", "string" }, { "description", "Build configuration: Debug or Release (default: Debug)" }, { "default", "Debug" } } },
                                 { "verbose", new Dictionary<string, object> { { "type", "boolean" }, { "description", "Include full build output (default: false)" }, { "default", false } } },
                                 { "quickCheck", new Dictionary<string, object> { { "type", "boolean" }, { "description", "Fast Roslyn syntax-only check instead of full build (default: false)" }, { "default", false } } },
-                                { "path", new Dictionary<string, string> { { "type", "string" }, { "description", "Specific file to check (only for quickCheck, default: all C# files)" } } }
+                                { "path", new Dictionary<string, string> { { "type", "string" }, { "description", "Specific .csproj or .sln to build (filename or path). For quickCheck: specific .cs file. Default: auto-detect (prefers .sln)" } } }
                             }
                         },
                         { "required", Array.Empty<string>() }

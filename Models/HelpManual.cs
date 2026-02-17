@@ -72,7 +72,7 @@ Watch the CodeMerger window — you'll see real-time activity as Claude uses the
 
 Tabs:
 
-Source Directories — Configure which folders to index. Add/Remove directories, set extension filters (default: .cs, .xaml, .py, .csproj, .sln), set ignored directories (default: bin, obj, .vs, Properties). Tip: Add your solution's root folder. CodeMerger finds everything inside it.
+Source Directories — Configure which folders to index. Add/Remove directories, set extension filters (default: .cs, .xaml, .py, .csproj, .sln, .slnx, .json, .md, .props, .targets), set ignored directories (default: bin, obj, .vs, Properties). Tip: Add your solution's root folder. CodeMerger finds everything inside it.
 
 LLMs — Configure AI assistant connections. Claude Desktop: shows status, Add Config button, Open Config Folder. ChatGPT/Other: SSE server with optional Cloudflare Tunnel for cloud-based LLMs.
 
