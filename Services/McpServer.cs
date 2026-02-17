@@ -983,6 +983,7 @@ namespace CodeMerger.Services
 
                     // Write tools
                     "codemerger_str_replace" => _writeHandler.StrReplace(arguments),
+                    "codemerger_replace_lines" => _writeHandler.ReplaceLines(arguments),
                     "codemerger_write_file" => _writeHandler.WriteFile(arguments),
                     "codemerger_delete_file" => _writeHandler.DeleteFile(arguments),
                     "codemerger_grep_replace" => _writeHandler.GrepReplace(arguments),

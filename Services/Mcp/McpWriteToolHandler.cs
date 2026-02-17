@@ -106,12 +106,8 @@ namespace CodeMerger.Services.Mcp
                     var result = FindWithNormalizedIndent(content, searchStr, fileLineEnding);
                     index = result.index;
                     matchedOriginal = result.matchedText;
-
-                    // Adapt replacement indentation to match original
-                    if (index != -1 && !string.IsNullOrEmpty(matchedOriginal))
-                    {
-                        replaceStr = AdaptIndentation(replaceStr, matchedOriginal, fileLineEnding);
-                    }
+                    // newStr is written as-is — the caller controls the desired indentation.
+                    // This allows normalizeIndent to fix bad indentation in the file.
                 }
                 else
                 {
@@ -171,6 +167,82 @@ namespace CodeMerger.Services.Mcp
                     sb.AppendLine($"**Backup:** `{file.FilePath}.bak`");
 
                 return sb.ToString();
+            }
+            catch (Exception ex)
+            {
+                return $"Error: {ex.Message}";
+            }
+        }
+
+        /// <summary>
+        /// Replaces a range of lines (1-indexed, inclusive) with new content.
+        /// </summary>
+        public string ReplaceLines(JsonElement arguments)
+        {
+            try
+            {
+                var path = arguments.GetProperty("path").GetString()!;
+                int startLine = arguments.GetProperty("startLine").GetInt32();
+                int endLine = arguments.GetProperty("endLine").GetInt32();
+                var newContent = arguments.GetProperty("newContent").GetString()!;
+
+                var createBackup = _settings.CreateBackupFiles;
+                if (arguments.TryGetProperty("createBackup", out var backupEl))
+                    createBackup = backupEl.GetBoolean();
+
+                var (file, findError) = _pathResolver.FindFile(path);
+                if (file == null)
+                    return findError!;
+
+                var content = File.ReadAllText(file.FilePath);
+                var fileLineEnding = content.Contains("\r\n") ? "\r\n" : "\n";
+                var lines = content.Split(new[] { fileLineEnding }, StringSplitOptions.None);
+
+                if (startLine < 1 || endLine < startLine || endLine > lines.Length)
+                    return $"Error: Invalid line range {startLine}-{endLine}. File has {lines.Length} lines.";
+
+                // Normalize newContent line endings
+                newContent = newContent.Replace("\r\n", "\n").Replace("\r", "\n");
+                if (fileLineEnding != "\n")
+                    newContent = newContent.Replace("\n", fileLineEnding);
+
+                if (createBackup && File.Exists(file.FilePath))
+                    File.Copy(file.FilePath, file.FilePath + ".bak", true);
+
+                // Build result: lines before + new content + lines after
+                var sb = new StringBuilder();
+                for (int i = 0; i < startLine - 1; i++)
+                {
+                    sb.Append(lines[i]);
+                    sb.Append(fileLineEnding);
+                }
+                sb.Append(newContent);
+                if (endLine < lines.Length)
+                {
+                    sb.Append(fileLineEnding);
+                    for (int i = endLine; i < lines.Length; i++)
+                    {
+                        sb.Append(lines[i]);
+                        if (i < lines.Length - 1)
+                            sb.Append(fileLineEnding);
+                    }
+                }
+
+                File.WriteAllText(file.FilePath, sb.ToString());
+
+                _sendActivity($"ReplaceLines: {path}");
+                _log($"ReplaceLines: {path} - replaced lines {startLine}-{endLine}");
+                _updateFileIndex(file.FilePath);
+
+                int linesReplaced = endLine - startLine + 1;
+                var resultSb = new StringBuilder();
+                resultSb.AppendLine("# Replace Lines Result");
+                resultSb.AppendLine();
+                resultSb.AppendLine($"**File:** `{file.RelativePath}`");
+                resultSb.AppendLine($"**Status:** Success - replaced lines {startLine}-{endLine} ({linesReplaced} lines)");
+                if (createBackup)
+                    resultSb.AppendLine("**Backup:** Created .bak file");
+                return resultSb.ToString();
             }
             catch (Exception ex)
             {
@@ -252,93 +324,6 @@ namespace CodeMerger.Services.Mcp
             return (-1, "");
         }
 
-        /// <summary>
-        /// Adapt the replacement string's indentation to match the original matched text.
-        /// </summary>
-        private string AdaptIndentation(string replacement, string originalMatch, string lineEnding)
-        {
-            var replaceLines = replacement.Split(new[] { lineEnding }, StringSplitOptions.None);
-            var originalLines = originalMatch.Split(new[] { lineEnding }, StringSplitOptions.None);
-
-            if (replaceLines.Length == 0 || originalLines.Length == 0)
-                return replacement;
-
-            // Detect indentation style from original (first non-empty line)
-            string baseIndent = "";
-            foreach (var line in originalLines)
-            {
-                if (!string.IsNullOrWhiteSpace(line))
-                {
-                    int contentStart = 0;
-                    while (contentStart < line.Length && char.IsWhiteSpace(line[contentStart]))
-                        contentStart++;
-                    baseIndent = line.Substring(0, contentStart);
-                    break;
-                }
-            }
-
-            // Detect the indent unit from original (difference between indentation levels)
-            string indentUnit = "    "; // default to 4 spaces
-            string? prevIndent = null;
-            foreach (var line in originalLines)
-            {
-                if (string.IsNullOrWhiteSpace(line)) continue;
-                
-                int contentStart = 0;
-                while (contentStart < line.Length && char.IsWhiteSpace(line[contentStart]))
-                    contentStart++;
-                var currentIndent = line.Substring(0, contentStart);
-                
-                if (prevIndent != null && currentIndent.Length > prevIndent.Length)
-                {
-                    indentUnit = currentIndent.Substring(prevIndent.Length);
-                    break;
-                }
-                prevIndent = currentIndent;
-            }
-
-            // Calculate minimum indent in replacement (to preserve relative indentation)
-            int minReplaceIndent = int.MaxValue;
-            foreach (var line in replaceLines)
-            {
-                if (string.IsNullOrWhiteSpace(line)) continue;
-                int indent = 0;
-                while (indent < line.Length && char.IsWhiteSpace(line[indent]))
-                    indent++;
-                minReplaceIndent = Math.Min(minReplaceIndent, indent);
-            }
-            if (minReplaceIndent == int.MaxValue) minReplaceIndent = 0;
-
-            // Apply indentation to replacement lines
-            var result = new StringBuilder();
-            for (int i = 0; i < replaceLines.Length; i++)
-            {
-                if (i > 0) result.Append(lineEnding);
-
-                var line = replaceLines[i];
-                if (string.IsNullOrWhiteSpace(line))
-                {
-                    result.Append(line);
-                    continue;
-                }
-
-                // Calculate this line's relative indentation
-                int lineIndent = 0;
-                while (lineIndent < line.Length && char.IsWhiteSpace(line[lineIndent]))
-                    lineIndent++;
-                int relativeIndent = lineIndent - minReplaceIndent;
-
-                // Build new indentation
-                string newIndent = baseIndent;
-                for (int j = 0; j < relativeIndent / 4; j++) // Assuming 4-space units in input
-                    newIndent += indentUnit;
-
-                result.Append(newIndent);
-                result.Append(line.TrimStart());
-            }
-
-            return result.ToString();
-        }
 
         private string BuildNotFoundError(string content, string searchStr, string filePath, bool normalizeIndent = false)
         {

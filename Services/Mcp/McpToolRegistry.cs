@@ -353,11 +353,31 @@ namespace CodeMerger.Services.Mcp
                             }
                         },
                         { "required", new[] { "path", "oldStr" } }
-                    }
-                },
-                new
-                {
-                    name = "codemerger_write_file",
+                        }
+                    },
+                    new
+                    {
+                        name = "codemerger_replace_lines",
+                        description = "Replace a range of lines in a file with new content. Use when you know exact line numbers from get_lines.\n" +
+                            "Simpler than str_replace when line numbers are known. Creates .bak backup.",
+                        inputSchema = new Dictionary<string, object>
+                        {
+                            { "type", "object" },
+                            { "properties", new Dictionary<string, object>
+                                {
+                                    { "path", new Dictionary<string, string> { { "type", "string" }, { "description", "Relative path to the file" } } },
+                                    { "startLine", new Dictionary<string, object> { { "type", "integer" }, { "description", "First line to replace (1-indexed)" } } },
+                                    { "endLine", new Dictionary<string, object> { { "type", "integer" }, { "description", "Last line to replace (1-indexed, inclusive)" } } },
+                                    { "newContent", new Dictionary<string, string> { { "type", "string" }, { "description", "Replacement content (replaces all lines from startLine to endLine)" } } },
+                                    { "createBackup", new Dictionary<string, object> { { "type", "boolean" }, { "description", "Create .bak backup before modifying (default: true)" }, { "default", true } } }
+                                }
+                            },
+                            { "required", new[] { "path", "startLine", "endLine", "newContent" } }
+                        }
+                    },
+                    new
+                    {
+                        name = "codemerger_write_file",
                     description = "Write full file content (create or overwrite). Creates .bak backup.\n\n" +
                         "PREFER str_replace for small/medium changes, rename_symbol for renaming, move_file for moving.\n" +
                         "For files >600 lines: write skeleton first, fill methods via str_replace. Set preview: true to diff without writing.\n" +
