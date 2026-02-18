@@ -393,6 +393,21 @@ namespace CodeMerger.Services.Mcp
                 },
                 new
                 {
+                    name = "codemerger_create_folder",
+                    description = "Create a folder (and any missing parent folders) in the workspace. Use before move_file or write_file when the target directory doesn't exist yet.",
+                    inputSchema = new Dictionary<string, object>
+                    {
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>
+                            {
+                                { "path", new Dictionary<string, string> { { "type", "string" }, { "description", "Relative path of the folder to create (e.g., 'Services/Parsers')" } } }
+                            }
+                        },
+                        { "required", new[] { "path" } }
+                    }
+                },
+                new
+                {
                     name = "codemerger_grep_replace",
                     description = "Regex find-and-replace across all project files. ALWAYS preview first (default), then apply.\n" +
                         "Use for: renaming strings in XAML, updating text patterns across many files, bulk find-replace.\n" +

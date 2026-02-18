@@ -469,6 +469,64 @@ namespace CodeMerger.Services.Mcp
             }
         }
 
+        public string CreateFolder(JsonElement arguments)
+        {
+            if (!arguments.TryGetProperty("path", out var pathEl))
+                return "Error: 'path' parameter is required.";
+
+            var relativePath = pathEl.GetString() ?? "";
+            _sendActivity($"CreateFolder: {relativePath}");
+
+            if (string.IsNullOrWhiteSpace(relativePath))
+                return "Error: 'path' cannot be empty.";
+
+            try
+            {
+                // Resolve base directory (same logic as WriteFile)
+                string baseDir;
+                string effectivePath = relativePath;
+
+                var matchedRoot = _inputDirectories.FirstOrDefault(dir =>
+                {
+                    var rootName = Path.GetFileName(dir.TrimEnd('\\', '/'));
+                    return relativePath.StartsWith(rootName + "/", StringComparison.OrdinalIgnoreCase) ||
+                           relativePath.StartsWith(rootName + "\\", StringComparison.OrdinalIgnoreCase);
+                });
+
+                if (matchedRoot != null)
+                {
+                    baseDir = matchedRoot;
+                    var rootName = Path.GetFileName(matchedRoot.TrimEnd('\\', '/'));
+                    effectivePath = relativePath.Substring(rootName.Length + 1);
+                }
+                else
+                {
+                    baseDir = _inputDirectories.FirstOrDefault() ?? Directory.GetCurrentDirectory();
+                }
+
+                var fullPath = Path.GetFullPath(Path.Combine(baseDir, effectivePath.Replace('/', Path.DirectorySeparatorChar)));
+
+                // Security: verify within workspace
+                bool withinWorkspace = _inputDirectories.Any(dir =>
+                    fullPath.StartsWith(Path.GetFullPath(dir), StringComparison.OrdinalIgnoreCase));
+
+                if (!withinWorkspace)
+                    return $"Error: Path escapes workspace boundaries.";
+
+                if (Directory.Exists(fullPath))
+                    return $"# Create Folder Result\n\n**Path:** `{relativePath}`\n**Status:** Already exists";
+
+                Directory.CreateDirectory(fullPath);
+                _log($"CreateFolder: {relativePath}");
+
+                return $"# Create Folder Result\n\n**Path:** `{relativePath}`\n**Full Path:** `{fullPath}`\n**Status:** Created successfully";
+            }
+            catch (Exception ex)
+            {
+                return $"Error: {ex.Message}";
+            }
+        }
+
         public string GrepReplace(JsonElement arguments)
         {
             if (!arguments.TryGetProperty("pattern", out var patternEl))

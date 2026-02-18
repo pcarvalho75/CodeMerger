@@ -128,6 +128,8 @@ write_file — Write complete file content (create or overwrite). Creates .bak b
 
 delete_file — Delete a file with .bak backup. Use undo to restore.
 
+create_folder — Create a folder (and any missing parent folders) in the workspace. Use before move_file or write_file when the target directory doesn't exist yet.
+
 grep_replace — Regex find-and-replace across all project files. Always preview first (default). Supports regex capture groups ($1, $2). Optional fileFilter to limit scope. Preview numbers each match; use excludeMatches to skip specific matches, or excludePattern to skip lines matching a regex.
 
 undo — Restore a file from its most recent .bak backup.
