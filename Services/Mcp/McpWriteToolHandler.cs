@@ -469,6 +469,34 @@ namespace CodeMerger.Services.Mcp
             }
         }
 
+        public string CreateFolder(JsonElement arguments)
+        {
+            if (!arguments.TryGetProperty("path", out var pathEl))
+                return "Error: 'path' parameter is required.";
+
+            var relativePath = pathEl.GetString() ?? "";
+            _sendActivity($"Creating folder: {relativePath}");
+
+            try
+            {
+                var (fullPath, baseDir, rootMatched, resolveError) = _refactoringService.ResolveRelativePath(relativePath);
+                if (resolveError != null)
+                    return $"Error: {resolveError}";
+
+                if (Directory.Exists(fullPath))
+                    return $"Folder already exists: `{relativePath}` → `{fullPath}`";
+
+                Directory.CreateDirectory(fullPath);
+                _log($"CreateFolder: {relativePath} -> {fullPath}");
+
+                return $"# Folder Created\n\n**Path:** `{relativePath}`\n**Full path:** `{fullPath}`";
+            }
+            catch (Exception ex)
+            {
+                return $"Error: {ex.Message}";
+            }
+        }
+
         public string GrepReplace(JsonElement arguments)
         {
             if (!arguments.TryGetProperty("pattern", out var patternEl))

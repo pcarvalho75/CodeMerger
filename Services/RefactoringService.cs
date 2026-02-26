@@ -53,40 +53,15 @@ namespace CodeMerger.Services
                 string fullPath;
                 FileAnalysis? existingFile = null;
 
-                // Try to match path prefix to a known project root
-                string baseDir;
-                string effectivePath = relativePath;
-                
-                var matchedRoot = _inputDirectories.FirstOrDefault(dir =>
-                {
-                    var rootName = Path.GetFileName(dir.TrimEnd('\\', '/'));
-                    return relativePath.StartsWith(rootName + "/", StringComparison.OrdinalIgnoreCase) ||
-                           relativePath.StartsWith(rootName + "\\", StringComparison.OrdinalIgnoreCase);
-                });
-
-                if (matchedRoot != null)
-                {
-                    // Path starts with a root name like "Vortex/Engines/file.cs"
-                    // Use that root and strip the prefix
-                    baseDir = matchedRoot;
-                    var rootName = Path.GetFileName(matchedRoot.TrimEnd('\\', '/'));
-                    effectivePath = relativePath.Substring(rootName.Length + 1); // +1 for the separator
-                }
-                else
-                {
-                    // No root prefix - use first directory (original behavior)
-                    baseDir = _inputDirectories.FirstOrDefault() ?? Directory.GetCurrentDirectory();
-                }
-
-                fullPath = Path.GetFullPath(Path.Combine(baseDir, effectivePath.Replace('/', Path.DirectorySeparatorChar)));
-
-                // Security: Verify resolved path is within workspace
-                if (!IsPathWithinWorkspace(fullPath))
+                var (resolvedPath, baseDir, rootMatched, resolveError) = ResolveRelativePath(relativePath);
+                if (resolveError != null)
                 {
                     result.Success = false;
-                    result.Error = $"Invalid path: resolved path escapes workspace. Valid roots: {string.Join(", ", _inputDirectories.Select(d => Path.GetFileName(d.TrimEnd('\\', '/'))))}";
+                    result.Error = resolveError;
                     return result;
                 }
+
+                fullPath = resolvedPath;
 
                 // Check if file exists - match by full path OR relative path
                 existingFile = _workspaceAnalysis.AllFiles.FirstOrDefault(f =>
@@ -96,7 +71,7 @@ namespace CodeMerger.Services
 
                 // SAFETY CHECK: If creating a NEW file with multiple roots and no explicit root prefix,
                 // require explicit project specification to avoid accidentally creating in wrong location
-                if (existingFile == null && matchedRoot == null && _inputDirectories.Count > 1)
+                if (existingFile == null && !rootMatched && _inputDirectories.Count > 1)
                 {
                     var rootNames = _inputDirectories.Select(d => Path.GetFileName(d.TrimEnd('\\', '/'))).ToList();
                     result.Success = false;
@@ -136,19 +111,23 @@ namespace CodeMerger.Services
                     }
                 }
 
+                // Block new .cs files outside any .csproj directory — they won't compile
+                if (result.IsNewFile && fullPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+                {
+                    var csprojError = CheckCsprojProximity(fullPath, baseDir);
+                    if (csprojError != null)
+                    {
+                        result.Success = false;
+                        result.Error = csprojError;
+                        return result;
+                    }
+                }
+
                 // Write the file atomically
                 WriteFileAtomic(fullPath, content);
                 result.FullPath = fullPath;
                 result.Success = true;
                 result.BytesWritten = content.Length;
-
-                // Warn if new file is outside any .csproj directory
-                if (result.IsNewFile && fullPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
-                {
-                    var csprojWarning = CheckCsprojProximity(fullPath, baseDir);
-                    if (csprojWarning != null)
-                        result.Warning = csprojWarning;
-                }
             }
             catch (Exception ex)
             {
@@ -207,8 +186,65 @@ namespace CodeMerger.Services
                 return string.IsNullOrEmpty(relDir) ? fileName : $"{relDir.Replace('\\', '/')}/{fileName}";
             }).ToList();
 
-            return $"⚠️ **Warning:** This file was created outside any .csproj directory and may not be included in the build.\n" +
+            return $"**Error:** This .cs file would be created outside any .csproj directory and will NOT be included in the build.\n" +
                    $"**Did you mean:** {string.Join(" or ", suggestions.Select(s => $"`{s}`"))}";
+        }
+
+        /// <summary>
+        /// Resolves a relative path to an absolute path within the workspace, handling root prefix
+        /// disambiguation. Guards against greedy prefix stripping when the root dir name matches
+        /// an existing subdirectory (e.g., workspace root "Sage" with subdirectory "Sage\").
+        /// </summary>
+        /// <returns>(fullPath, baseDir, rootMatched, error) — error is non-null on failure.</returns>
+        public (string fullPath, string baseDir, bool rootMatched, string? error) ResolveRelativePath(string relativePath)
+        {
+            string effectivePath = relativePath;
+
+            var matchedRoot = _inputDirectories.FirstOrDefault(dir =>
+            {
+                var rootName = Path.GetFileName(dir.TrimEnd('\\', '/'));
+                return relativePath.StartsWith(rootName + "/", StringComparison.OrdinalIgnoreCase) ||
+                       relativePath.StartsWith(rootName + "\\", StringComparison.OrdinalIgnoreCase);
+            });
+
+            // Guard against greedy prefix matching: if existing files already use
+            // this prefix as a subdirectory in their RelativePath (e.g., "Sage\SomeFile.cs"
+            // exists when root dir is also named "Sage"), then the prefix is a real
+            // subdirectory — NOT a workspace root indicator. Don't strip it.
+            if (matchedRoot != null)
+            {
+                var rootName = Path.GetFileName(matchedRoot.TrimEnd('\\', '/'));
+                var prefixAsDir = rootName + "\\";
+                var prefixAsDirSlash = rootName + "/";
+                bool prefixIsSubdirectory = _workspaceAnalysis.AllFiles.Any(f =>
+                    f.RelativePath.StartsWith(prefixAsDir, StringComparison.OrdinalIgnoreCase) ||
+                    f.RelativePath.StartsWith(prefixAsDirSlash, StringComparison.OrdinalIgnoreCase));
+
+                if (prefixIsSubdirectory)
+                    matchedRoot = null;
+            }
+
+            string baseDir;
+            if (matchedRoot != null)
+            {
+                baseDir = matchedRoot;
+                var rootName = Path.GetFileName(matchedRoot.TrimEnd('\\', '/'));
+                effectivePath = relativePath.Substring(rootName.Length + 1);
+            }
+            else
+            {
+                baseDir = _inputDirectories.FirstOrDefault() ?? Directory.GetCurrentDirectory();
+            }
+
+            var fullPath = Path.GetFullPath(Path.Combine(baseDir, effectivePath.Replace('/', Path.DirectorySeparatorChar)));
+
+            if (!IsPathWithinWorkspace(fullPath))
+            {
+                var rootNames = string.Join(", ", _inputDirectories.Select(d => Path.GetFileName(d.TrimEnd('\\', '/'))));
+                return ("", "", false, $"Invalid path: resolved path escapes workspace. Valid roots: {rootNames}");
+            }
+
+            return (fullPath, baseDir, matchedRoot != null, null);
         }
 
         /// <summary>
