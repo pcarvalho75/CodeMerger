@@ -477,6 +477,9 @@ namespace CodeMerger.Services.Mcp
             var relativePath = pathEl.GetString() ?? "";
             _sendActivity($"Creating folder: {relativePath}");
 
+            if (string.IsNullOrWhiteSpace(relativePath))
+                return "Error: 'path' cannot be empty.";
+
             try
             {
                 var (fullPath, baseDir, rootMatched, resolveError) = _refactoringService.ResolveRelativePath(relativePath);

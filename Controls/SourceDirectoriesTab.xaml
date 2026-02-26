@@ -76,7 +76,7 @@
 
             <StackPanel>
                 <TextBlock Text="Extensions" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource TextSecondary}"/>
-                <TextBox x:Name="extensionsTextBox" Text=".cs, .xaml, .py, .csproj, .sln, " Margin="0,6,0,12" 
+                <TextBox x:Name="extensionsTextBox" Text=".cs, .xaml, .py, .csproj, .sln, .slnx, .json, .md, .props, .targets" Margin="0,6,0,12" 
                          TextChanged="Filters_Changed" Style="{StaticResource ModernTextBox}"/>
                 <TextBlock Text="Ignored Directories" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource TextSecondary}"/>
                 <TextBox x:Name="ignoredDirsTextBox" Text="bin, obj, .vs, Properties" Margin="0,6,0,0" 

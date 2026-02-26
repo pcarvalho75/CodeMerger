@@ -72,7 +72,7 @@ Watch the CodeMerger window — you'll see real-time activity as Claude uses the
 
 Tabs:
 
-Source Directories — Configure which folders to index. Add/Remove directories, set extension filters (default: .cs, .xaml, .py, .csproj, .sln), set ignored directories (default: bin, obj, .vs, Properties). Tip: Add your solution's root folder. CodeMerger finds everything inside it.
+Source Directories — Configure which folders to index. Add/Remove directories, set extension filters (default: .cs, .xaml, .py, .csproj, .sln, .slnx, .json, .md, .props, .targets), set ignored directories (default: bin, obj, .vs, Properties). Tip: Add your solution's root folder. CodeMerger finds everything inside it.
 
 LLMs — Configure AI assistant connections. Claude Desktop: shows status, Add Config button, Open Config Folder. ChatGPT/Other: SSE server with optional Cloudflare Tunnel for cloud-based LLMs.
 
@@ -127,6 +127,8 @@ get_method_body — Get one method's full source code by name. Use instead of ge
 write_file — Write complete file content (create or overwrite). Creates .bak backup. Use preview: true to see a diff without writing.
 
 delete_file — Delete a file with .bak backup. Use undo to restore.
+
+create_folder — Create a folder (and any missing parent folders) in the workspace. Use before move_file or write_file when the target directory doesn't exist yet.
 
 grep_replace — Regex find-and-replace across all project files. Always preview first (default). Supports regex capture groups ($1, $2). Optional fileFilter to limit scope. Preview numbers each match; use excludeMatches to skip specific matches, or excludePattern to skip lines matching a regex.
 
