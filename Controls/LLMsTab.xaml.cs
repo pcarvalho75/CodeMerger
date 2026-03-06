@@ -14,6 +14,7 @@ namespace CodeMerger.Controls
     public partial class LLMsTab : UserControl
     {
         private const int DefaultSsePort = 52780;
+        private const int DefaultCoworkPort = 52781;
 
         private ClaudeDesktopService _claudeDesktopService = null!;
         private Func<Workspace?> _getCurrentWorkspace = null!;
@@ -21,6 +22,7 @@ namespace CodeMerger.Controls
 
         private TunnelService? _tunnelService;
         private McpServer? _mcpServerForSse;
+        private McpServer? _mcpServerForCowork;
 
         /// <summary>Raised when a status message should be shown. Args = message text.</summary>
         public event EventHandler<string>? StatusUpdate;
@@ -119,6 +121,8 @@ namespace CodeMerger.Controls
         {
             _tunnelService?.Dispose();
             _mcpServerForSse?.Stop();
+            _mcpServerForCowork?.StopSse();
+            _mcpServerForCowork?.Stop();
         }
 
         #region Click Handlers
@@ -316,6 +320,98 @@ namespace CodeMerger.Controls
         {
             MessageBox.Show(TunnelService.GetInstallInstructions(), "ChatGPT Desktop Setup",
                 MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+
+        #endregion
+
+        #region Cowork
+
+        private void CoworkStart_Click(object sender, RoutedEventArgs e)
+        {
+            var workspace = _getCurrentWorkspace();
+            if (workspace == null)
+            {
+                RaiseStatus("Select a workspace first", new SolidColorBrush(Color.FromRgb(233, 69, 96)));
+                return;
+            }
+
+            try
+            {
+                _mcpServerForCowork = new McpServer();
+                _mcpServerForCowork.OnLog += msg => Dispatcher.Invoke(() => RaiseStatus(msg, Brushes.Gray));
+
+                var extensions = workspace.Extensions
+                    .Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Select(ext => ext.Trim())
+                    .Where(ext => !string.IsNullOrEmpty(ext))
+                    .ToList();
+
+                var ignoredDirs = (workspace.IgnoredDirectories + ",.git")
+                    .Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Select(dir => dir.Trim().ToLowerInvariant())
+                    .ToHashSet();
+
+                var activeDirectories = workspace.InputDirectories
+                    .Where(dir => !workspace.DisabledDirectories.Contains(dir))
+                    .ToList();
+
+                _mcpServerForCowork.IndexWorkspace(workspace.Name, activeDirectories, extensions, ignoredDirs);
+
+                _mcpServerForCowork.OnSseClientConnected += sessionId => Dispatcher.Invoke(() =>
+                {
+                    coworkIndicator.Fill = new SolidColorBrush(Color.FromRgb(16, 163, 127));
+                    coworkStatusText.Text = "Connected";
+                    RaiseStatus($"Cowork connected", Brushes.LightGreen);
+                });
+
+                _mcpServerForCowork.OnSseClientDisconnected += sessionId => Dispatcher.Invoke(() =>
+                {
+                    coworkIndicator.Fill = new SolidColorBrush(Color.FromRgb(255, 193, 7));
+                    coworkStatusText.Text = "Running";
+                });
+
+                _mcpServerForCowork.StartSse(DefaultCoworkPort, useHttps: true);
+
+                var url = $"https://localhost:{DefaultCoworkPort}/mcp";
+                coworkUrlTextBox.Text = url;
+                coworkCopyButton.IsEnabled = true;
+                coworkIndicator.Fill = new SolidColorBrush(Color.FromRgb(255, 193, 7));
+                coworkStatusText.Text = "Running";
+                coworkStartButton.Visibility = Visibility.Collapsed;
+                coworkStopButton.Visibility = Visibility.Visible;
+                RaiseStatus($"Cowork MCP server running on {url}", Brushes.LightGreen);
+            }
+            catch (Exception ex)
+            {
+                RaiseStatus($"Failed to start Cowork server: {ex.Message}", new SolidColorBrush(Color.FromRgb(233, 69, 96)));
+                _mcpServerForCowork?.Stop();
+                _mcpServerForCowork = null;
+            }
+        }
+
+        private void CoworkStop_Click(object sender, RoutedEventArgs e)
+        {
+            _mcpServerForCowork?.StopSse();
+            _mcpServerForCowork?.Stop();
+            _mcpServerForCowork = null;
+
+            coworkIndicator.Fill = new SolidColorBrush(Color.FromRgb(85, 85, 85));
+            coworkStatusText.Text = "Stopped";
+            coworkUrlTextBox.Text = "Start server to get URL";
+            coworkCopyButton.IsEnabled = false;
+            coworkStartButton.Visibility = Visibility.Visible;
+            coworkStopButton.Visibility = Visibility.Collapsed;
+            RaiseStatus("Cowork MCP server stopped", Brushes.Gray);
+        }
+
+        private void CoworkCopyUrl_Click(object sender, RoutedEventArgs e)
+        {
+            var url = coworkUrlTextBox.Text;
+            if (!string.IsNullOrEmpty(url) && url.StartsWith("http"))
+            {
+                Clipboard.SetText(url);
+                RaiseStatus($"Copied: {url}", Brushes.LightGreen);
+            }
         }
 
         #endregion

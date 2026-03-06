@@ -5,6 +5,7 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
         <!-- Claude Desktop Section -->
@@ -47,7 +48,7 @@
         </Border>
 
         <!-- ChatGPT Desktop Section -->
-        <Border Grid.Row="1" Background="{StaticResource BackgroundDark}" CornerRadius="8" Padding="20">
+        <Border Grid.Row="1" Background="{StaticResource BackgroundDark}" CornerRadius="8" Padding="20" Margin="0,0,0,16">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
@@ -97,5 +98,52 @@
                 </Grid>
             </Grid>
         </Border>
+        <!-- Cowork Section -->
+        <Border Grid.Row="2" Background="{StaticResource BackgroundDark}" CornerRadius="8" Padding="20">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                    <TextBlock Text="🔵 Cowork" FontSize="16" FontWeight="Bold" Foreground="{StaticResource TextPrimary}" VerticalAlignment="Center"/>
+                    <Border Background="#2a2a4a" CornerRadius="4" Padding="8,3" Margin="12,0,0,0" VerticalAlignment="Center">
+                        <TextBlock Text="localhost HTTP — no tunnel needed" Foreground="{StaticResource TextSecondary}" FontSize="10"/>
+                    </Border>
+                </StackPanel>
+
+                <Grid Grid.Row="1">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Text="Server:" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <Border Background="{StaticResource BackgroundCard}" CornerRadius="4" Padding="8,4" Margin="0,0,12,0">
+                            <StackPanel Orientation="Horizontal">
+                                <Ellipse x:Name="coworkIndicator" Width="8" Height="8" Fill="#555" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                <TextBlock x:Name="coworkStatusText" Text="Stopped" Foreground="{StaticResource TextSecondary}" FontSize="11"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="8,0,0,0">
+                        <Button x:Name="coworkStartButton" Content="▶ Start Server" Click="CoworkStart_Click" Style="{StaticResource PrimaryButton}"/>
+                        <Button x:Name="coworkStopButton" Content="⏹ Stop" Click="CoworkStop_Click" Style="{StaticResource ModernButton}" Visibility="Collapsed" Margin="8,0,0,0"/>
+                    </StackPanel>
+
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="12,0,0,0">
+                        <TextBlock Text="MCP URL:" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <TextBox x:Name="coworkUrlTextBox" Width="280" IsReadOnly="True" Style="{StaticResource ModernTextBox}"
+                                 Background="{StaticResource BackgroundCard}" FontSize="11" Text="Start server to get URL"/>
+                        <Button x:Name="coworkCopyButton" Content="📋 Copy" Click="CoworkCopyUrl_Click" Style="{StaticResource ModernButton}" Margin="8,0,0,0" IsEnabled="False"/>
+                    </StackPanel>
+                </Grid>
+            </Grid>
+        </Border>
+
     </Grid>
 </UserControl>

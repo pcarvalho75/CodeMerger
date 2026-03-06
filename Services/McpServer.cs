@@ -756,7 +756,7 @@ namespace CodeMerger.Services
                 _httpTransport.Dispose();
             }
 
-            _httpTransport = new McpHttpTransport(port, ProcessMessage);
+            _httpTransport = new McpHttpTransport(port, ProcessMessage, useHttps);
             _httpTransport.OnLog += msg => OnLog?.Invoke(msg);
             _httpTransport.OnClientConnected += sessionId =>
             {
@@ -773,7 +773,8 @@ namespace CodeMerger.Services
             };
 
             _httpTransport.Start();
-            Log($"MCP HTTP transport started on http://localhost:{port}/mcp");
+            var scheme = useHttps ? "https" : "http";
+            Log($"MCP HTTP transport started on {scheme}://localhost:{port}/mcp");
         }
 
         /// <summary>

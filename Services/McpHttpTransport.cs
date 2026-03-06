@@ -18,6 +18,7 @@ namespace CodeMerger.Services
     public class McpHttpTransport : IDisposable
     {
         private readonly int _port;
+        private readonly bool _useHttps;
         private HttpListener? _listener;
         private CancellationTokenSource? _cts;
         private Task? _listenerTask;
@@ -33,9 +34,10 @@ namespace CodeMerger.Services
         public event Action<string>? OnClientDisconnected;
         public event Action<string>? OnMessageReceived;
 
-        public McpHttpTransport(int port, Func<string, string?> messageHandler)
+        public McpHttpTransport(int port, Func<string, string?> messageHandler, bool useHttps = false)
         {
             _port = port;
+            _useHttps = useHttps;
             _messageHandler = messageHandler;
         }
 
@@ -47,7 +49,34 @@ namespace CodeMerger.Services
             _cts = new CancellationTokenSource();
             _listener = new HttpListener();
 
-            // Listen on all interfaces for tunnel compatibility
+            if (_useHttps)
+            {
+                CertificateManager.OnLog += msg => Log(msg);
+                bool httpsReady = CertificateManager.EnsureHttpsConfigured(_port);
+                if (!httpsReady)
+                    Log("Warning: HTTPS certificate setup failed, falling back to HTTP");
+
+                var scheme = httpsReady ? "https" : "http";
+                _listener.Prefixes.Add($"{scheme}://+:{_port}/");
+                try
+                {
+                    _listener.Start();
+                    Log($"MCP HTTPS transport started on {scheme}://localhost:{_port}/mcp");
+                    _listenerTask = Task.Run(() => ListenLoop(_cts.Token), _cts.Token);
+                    return;
+                }
+                catch (HttpListenerException ex) when (ex.ErrorCode == 5)
+                {
+                    _listener = new HttpListener();
+                    _listener.Prefixes.Add($"{scheme}://localhost:{_port}/");
+                    _listener.Start();
+                    Log($"MCP HTTPS transport started on {scheme}://localhost:{_port}/mcp (localhost only)");
+                    _listenerTask = Task.Run(() => ListenLoop(_cts.Token), _cts.Token);
+                    return;
+                }
+            }
+
+            // HTTP path
             _listener.Prefixes.Add($"http://+:{_port}/");
 
             try
