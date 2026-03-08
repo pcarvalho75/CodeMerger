@@ -44,17 +44,5 @@ namespace CodeMerger.Controls
                 progressBar.Value = 0;
             }
         }
-
-        /// <summary>Set workspace health info (name, file count, etc.).</summary>
-        public void SetWorkspaceInfo(string info)
-        {
-            workspaceInfoLabel.Text = info;
-        }
-
-        /// <summary>Clear workspace info when disconnected.</summary>
-        public void ClearWorkspaceInfo()
-        {
-            workspaceInfoLabel.Text = "";
-        }
     }
 }

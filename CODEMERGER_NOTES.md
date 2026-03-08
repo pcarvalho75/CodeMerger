@@ -7,6 +7,13 @@ Phase 4 — Live Pulse Tray Icon — Icon visually changes per state: gray/green
 Phase 5 — Quick Workspace Switcher — Switch workspace from tray context menu without opening window
 Phase 6 — Stdio Relay Fallback — Handle MCP child process crashes gracefully with tray notifications
 Phase 7 — Polish & Resilience — Port conflicts, graceful shutdown, Explorer restart survival, settings persistence, final review
+- [2026-03-07 18:09] ## Improvement Roadmap (Mar 2026)
+
+Phase 1 (Done): Rename Validation - ValidateRenameTarget in RefactoringService checks FindUsages before rename. Groups by SymbolKind, warns if ambiguous. Preview mode shows warning, apply mode blocks ambiguous renames. AmbiguityWarning property on RenameResult.
+
+Phase 2 (Done): Smarter ExtractMethod - DataFlowHelper.cs (new) does syntax-only data flow analysis. Detects parameters from outer scope and return values. RefactoringService.ExtractMethod now generates proper signatures with parameters and return types instead of always private void. Falls back to void with warning when analysis fails.
+
+Phase 3 (Done): GUI Polish - Error/timeout rows highlighted with red tint in ActivityLogTab (IsError property + DataTrigger). Workspace health indicator in StatusBar (workspace name + file/type count from INDEXED activity message). Recent errors counter on ActivityStrip (GetRecentErrorCount in McpSessionStats with 5-minute window).
 
 ## Tool Overhaul Summary
 

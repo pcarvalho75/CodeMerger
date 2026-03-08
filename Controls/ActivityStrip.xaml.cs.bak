@@ -140,10 +140,6 @@ namespace CodeMerger.Controls
                 statsText.Text = $"No activity this session | Session: {duration}";
             }
 
-            // Show recent errors (last 5 minutes)
-            var recentErrors = stats.GetRecentErrorCount(TimeSpan.FromMinutes(5));
-            recentErrorsText.Text = recentErrors > 0 ? $"⚠ {recentErrors} error{(recentErrors > 1 ? "s" : "")} (5m)" : "";
-
             // Build detailed tooltip
             var tooltipText = new System.Text.StringBuilder();
             tooltipText.AppendLine($"Session Duration: {duration}");

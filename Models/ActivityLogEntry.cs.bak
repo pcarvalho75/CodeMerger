@@ -38,6 +38,5 @@ namespace CodeMerger.Models
 
         public string TimeText => Timestamp.ToString("HH:mm:ss");
         public string DurationText => DurationMs > 0 ? $"{DurationMs}ms" : "";
-        public bool IsError => Type == ActivityLogType.Error || Type == ActivityLogType.Timeout;
     }
 }

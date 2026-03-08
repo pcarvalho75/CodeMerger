@@ -8,7 +8,6 @@
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
-                <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
             <Ellipse x:Name="activityIndicator" Width="8" Height="8" Fill="#8892a0" VerticalAlignment="Center" Margin="0,0,8,0"/>
             <TextBlock x:Name="activityText" Grid.Column="1" Text="Idle" Foreground="{StaticResource TextSecondary}" FontSize="11" VerticalAlignment="Center"/>

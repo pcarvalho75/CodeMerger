@@ -276,13 +276,6 @@ namespace CodeMerger
                 // Update connection status since we're receiving activity
                 _appState.SetClaudeConnected(workspaceName);
 
-                // Parse indexed stats to show in status bar
-                if (activity.StartsWith("INDEXED|"))
-                {
-                    var stats = activity.Substring("INDEXED|".Length);
-                    statusBar.SetWorkspaceInfo($"📂 {workspaceName} | {stats}");
-                }
-
                 UpdateStatus($"🔄 [{workspaceName}] {activity}", new SolidColorBrush(Color.FromRgb(100, 200, 255)));
             });
         }

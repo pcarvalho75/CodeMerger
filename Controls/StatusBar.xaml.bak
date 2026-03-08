@@ -7,19 +7,15 @@
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
-                <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
 
             <TextBlock x:Name="statusText" Text="Ready" Foreground="{StaticResource TextSecondary}" 
                        TextWrapping="Wrap" VerticalAlignment="Center" FontSize="12"/>
 
-            <TextBlock x:Name="workspaceInfoLabel" Grid.Column="1" Foreground="#6C63FF" 
-                       VerticalAlignment="Center" Margin="0,0,16,0" FontSize="11" FontFamily="Consolas"/>
-
-            <TextBlock x:Name="fileStatusLabel" Grid.Column="2" FontStyle="Italic" Foreground="{StaticResource TextSecondary}" 
+            <TextBlock x:Name="fileStatusLabel" Grid.Column="1" FontStyle="Italic" Foreground="{StaticResource TextSecondary}" 
                        VerticalAlignment="Center" Margin="0,0,16,0" FontSize="11"/>
 
-            <ProgressBar x:Name="progressBar" Grid.Column="3" Visibility="Collapsed" Width="200" Height="6" 
+            <ProgressBar x:Name="progressBar" Grid.Column="2" Visibility="Collapsed" Width="200" Height="6" 
                          VerticalAlignment="Center" Background="{StaticResource BackgroundCard}" 
                          Foreground="{StaticResource AccentPrimary}"/>
         </Grid>

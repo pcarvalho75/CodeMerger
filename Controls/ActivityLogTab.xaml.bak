@@ -149,9 +149,6 @@
                                     <Trigger Property="IsMouseOver" Value="True">
                                         <Setter Property="Background" Value="{StaticResource BackgroundCardHover}"/>
                                     </Trigger>
-                                    <DataTrigger Binding="{Binding IsError}" Value="True">
-                                        <Setter Property="Background" Value="#30FF4444"/>
-                                    </DataTrigger>
                                 </ControlTemplate.Triggers>
                             </ControlTemplate>
                         </Setter.Value>

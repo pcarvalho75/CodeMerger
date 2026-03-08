@@ -988,10 +988,6 @@ namespace CodeMerger.Services
         public string ExtractedCode { get; set; } = string.Empty;
         public string MethodCall { get; set; } = string.Empty;
         public string ModifiedContent { get; set; } = string.Empty;
-        public List<string> InferredParameters { get; set; } = new();
-        public string? InferredReturnType { get; set; }
-        public bool UsedFallback { get; set; }
-        public string? FallbackReason { get; set; }
 
         public string ToMarkdown()
         {
@@ -1008,22 +1004,6 @@ namespace CodeMerger.Services
             sb.AppendLine($"**File:** `{FilePath}`");
             sb.AppendLine($"**Method call:** `{MethodCall}`");
             sb.AppendLine();
-
-            if (!UsedFallback && (InferredParameters.Count > 0 || InferredReturnType != "void"))
-            {
-                sb.AppendLine("## Inferred Signature");
-                if (InferredParameters.Count > 0)
-                    sb.AppendLine($"**Parameters:** {string.Join(", ", InferredParameters)}");
-                if (InferredReturnType != null && InferredReturnType != "void")
-                    sb.AppendLine($"**Return type:** `{InferredReturnType}`");
-                sb.AppendLine();
-            }
-
-            if (UsedFallback && !string.IsNullOrEmpty(FallbackReason))
-            {
-                sb.AppendLine($"**Note:** Data flow analysis fell back to `void`. Reason: {FallbackReason}");
-                sb.AppendLine();
-            }
 
             sb.AppendLine("## Extracted Code");
             sb.AppendLine("```csharp");

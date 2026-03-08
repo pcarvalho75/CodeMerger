@@ -422,7 +422,6 @@ namespace CodeMerger.Services
                 InitializeHandlers();
 
                 LogWithMemory($"Indexed {fileAnalyses.Count} files, {_workspaceAnalysis.TypeHierarchy.Count} types, {_callSites.Count} call sites");
-                SendActivity($"INDEXED|{fileAnalyses.Count} files, {_workspaceAnalysis.TypeHierarchy.Count} types");
             }
         }
 

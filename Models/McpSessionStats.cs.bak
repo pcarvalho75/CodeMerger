@@ -87,17 +87,6 @@ namespace CodeMerger.Models
                 SessionStartTime = DateTime.Now;
                 LastActivityTime = DateTime.Now;
                 _callHistory.Clear();
-                _errorTimestamps.Clear();
-            }
-        }
-
-        /// <summary>Count errors within a recent time window.</summary>
-        public int GetRecentErrorCount(TimeSpan window)
-        {
-            lock (_lock)
-            {
-                var cutoff = DateTime.Now - window;
-                return _errorTimestamps.Count(t => t >= cutoff);
             }
         }
 
