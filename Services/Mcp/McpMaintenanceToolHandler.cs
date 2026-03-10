@@ -16,15 +16,68 @@ namespace CodeMerger.Services.Mcp
         private readonly WorkspaceAnalysis _workspaceAnalysis;
         private readonly List<string> _inputDirectories;
         private readonly Action<string> _sendActivity;
+        private readonly CompilationService? _compilationService;
 
         public McpMaintenanceToolHandler(
             WorkspaceAnalysis workspaceAnalysis,
             List<string> inputDirectories,
-            Action<string> sendActivity)
+            Action<string> sendActivity,
+            CompilationService? compilationService = null)
         {
             _workspaceAnalysis = workspaceAnalysis;
             _inputDirectories = inputDirectories;
             _sendActivity = sendActivity;
+            _compilationService = compilationService;
+        }
+
+        public string CompilationStatus(JsonElement arguments)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("# Compilation Status");
+            sb.AppendLine();
+
+            if (_compilationService == null || !_compilationService.IsAvailable)
+            {
+                sb.AppendLine("**Status:** Not available");
+                sb.AppendLine();
+                sb.AppendLine(_compilationService == null
+                    ? "Compilation service was not initialized. This may happen for non-C# workspaces."
+                    : "Compilation was attempted but failed. Check logs for details.");
+                return sb.ToString();
+            }
+
+            var status = _compilationService.GetStatus();
+
+            sb.AppendLine("**Status:** Active");
+            sb.AppendLine();
+            sb.AppendLine("| Metric | Value |");
+            sb.AppendLine("|--------|-------|");
+            sb.AppendLine($"| Assembly | `{status.AssemblyName}` |");
+            sb.AppendLine($"| Syntax Trees | {status.SyntaxTreeCount} files |");
+            sb.AppendLine($"| References Loaded | {status.ReferencesLoaded} assemblies |");
+            sb.AppendLine($"| Diagnostic Errors | {status.DiagnosticErrors} |");
+            sb.AppendLine($"| Diagnostic Warnings | {status.DiagnosticWarnings} |");
+            sb.AppendLine($"| Cached SemanticModels | {status.CachedSemanticModels} |");
+            sb.AppendLine($"| Build Time | {status.BuildTimeMs}ms |");
+            sb.AppendLine();
+
+            if (status.DiagnosticErrors > 0)
+            {
+                sb.AppendLine("## Top Errors");
+                var diagnostics = _compilationService.GetDiagnostics(Microsoft.CodeAnalysis.DiagnosticSeverity.Error);
+                foreach (var d in diagnostics.Take(10))
+                {
+                    var file = string.IsNullOrEmpty(d.FilePath) ? "" : $"`{Path.GetFileName(d.FilePath)}:{d.Line}` ";
+                    sb.AppendLine($"- {file}[{d.Code}] {d.Message}");
+                }
+                if (diagnostics.Count > 10)
+                    sb.AppendLine($"- ... and {diagnostics.Count - 10} more");
+            }
+
+            sb.AppendLine();
+            sb.AppendLine("*Semantic resolution is active. `find_references` uses compiler-grade symbol tracking.*");
+
+            return sb.ToString();
         }
 
         /// <summary>

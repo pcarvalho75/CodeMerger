@@ -1,0 +1,796 @@
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Xml.Linq;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+
+namespace CodeMerger.Services
+{
+    /// <summary>
+    /// Provides full Roslyn CSharpCompilation with SemanticModel for compiler-grade symbol resolution.
+    /// Built on top of CodeAnalyzer's syntax-tree parsing, this adds type inference, overload resolution,
+    /// and cross-assembly symbol tracking.
+    /// 
+    /// Architecture:
+    /// - Manual CSharpCompilation.Create() using syntax trees + metadata references from bin/ output
+    /// - No MSBuild dependency — assembly DLLs are discovered from the build output folder
+    /// - Incremental: single-file updates via ReplaceSyntaxTree without full recompilation
+    /// - Falls back gracefully when compilation is unavailable or has errors
+    /// </summary>
+    public class CompilationService
+    {
+        private CSharpCompilation? _compilation;
+        private readonly Dictionary<string, SyntaxTree> _syntaxTrees = new(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, SemanticModel> _semanticModelCache = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Action<string> _log;
+
+        private List<string> _inputDirectories = new();
+        private string _assemblyName = "WorkspaceCompilation";
+        private int _totalDiagnosticErrors;
+        private int _totalDiagnosticWarnings;
+        private int _totalReferencesLoaded;
+        private long _buildTimeMs;
+
+        /// <summary>
+        /// Whether the compilation was built successfully and is available for queries.
+        /// </summary>
+        public bool IsAvailable => _compilation != null;
+
+        /// <summary>
+        /// Summary of compilation health for diagnostic display.
+        /// </summary>
+        public string StatusSummary => IsAvailable
+            ? $"Compilation ready: {_syntaxTrees.Count} files, {_totalReferencesLoaded} refs, {_totalDiagnosticErrors} errors, {_totalDiagnosticWarnings} warnings ({_buildTimeMs}ms)"
+            : "Compilation not available";
+
+        public CompilationService(Action<string> log)
+        {
+            _log = log;
+        }
+
+        /// <summary>
+        /// Build a CSharpCompilation from all .cs files in the workspace directories.
+        /// Discovers assembly references from the project's build output folder.
+        /// </summary>
+        public bool BuildCompilation(List<string> inputDirectories, List<string> csFilePaths, string? workspaceName = null)
+        {
+            _inputDirectories = inputDirectories;
+            if (!string.IsNullOrEmpty(workspaceName))
+                _assemblyName = workspaceName;
+
+            var sw = Stopwatch.StartNew();
+
+            try
+            {
+                // Step 1: Parse all .cs files into syntax trees
+                _syntaxTrees.Clear();
+                _semanticModelCache.Clear();
+
+                int parseErrors = 0;
+
+                foreach (var filePath in csFilePaths)
+                {
+                    try
+                    {
+                        var code = File.ReadAllText(filePath);
+                        var tree = CSharpSyntaxTree.ParseText(
+                            code,
+                            CSharpParseOptions.Default.WithLanguageVersion(LanguageVersion.Preview),
+                            path: filePath);
+                        _syntaxTrees[filePath] = tree;
+                    }
+                    catch (Exception ex)
+                    {
+                        parseErrors++;
+                        _log($"CompilationService: Failed to parse {Path.GetFileName(filePath)}: {ex.Message}");
+                    }
+                }
+
+                if (_syntaxTrees.Count == 0)
+                {
+                    _log("CompilationService: No syntax trees — aborting compilation");
+                    return false;
+                }
+
+                // Step 2: Find assembly references from build output
+                var references = DiscoverMetadataReferences();
+                _totalReferencesLoaded = references.Count;
+
+                // Step 3: Determine assembly name (prefer workspace name, fall back to .csproj)
+                if (_assemblyName == "WorkspaceCompilation")
+                    _assemblyName = FindAssemblyName() ?? "WorkspaceCompilation";
+
+                // Step 4: Create compilation
+                var options = new CSharpCompilationOptions(
+                    OutputKind.DynamicallyLinkedLibrary,
+                    allowUnsafe: true,
+                    nullableContextOptions: NullableContextOptions.Enable);
+
+                _compilation = CSharpCompilation.Create(
+                    _assemblyName,
+                    _syntaxTrees.Values,
+                    references,
+                    options);
+
+                // Step 5: Count diagnostics (don't log them all — just summary)
+                var diagnostics = _compilation.GetDiagnostics()
+                    .Where(d => d.Severity >= DiagnosticSeverity.Warning)
+                    .ToList();
+                _totalDiagnosticErrors = diagnostics.Count(d => d.Severity == DiagnosticSeverity.Error);
+                _totalDiagnosticWarnings = diagnostics.Count(d => d.Severity == DiagnosticSeverity.Warning);
+
+                sw.Stop();
+                _buildTimeMs = sw.ElapsedMilliseconds;
+
+                _log($"CompilationService: Built in {_buildTimeMs}ms — {_syntaxTrees.Count} files, " +
+                     $"{_totalReferencesLoaded} refs, {_totalDiagnosticErrors} errors, " +
+                     $"{_totalDiagnosticWarnings} warnings" +
+                     (parseErrors > 0 ? $", {parseErrors} parse failures" : ""));
+
+                if (_totalReferencesLoaded == 0)
+                    _log("CompilationService: WARNING — no assembly references found. Type resolution will be limited. Build the project first (dotnet build) so bin/ output exists.");
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                sw.Stop();
+                _log($"CompilationService: BuildCompilation failed: {ex.Message}");
+                _compilation = null;
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Incrementally update a single file in the compilation.
+        /// Much faster than full rebuild — replaces one syntax tree and invalidates its cached SemanticModel.
+        /// </summary>
+        public bool UpdateFile(string filePath)
+        {
+            if (_compilation == null) return false;
+
+            try
+            {
+                var code = File.ReadAllText(filePath);
+                var newTree = CSharpSyntaxTree.ParseText(
+                    code,
+                    CSharpParseOptions.Default.WithLanguageVersion(LanguageVersion.Preview),
+                    path: filePath);
+
+                if (_syntaxTrees.TryGetValue(filePath, out var oldTree))
+                {
+                    _compilation = _compilation.ReplaceSyntaxTree(oldTree, newTree);
+                }
+                else
+                {
+                    _compilation = _compilation.AddSyntaxTrees(newTree);
+                }
+
+                _syntaxTrees[filePath] = newTree;
+                _semanticModelCache.TryRemove(filePath, out _);
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _log($"CompilationService: UpdateFile failed for {Path.GetFileName(filePath)}: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Remove a file from the compilation (e.g., after deletion).
+        /// </summary>
+        public void RemoveFile(string filePath)
+        {
+            if (_compilation == null) return;
+
+            if (_syntaxTrees.TryGetValue(filePath, out var oldTree))
+            {
+                _compilation = _compilation.RemoveSyntaxTrees(oldTree);
+                _syntaxTrees.Remove(filePath);
+                _semanticModelCache.TryRemove(filePath, out _);
+            }
+        }
+
+        /// <summary>
+        /// Get the SemanticModel for a specific file. Cached for performance.
+        /// </summary>
+        public SemanticModel? GetSemanticModel(string filePath)
+        {
+            if (_compilation == null) return null;
+
+            try
+            {
+                // Check cache first
+                if (_semanticModelCache.TryGetValue(filePath, out var cached))
+                    return cached;
+
+                // Build and cache only if the file exists in the compilation
+                if (_syntaxTrees.TryGetValue(filePath, out var tree))
+                {
+                    var model = _compilation.GetSemanticModel(tree);
+                    _semanticModelCache.TryAdd(filePath, model);
+                    return model;
+                }
+
+                return null;
+            }
+            catch
+            {
+                // SemanticModel creation can fail if compilation is severely degraded
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Resolve the symbol at a specific syntax node in a given file.
+        /// Returns the ISymbol with full type info, or null if unresolvable.
+        /// </summary>
+        public ISymbol? ResolveSymbol(SyntaxNode node, string filePath)
+        {
+            var model = GetSemanticModel(filePath);
+            if (model == null) return null;
+
+            // Try GetSymbolInfo first (for invocations, member access, etc.)
+            var symbolInfo = model.GetSymbolInfo(node);
+            if (symbolInfo.Symbol != null) return symbolInfo.Symbol;
+
+            // For declarations, use GetDeclaredSymbol
+            var declared = model.GetDeclaredSymbol(node);
+            if (declared != null) return declared;
+
+            // For candidates (overloads), return first candidate if any
+            if (symbolInfo.CandidateSymbols.Length > 0)
+                return symbolInfo.CandidateSymbols[0];
+
+            return null;
+        }
+
+        /// <summary>
+        /// Get the inferred type of an expression (e.g., var declarations, LINQ chains).
+        /// </summary>
+        public ITypeSymbol? GetExpressionType(SyntaxNode expression, string filePath)
+        {
+            var model = GetSemanticModel(filePath);
+            if (model == null) return null;
+
+            var typeInfo = model.GetTypeInfo(expression);
+            return typeInfo.Type ?? typeInfo.ConvertedType;
+        }
+
+        /// <summary>
+        /// Find a symbol by name across the compilation.
+        /// Optionally filter by kind: "type", "method", "property", "field".
+        /// </summary>
+        public ISymbol? FindSymbolByName(string symbolName, string? symbolKind = null)
+        {
+            if (_compilation == null) return null;
+
+            // Search in the compilation's global namespace recursively
+            var candidates = new List<ISymbol>();
+            CollectSymbols(_compilation.GlobalNamespace, symbolName, candidates);
+
+            if (candidates.Count == 0) return null;
+
+            // Filter by kind if specified
+            if (!string.IsNullOrEmpty(symbolKind))
+            {
+                var filtered = symbolKind!.ToLowerInvariant() switch
+                {
+                    "type" => candidates.Where(s => s is INamedTypeSymbol).ToList(),
+                    "method" => candidates.Where(s => s is IMethodSymbol).ToList(),
+                    "property" => candidates.Where(s => s is IPropertySymbol).ToList(),
+                    "field" => candidates.Where(s => s is IFieldSymbol).ToList(),
+                    _ => candidates
+                };
+
+                if (filtered.Count > 0) return filtered[0];
+            }
+
+            return candidates[0];
+        }
+
+        /// <summary>
+        /// Find all references to a symbol across all syntax trees in the compilation.
+        /// Returns locations grouped by file.
+        /// </summary>
+        public List<SymbolReference> FindAllReferences(ISymbol symbol)
+        {
+            var results = new List<SymbolReference>();
+            if (_compilation == null) return results;
+
+            var originalDefinition = symbol.OriginalDefinition;
+            var symbolName = symbol.Name;
+            var visitedLocations = new HashSet<(string, int)>();
+
+            foreach (var (filePath, tree) in _syntaxTrees)
+            {
+                var model = GetSemanticModel(filePath);
+                if (model == null) continue;
+
+                try
+                {
+                    var root = tree.GetRoot();
+
+                    // Walk all identifier nodes and check if they resolve to our symbol
+                    foreach (var node in root.DescendantNodes().OfType<IdentifierNameSyntax>())
+                    {
+                        // Quick name check first to avoid expensive GetSymbolInfo calls
+                        if (node.Identifier.Text != symbolName) continue;
+
+                        var symbolInfo = model.GetSymbolInfo(node);
+                        var resolvedSymbol = symbolInfo.Symbol;
+
+                        // Also check candidates (e.g., overload resolution failures)
+                        if (resolvedSymbol == null && symbolInfo.CandidateSymbols.Length > 0)
+                        {
+                            resolvedSymbol = symbolInfo.CandidateSymbols
+                                .FirstOrDefault(c => SymbolsMatch(c, symbol, originalDefinition));
+                        }
+
+                        if (resolvedSymbol != null && SymbolsMatch(resolvedSymbol, symbol, originalDefinition))
+                        {
+                            var lineSpan = node.GetLocation().GetLineSpan();
+                            var loc = (filePath, lineSpan.StartLinePosition.Line + 1);
+                            if (visitedLocations.Add(loc))
+                            {
+                                results.Add(new SymbolReference
+                                {
+                                    FilePath = filePath,
+                                    Line = loc.Item2,
+                                    Column = lineSpan.StartLinePosition.Character + 1,
+                                    IsDefinition = false,
+                                    ContainingMember = GetContainingMemberName(node),
+                                    Context = TruncateText(node.Parent?.ToString(), 120)
+                                });
+                            }
+                        }
+                    }
+
+                    // Also check declarations (method names, property names, class names, etc.)
+                    foreach (var node in root.DescendantNodes())
+                    {
+                        var declared = model.GetDeclaredSymbol(node);
+                        if (declared != null && SymbolsMatch(declared, symbol, originalDefinition))
+                        {
+                            var lineSpan = node.GetLocation().GetLineSpan();
+                            // Avoid duplicates from the identifier pass above
+                            if (!results.Any(r => r.FilePath == filePath && r.Line == lineSpan.StartLinePosition.Line + 1))
+                            {
+                                results.Add(new SymbolReference
+                                {
+                                    FilePath = filePath,
+                                    Line = lineSpan.StartLinePosition.Line + 1,
+                                    Column = lineSpan.StartLinePosition.Character + 1,
+                                    IsDefinition = true,
+                                    ContainingMember = GetContainingMemberName(node),
+                                    Context = TruncateText(node.ToString(), 120)
+                                });
+                            }
+                        }
+                    }
+                }
+                catch
+                {
+                    // Skip files where semantic analysis fails (degraded compilation)
+                }
+            }
+
+            return results;
+        }
+
+        /// <summary>
+        /// Find the namespace that contains a given type name.
+        /// Used by auto-heal to generate missing 'using' statements.
+        /// </summary>
+        public string? FindNamespaceForType(string typeName)
+        {
+            if (_compilation == null || string.IsNullOrWhiteSpace(typeName)) return null;
+
+            var candidates = new List<INamedTypeSymbol>();
+            CollectNamedTypes(_compilation.GlobalNamespace, typeName, candidates);
+
+            if (candidates.Count == 0)
+            {
+                // Also search referenced assemblies (limit to avoid excessive search time)
+                int assembliesSearched = 0;
+                foreach (var reference in _compilation.References)
+                {
+                    if (assembliesSearched >= 20) break; // Safety limit
+                    var assemblySymbol = _compilation.GetAssemblyOrModuleSymbol(reference) as IAssemblySymbol;
+                    if (assemblySymbol != null)
+                    {
+                        assembliesSearched++;
+                        CollectNamedTypes(assemblySymbol.GlobalNamespace, typeName, candidates);
+                        if (candidates.Count > 0) break;
+                    }
+                }
+            }
+
+            if (candidates.Count == 0) return null;
+
+            // Prefer System/Microsoft namespaces, then sort by shortest
+            var ordered = candidates
+                .Select(c => c.ContainingNamespace.ToDisplayString())
+                .Where(ns => !string.IsNullOrEmpty(ns) && ns != "<global namespace>")
+                .Distinct()
+                .OrderByDescending(ns => ns.StartsWith("System"))
+                .ThenByDescending(ns => ns.StartsWith("Microsoft"))
+                .ThenBy(ns => ns.Length)
+                .ToList();
+
+            return ordered.FirstOrDefault();
+        }
+
+        /// <summary>
+        /// Get compilation diagnostics at or above the specified severity.
+        /// </summary>
+        public List<CompilationDiagnostic> GetDiagnostics(DiagnosticSeverity minSeverity = DiagnosticSeverity.Error)
+        {
+            if (_compilation == null) return new List<CompilationDiagnostic>();
+
+            return _compilation.GetDiagnostics()
+                .Where(d => d.Severity >= minSeverity)
+                .Take(100)
+                .Select(d =>
+                {
+                    var lineSpan = d.Location.GetLineSpan();
+                    return new CompilationDiagnostic
+                    {
+                        Code = d.Id,
+                        Message = d.GetMessage(),
+                        Severity = d.Severity.ToString(),
+                        FilePath = lineSpan.Path ?? "",
+                        Line = lineSpan.StartLinePosition.Line + 1
+                    };
+                })
+                .ToList();
+        }
+
+        /// <summary>
+        /// Get a status report for the compilation_status tool.
+        /// </summary>
+        public CompilationStatus GetStatus()
+        {
+            return new CompilationStatus
+            {
+                IsAvailable = IsAvailable,
+                SyntaxTreeCount = _syntaxTrees.Count,
+                ReferencesLoaded = _totalReferencesLoaded,
+                DiagnosticErrors = _totalDiagnosticErrors,
+                DiagnosticWarnings = _totalDiagnosticWarnings,
+                CachedSemanticModels = _semanticModelCache.Count,
+                BuildTimeMs = _buildTimeMs,
+                AssemblyName = _assemblyName
+            };
+        }
+
+        // ────────────────────────────────────────────────────────────────────
+        // Private helpers
+        // ────────────────────────────────────────────────────────────────────
+
+        /// <summary>
+        /// Discover metadata references (DLLs) from the project's build output folder.
+        /// Scans bin/Debug/{tfm}/ for all DLLs and adds core .NET runtime references.
+        /// </summary>
+        private List<MetadataReference> DiscoverMetadataReferences()
+        {
+            var references = new List<MetadataReference>();
+            var loadedAssemblies = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            // Step 1: Add core .NET runtime references from the runtime directory
+            var runtimeDir = System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory();
+            if (Directory.Exists(runtimeDir))
+            {
+                try
+                {
+                    foreach (var dll in Directory.EnumerateFiles(runtimeDir, "*.dll"))
+                    {
+                        var name = Path.GetFileNameWithoutExtension(dll);
+
+                        // Skip known native/unmanaged DLLs that produce CS0009 errors
+                        if (IsNativeDll(name)) continue;
+
+                        if (loadedAssemblies.Add(name))
+                        {
+                            try
+                            {
+                                references.Add(MetadataReference.CreateFromFile(dll));
+                            }
+                            catch { } // Skip DLLs that fail to load as metadata
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _log($"CompilationService: Error scanning runtime dir: {ex.Message}");
+                }
+            }
+
+            // Step 2: Find the project's build output directory and load all DLLs
+            foreach (var dir in _inputDirectories)
+            {
+                var buildOutputDirs = FindBuildOutputDirectories(dir);
+                foreach (var outputDir in buildOutputDirs)
+                {
+                    _log($"CompilationService: Loading references from {outputDir}");
+                    foreach (var dll in Directory.EnumerateFiles(outputDir, "*.dll"))
+                    {
+                        var name = Path.GetFileNameWithoutExtension(dll);
+                        if (loadedAssemblies.Add(name))
+                        {
+                            try
+                            {
+                                references.Add(MetadataReference.CreateFromFile(dll));
+                            }
+                            catch
+                            {
+                                // Skip DLLs that can't be loaded as metadata
+                            }
+                        }
+                    }
+                }
+            }
+
+            return references;
+        }
+
+        /// <summary>
+        /// Find build output directories (bin/Debug/{tfm}/) for the workspace.
+        /// Prefers the most recently written output directory.
+        /// </summary>
+        private List<string> FindBuildOutputDirectories(string projectDir)
+        {
+            var results = new List<string>();
+
+            // Look for bin/ folder in the directory or its parents
+            var searchDir = projectDir;
+            for (int i = 0; i < 3; i++) // Check up to 3 levels up
+            {
+                var binDir = Path.Combine(searchDir, "bin");
+                if (Directory.Exists(binDir))
+                {
+                    // Find Debug and Release subdirectories, prefer Debug
+                    foreach (var config in new[] { "Debug", "Release" })
+                    {
+                        var configDir = Path.Combine(binDir, config);
+                        if (!Directory.Exists(configDir)) continue;
+
+                        // Look for TFM subdirectories (e.g., net8.0, net10.0-windows7.0)
+                        try
+                        {
+                            var tfmDirs = Directory.GetDirectories(configDir)
+                                .Where(d => Path.GetFileName(d).StartsWith("net", StringComparison.OrdinalIgnoreCase))
+                                .OrderByDescending(d => Directory.GetLastWriteTimeUtc(d))
+                                .ToList();
+
+                            if (tfmDirs.Count > 0)
+                            {
+                                results.Add(tfmDirs[0]); // Most recent TFM directory
+                                return results;
+                            }
+                        }
+                        catch { }
+
+                        // No TFM subdirectory — use config dir directly
+                        if (Directory.EnumerateFiles(configDir, "*.dll").Any())
+                        {
+                            results.Add(configDir);
+                            return results;
+                        }
+                    }
+                }
+
+                var parent = Directory.GetParent(searchDir)?.FullName;
+                if (parent == null || parent == searchDir) break;
+                searchDir = parent;
+            }
+
+            return results;
+        }
+
+        /// <summary>
+        /// Find the assembly name from .csproj file (or fall back to workspace name).
+        /// </summary>
+        private string? FindAssemblyName()
+        {
+            foreach (var dir in _inputDirectories)
+            {
+                try
+                {
+                    var csprojFiles = Directory.GetFiles(dir, "*.csproj", SearchOption.TopDirectoryOnly);
+                    foreach (var csproj in csprojFiles)
+                    {
+                        try
+                        {
+                            var doc = XDocument.Load(csproj);
+                            var assemblyName = doc.Root?.Descendants()
+                                .FirstOrDefault(e => e.Name.LocalName == "AssemblyName")?.Value;
+                            if (!string.IsNullOrEmpty(assemblyName)) return assemblyName;
+
+                            // Fall back to project file name
+                            return Path.GetFileNameWithoutExtension(csproj);
+                        }
+                        catch { }
+                    }
+                }
+                catch { }
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Recursively collect all symbols matching a name from a namespace.
+        /// </summary>
+        private void CollectSymbols(INamespaceSymbol ns, string name, List<ISymbol> results)
+        {
+            foreach (var member in ns.GetMembers())
+            {
+                if (member is INamespaceSymbol childNs)
+                {
+                    CollectSymbols(childNs, name, results);
+                }
+                else if (member.Name == name)
+                {
+                    results.Add(member);
+                }
+                else if (member is INamedTypeSymbol typeSymbol)
+                {
+                    // Search members of types too
+                    foreach (var typeMember in typeSymbol.GetMembers())
+                    {
+                        if (typeMember.Name == name)
+                            results.Add(typeMember);
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Recursively collect named types matching a name.
+        /// </summary>
+        private void CollectNamedTypes(INamespaceSymbol ns, string name, List<INamedTypeSymbol> results)
+        {
+            foreach (var member in ns.GetMembers())
+            {
+                if (member is INamespaceSymbol childNs)
+                {
+                    CollectNamedTypes(childNs, name, results);
+                }
+                else if (member is INamedTypeSymbol typeSymbol)
+                {
+                    if (typeSymbol.Name == name)
+                        results.Add(typeSymbol);
+
+                    // Check nested types
+                    foreach (var nested in typeSymbol.GetTypeMembers())
+                    {
+                        if (nested.Name == name)
+                            results.Add(nested);
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Check if two symbols match (accounting for OriginalDefinition in generics).
+        /// </summary>
+        private static bool SymbolsMatch(ISymbol candidate, ISymbol target, ISymbol targetOriginal)
+        {
+            return SymbolEqualityComparer.Default.Equals(candidate, target)
+                || SymbolEqualityComparer.Default.Equals(candidate, targetOriginal)
+                || SymbolEqualityComparer.Default.Equals(candidate.OriginalDefinition, targetOriginal);
+        }
+
+        /// <summary>
+        /// Get the name of the containing method/property for context in reference results.
+        /// </summary>
+        private static string GetContainingMemberName(SyntaxNode node)
+        {
+            var current = node.Parent;
+            while (current != null)
+            {
+                switch (current)
+                {
+                    case MethodDeclarationSyntax m:
+                        return m.Identifier.Text;
+                    case PropertyDeclarationSyntax p:
+                        return p.Identifier.Text;
+                    case ConstructorDeclarationSyntax c:
+                        return $"{c.Identifier.Text} (ctor)";
+                    case ClassDeclarationSyntax cls:
+                        return $"{cls.Identifier.Text} (class)";
+                }
+                current = current.Parent;
+            }
+            return "(top-level)";
+        }
+
+        /// <summary>
+        /// Truncate a string to a maximum length.
+        /// </summary>
+        private static string TruncateText(string? value, int maxLength)
+        {
+            if (string.IsNullOrEmpty(value)) return "";
+            return value.Length <= maxLength ? value : value.Substring(0, maxLength) + "...";
+        }
+
+        /// <summary>
+        /// Check if a DLL name is a known native/unmanaged library that can't be loaded as metadata.
+        /// Prevents CS0009 "PE image doesn't contain managed metadata" errors.
+        /// </summary>
+        private static bool IsNativeDll(string name)
+        {
+            // Known native DLLs in .NET runtime directory
+            if (name.StartsWith("coreclr", StringComparison.OrdinalIgnoreCase) ||
+                name.StartsWith("clrjit", StringComparison.OrdinalIgnoreCase) ||
+                name.StartsWith("clrgc", StringComparison.OrdinalIgnoreCase) ||
+                name.StartsWith("mscordac", StringComparison.OrdinalIgnoreCase) ||
+                name.StartsWith("mscordbi", StringComparison.OrdinalIgnoreCase) ||
+                name.StartsWith("mscorrc", StringComparison.OrdinalIgnoreCase) ||
+                name.StartsWith("hostpolicy", StringComparison.OrdinalIgnoreCase) ||
+                name.StartsWith("hostfxr", StringComparison.OrdinalIgnoreCase) ||
+                name.StartsWith("msquic", StringComparison.OrdinalIgnoreCase) ||
+                name.StartsWith("dbgshim", StringComparison.OrdinalIgnoreCase) ||
+                name.StartsWith("createdump", StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            // Patterns for native DLLs
+            if (name.Contains(".Native", StringComparison.OrdinalIgnoreCase) ||
+                (name.Contains("native", StringComparison.OrdinalIgnoreCase) && name.Contains("amd64", StringComparison.OrdinalIgnoreCase)))
+                return true;
+
+            return false;
+        }
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // Models
+    // ────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// A reference to a symbol found via full compilation analysis.
+    /// </summary>
+    public class SymbolReference
+    {
+        public string FilePath { get; set; } = "";
+        public int Line { get; set; }
+        public int Column { get; set; }
+        public bool IsDefinition { get; set; }
+        public string ContainingMember { get; set; } = "";
+        public string Context { get; set; } = "";
+    }
+
+    /// <summary>
+    /// A compilation diagnostic (error or warning).
+    /// </summary>
+    public class CompilationDiagnostic
+    {
+        public string Code { get; set; } = "";
+        public string Message { get; set; } = "";
+        public string Severity { get; set; } = "";
+        public string FilePath { get; set; } = "";
+        public int Line { get; set; }
+    }
+
+    /// <summary>
+    /// Status snapshot of the compilation service.
+    /// </summary>
+    public class CompilationStatus
+    {
+        public bool IsAvailable { get; set; }
+        public int SyntaxTreeCount { get; set; }
+        public int ReferencesLoaded { get; set; }
+        public int DiagnosticErrors { get; set; }
+        public int DiagnosticWarnings { get; set; }
+        public int CachedSemanticModels { get; set; }
+        public long BuildTimeMs { get; set; }
+        public string AssemblyName { get; set; } = "";
+    }
+}

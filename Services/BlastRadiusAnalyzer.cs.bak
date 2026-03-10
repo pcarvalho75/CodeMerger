@@ -1,0 +1,429 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text;
+using CodeMerger.Models;
+
+namespace CodeMerger.Services
+{
+    /// <summary>
+    /// Analyzes the transitive impact ("blast radius") of modifying a symbol.
+    /// Computes: direct callers, transitive callers at each depth, affected tests,
+    /// XAML bindings, cross-project references, and a risk score.
+    /// </summary>
+    public class BlastRadiusAnalyzer
+    {
+        private readonly WorkspaceAnalysis _workspaceAnalysis;
+        private readonly List<CallSite> _callSites;
+        private readonly CompilationService? _compilationService;
+
+        // Heuristic patterns for critical-path detection
+        private static readonly string[] CriticalPathKeywords = new[]
+        {
+            "payment", "auth", "security", "crypto", "password", "token",
+            "transaction", "billing", "charge", "withdraw", "transfer",
+            "encrypt", "decrypt", "certificate", "credential", "secret"
+        };
+
+        // Test attribute markers
+        private static readonly string[] TestAttributes = new[]
+        {
+            "[Test]", "[TestMethod]", "[Fact]", "[Theory]", "[TestCase]",
+            "[SetUp]", "[TearDown]", "[TestFixture]", "[TestClass]"
+        };
+
+        public BlastRadiusAnalyzer(
+            WorkspaceAnalysis workspaceAnalysis,
+            List<CallSite> callSites,
+            CompilationService? compilationService = null)
+        {
+            _workspaceAnalysis = workspaceAnalysis;
+            _callSites = callSites;
+            _compilationService = compilationService;
+        }
+
+        /// <summary>
+        /// Compute the full blast radius for a symbol.
+        /// </summary>
+        public BlastRadiusResult Analyze(
+            string symbolName,
+            string? symbolKind = null,
+            int maxDepth = 3,
+            bool includeTests = true,
+            bool includeXaml = true)
+        {
+            var result = new BlastRadiusResult
+            {
+                SymbolName = symbolName,
+                SymbolKind = symbolKind ?? "unknown"
+            };
+
+            // Build impact layers via breadth-first traversal of the call graph
+            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            visited.Add(symbolName.ToLowerInvariant());
+
+            var currentFrontier = new List<string> { symbolName };
+
+            for (int depth = 1; depth <= maxDepth; depth++)
+            {
+                var layer = new ImpactLayer { Depth = depth };
+                var nextFrontier = new List<string>();
+
+                foreach (var symbol in currentFrontier)
+                {
+                    // Find direct callers of this symbol
+                    var callers = _callSites
+                        .Where(cs => cs.CalledMethod.Equals(symbol, StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+
+                    foreach (var caller in callers)
+                    {
+                        var callerKey = $"{caller.CallerType}.{caller.CallerMethod}".ToLowerInvariant();
+                        if (!visited.Add(callerKey)) continue;
+
+                        var file = _workspaceAnalysis.AllFiles.FirstOrDefault(f =>
+                            f.FilePath.Equals(caller.FilePath, StringComparison.OrdinalIgnoreCase));
+                        var relativePath = file?.RelativePath ?? Path.GetFileName(caller.FilePath);
+                        bool isTest = IsTestFile(file);
+
+                        layer.Symbols.Add(new ImpactedSymbol
+                        {
+                            Name = $"{caller.CallerType}.{caller.CallerMethod}",
+                            File = relativePath,
+                            Line = caller.Line,
+                            Kind = caller.IsPropertyAccess ? "property_access" : "caller",
+                            IsTestFile = isTest,
+                            IsExternalDependency = file == null
+                        });
+
+                        // Add to next frontier for deeper traversal
+                        nextFrontier.Add(caller.CallerMethod);
+                    }
+
+                    // Also check for interface implementations / overrides
+                    foreach (var file in _workspaceAnalysis.AllFiles)
+                    {
+                        foreach (var type in file.Types)
+                        {
+                            foreach (var member in type.Members)
+                            {
+                                if (member.Name.Equals(symbol, StringComparison.OrdinalIgnoreCase) && member.IsOverride)
+                                {
+                                    var overrideKey = $"{type.Name}.{member.Name}".ToLowerInvariant();
+                                    if (!visited.Add(overrideKey)) continue;
+
+                                    layer.Symbols.Add(new ImpactedSymbol
+                                    {
+                                        Name = $"{type.Name}.{member.Name}",
+                                        File = file.RelativePath,
+                                        Line = member.StartLine,
+                                        Kind = "override",
+                                        IsTestFile = IsTestFile(file),
+                                        IsExternalDependency = false
+                                    });
+
+                                    nextFrontier.Add(member.Name);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (layer.Symbols.Count > 0)
+                    result.Layers.Add(layer);
+
+                currentFrontier = nextFrontier.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                if (currentFrontier.Count == 0) break;
+            }
+
+            // Collect affected tests
+            if (includeTests)
+            {
+                result.AffectedTests = result.Layers
+                    .SelectMany(l => l.Symbols)
+                    .Where(s => s.IsTestFile)
+                    .Select(s => s.File)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+            }
+
+            // Check XAML bindings
+            if (includeXaml)
+            {
+                result.AffectedXamlBindings = FindXamlBindings(symbolName);
+            }
+
+            // Compute risk score
+            result.RiskScore = ComputeRiskScore(result, symbolName);
+            result.RiskLevel = result.RiskScore switch
+            {
+                < 3.0 => "LOW",
+                < 5.0 => "MEDIUM",
+                < 7.0 => "HIGH",
+                _ => "CRITICAL"
+            };
+
+            // Generate risk factors and suggested actions
+            result.RiskFactors = GenerateRiskFactors(result, symbolName);
+            result.SuggestedActions = GenerateSuggestedActions(result);
+
+            return result;
+        }
+
+        /// <summary>
+        /// Compute risk score 0-10 based on impact breadth, test coverage, UI coupling, etc.
+        /// </summary>
+        private double ComputeRiskScore(BlastRadiusResult result, string symbolName)
+        {
+            double score = 0;
+
+            // Factor 1: Breadth of impact (0-3 points)
+            int totalAffected = result.Layers.Sum(l => l.Symbols.Count);
+            score += Math.Min(3.0, totalAffected / 4.0);
+
+            // Factor 2: Test coverage gap (0-2 points)
+            int nonTestAffected = result.Layers.Sum(l => l.Symbols.Count(s => !s.IsTestFile));
+            int testCount = result.AffectedTests.Count;
+            if (nonTestAffected > 0 && testCount == 0)
+                score += 2.0;
+            else if (nonTestAffected > testCount * 2)
+                score += 1.0;
+
+            // Factor 3: UI coupling (0-2 points)
+            score += Math.Min(2.0, result.AffectedXamlBindings.Count * 0.7);
+
+            // Factor 4: External/cross-project exposure (0-2 points)
+            int externalCount = result.Layers.SelectMany(l => l.Symbols).Count(s => s.IsExternalDependency);
+            score += Math.Min(2.0, externalCount * 1.0);
+
+            // Factor 5: Critical path detection (0-1 point)
+            var lowerName = symbolName.ToLowerInvariant();
+            if (CriticalPathKeywords.Any(k => lowerName.Contains(k)))
+                score += 1.0;
+
+            return Math.Min(10.0, Math.Round(score, 1));
+        }
+
+        /// <summary>
+        /// Generate human-readable risk factors.
+        /// </summary>
+        private List<string> GenerateRiskFactors(BlastRadiusResult result, string symbolName)
+        {
+            var factors = new List<string>();
+            int totalAffected = result.Layers.Sum(l => l.Symbols.Count);
+
+            if (totalAffected > 10)
+                factors.Add($"High fan-out: {totalAffected} symbols affected across {result.Layers.Count} depth levels");
+            else if (totalAffected > 5)
+                factors.Add($"Moderate fan-out: {totalAffected} symbols affected");
+
+            if (result.AffectedTests.Count == 0 && totalAffected > 0)
+                factors.Add("No test coverage found for any affected code path");
+
+            if (result.AffectedXamlBindings.Count > 0)
+                factors.Add($"{result.AffectedXamlBindings.Count} XAML binding(s) depend on this symbol — UI may break");
+
+            int externalCount = result.Layers.SelectMany(l => l.Symbols).Count(s => s.IsExternalDependency);
+            if (externalCount > 0)
+                factors.Add($"{externalCount} reference(s) from outside the workspace");
+
+            var lowerName = symbolName.ToLowerInvariant();
+            if (CriticalPathKeywords.Any(k => lowerName.Contains(k)))
+                factors.Add("Symbol name suggests critical path (security/payment/auth)");
+
+            int overrideCount = result.Layers.SelectMany(l => l.Symbols).Count(s => s.Kind == "override");
+            if (overrideCount > 0)
+                factors.Add($"{overrideCount} override(s) exist — polymorphic behavior affected");
+
+            if (factors.Count == 0)
+                factors.Add("Low impact: few consumers and no high-risk indicators");
+
+            return factors;
+        }
+
+        /// <summary>
+        /// Generate actionable suggestions based on the risk analysis.
+        /// </summary>
+        private List<string> GenerateSuggestedActions(BlastRadiusResult result)
+        {
+            var actions = new List<string>();
+
+            if (result.AffectedTests.Count > 0)
+                actions.Add($"Run tests: {string.Join(", ", result.AffectedTests.Select(Path.GetFileNameWithoutExtension).Take(5))}");
+            else if (result.Layers.Sum(l => l.Symbols.Count) > 0)
+                actions.Add("Consider adding tests — no test coverage found for affected code paths");
+
+            if (result.AffectedXamlBindings.Count > 0)
+                actions.Add($"Check XAML bindings in: {string.Join(", ", result.AffectedXamlBindings.Select(Path.GetFileName).Take(5))}");
+
+            if (result.Layers.Count >= 2)
+            {
+                var deepCallers = result.Layers[^1].Symbols.Take(3).Select(s => s.Name);
+                actions.Add($"Review transitive callers: {string.Join(", ", deepCallers)}");
+            }
+
+            if (result.RiskScore >= 7.0)
+                actions.Add("HIGH RISK: Consider incremental changes with build verification between each edit");
+
+            return actions;
+        }
+
+        /// <summary>
+        /// Find XAML files that bind to a given symbol name.
+        /// </summary>
+        private List<string> FindXamlBindings(string symbolName)
+        {
+            var results = new List<string>();
+
+            var bindingPatterns = new[]
+            {
+                $"{{Binding {symbolName}",
+                $"{{Binding Path={symbolName}",
+                $"{{x:Bind {symbolName}",
+                $"Command=\"{{Binding {symbolName}"
+            };
+
+            foreach (var file in _workspaceAnalysis.AllFiles)
+            {
+                if (!file.FilePath.EndsWith(".xaml", StringComparison.OrdinalIgnoreCase)) continue;
+
+                try
+                {
+                    var content = File.ReadAllText(file.FilePath);
+                    if (bindingPatterns.Any(p => content.Contains(p, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        results.Add(file.RelativePath);
+                    }
+                }
+                catch { }
+            }
+
+            return results;
+        }
+
+        /// <summary>
+        /// Determine if a file is a test file.
+        /// </summary>
+        private bool IsTestFile(FileAnalysis? file)
+        {
+            if (file == null) return false;
+            if (file.Classification == FileClassification.Test) return true;
+
+            // Heuristic: filename contains "Test" or "Tests"
+            var name = file.FileName;
+            if (name.Contains("Test", StringComparison.OrdinalIgnoreCase)) return true;
+
+            // Check for test framework usings
+            if (file.Usings != null)
+            {
+                var testUsings = new[] { "NUnit", "Xunit", "Microsoft.VisualStudio.TestTools" };
+                if (file.Usings.Any(u => testUsings.Any(tu => u.Contains(tu, StringComparison.OrdinalIgnoreCase))))
+                    return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Format the result as markdown for the MCP tool response.
+        /// </summary>
+        public string ToMarkdown(BlastRadiusResult result)
+        {
+            var sb = new StringBuilder();
+
+            sb.AppendLine($"# Blast Radius: `{result.SymbolName}`");
+            sb.AppendLine();
+            sb.AppendLine($"## Risk: **{result.RiskLevel}** (score: {result.RiskScore}/10)");
+            sb.AppendLine();
+
+            int totalAffected = result.Layers.Sum(l => l.Symbols.Count);
+            sb.AppendLine($"**Total impact:** {totalAffected} symbols across {result.Layers.Count} depth levels");
+            if (result.AffectedTests.Count > 0)
+                sb.AppendLine($"**Tests found:** {result.AffectedTests.Count}");
+            if (result.AffectedXamlBindings.Count > 0)
+                sb.AppendLine($"**XAML bindings:** {result.AffectedXamlBindings.Count}");
+            sb.AppendLine();
+
+            // Impact layers
+            foreach (var layer in result.Layers)
+            {
+                sb.AppendLine($"## Depth {layer.Depth} — {layer.Symbols.Count} symbols");
+
+                var grouped = layer.Symbols.GroupBy(s => s.File).OrderBy(g => g.Key);
+                foreach (var group in grouped)
+                {
+                    foreach (var sym in group.OrderBy(s => s.Line))
+                    {
+                        var tag = sym.IsTestFile ? " [test]" : sym.IsExternalDependency ? " [external]" : "";
+                        var kind = sym.Kind != "caller" ? $" ({sym.Kind})" : "";
+                        sb.AppendLine($"- `{sym.File}:{sym.Line}` — `{sym.Name}`{kind}{tag}");
+                    }
+                }
+                sb.AppendLine();
+            }
+
+            // XAML bindings
+            if (result.AffectedXamlBindings.Count > 0)
+            {
+                sb.AppendLine("## XAML Bindings");
+                foreach (var binding in result.AffectedXamlBindings)
+                    sb.AppendLine($"- `{binding}`");
+                sb.AppendLine();
+            }
+
+            // Risk factors
+            if (result.RiskFactors.Count > 0)
+            {
+                sb.AppendLine("## Risk Factors");
+                foreach (var factor in result.RiskFactors)
+                    sb.AppendLine($"- {factor}");
+                sb.AppendLine();
+            }
+
+            // Suggested actions
+            if (result.SuggestedActions.Count > 0)
+            {
+                sb.AppendLine("## Suggested Actions");
+                foreach (var action in result.SuggestedActions)
+                    sb.AppendLine($"- {action}");
+                sb.AppendLine();
+            }
+
+            return sb.ToString();
+        }
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // Blast Radius Models
+    // ────────────────────────────────────────────────────────────────────
+
+    public class BlastRadiusResult
+    {
+        public string SymbolName { get; set; } = "";
+        public string SymbolKind { get; set; } = "";
+        public double RiskScore { get; set; }
+        public string RiskLevel { get; set; } = "LOW";
+        public List<ImpactLayer> Layers { get; set; } = new();
+        public List<string> AffectedTests { get; set; } = new();
+        public List<string> AffectedXamlBindings { get; set; } = new();
+        public List<string> RiskFactors { get; set; } = new();
+        public List<string> SuggestedActions { get; set; } = new();
+    }
+
+    public class ImpactLayer
+    {
+        public int Depth { get; set; }
+        public List<ImpactedSymbol> Symbols { get; set; } = new();
+    }
+
+    public class ImpactedSymbol
+    {
+        public string Name { get; set; } = "";
+        public string File { get; set; } = "";
+        public int Line { get; set; }
+        public string Kind { get; set; } = "caller";
+        public bool IsTestFile { get; set; }
+        public bool IsExternalDependency { get; set; }
+    }
+}

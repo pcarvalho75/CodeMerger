@@ -271,10 +271,9 @@ namespace CodeMerger.Services.Mcp
                     description = "Find all references to a symbol using semantic analysis. PREFER THIS over grep for verifying C# symbol usage.\n" +
                         "Use to: check if a property/method/type is used, verify wiring after adding new members, find all consumers before refactoring.\n" +
                         "Tracks: method invocations, property/field accesses (reads and writes), type inheritance, interface implementations.\n" +
-                        "LIMITATION: Uses syntax-tree heuristics, not full semantic compilation. May miss references in: " +
-                        "lambdas assigned to variables, dynamic/reflection calls, or nameof() expressions. " +
-                        "Common .NET/LINQ members (Where, Select, Add, Count, etc.) are filtered out to reduce noise. " +
-                        "If results seem incomplete, follow up with grep as a safety net.\n" +
+                        "When compilation is active (check compilation_status), uses full Roslyn SemanticModel for exact overload resolution, " +
+                        "generic type tracking, and var inference. Falls back to syntax-tree heuristics when compilation is unavailable.\n" +
+                        "Results are tagged with resolution mode: 'semantic' (compiler-grade) or 'heuristic' (string-match).\n" +
                         "Only use grep instead when searching for non-C# content (XAML, comments, string literals).\n" +
                         "EXAMPLES: 'Is SaveTrade used anywhere?' → find_references. 'Who implements IDataStream?' → find_references.\n" +
                         "WRONG: grep 'SaveTrade' to find usages. RIGHT: find_references symbolName='SaveTrade'.",
@@ -294,7 +293,7 @@ namespace CodeMerger.Services.Mcp
                 {
                     name = "codemerger_get_callers",
                     description = "Get all methods that call a specific method or access a specific property/field. PREFER THIS over grep when tracing call chains.\n" +
-                        "Essential before modifying method signatures — shows exactly what will break. Pair with get_callees for full call graph.\n" +
+                        "For quick single-depth caller checks. For full transitive impact analysis with risk scoring, tests, and XAML bindings, use blast_radius instead.\n" +
                         "WRONG: grep 'MethodName' to find who calls it. RIGHT: get_callers methodName='MethodName'.",
                     inputSchema = new Dictionary<string, object>
                     {
@@ -324,6 +323,28 @@ namespace CodeMerger.Services.Mcp
                         },
                         { "required", new[] { "methodName" } }
                     }
+                },
+                new
+                {
+                    name = "codemerger_blast_radius",
+                    description = "Analyze the impact of changing a symbol BEFORE making edits. Returns: transitive callers at each depth, " +
+                        "affected tests, XAML bindings, risk score (0-10), and suggested actions.\n" +
+                        "USE THIS before modifying any method with multiple callers or in a critical path.\n" +
+                        "EXAMPLE: blast_radius symbolName='ProcessOrder' → shows 12 callers, 2 tests, risk HIGH.",
+                    inputSchema = new Dictionary<string, object>
+                    {
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>
+                            {
+                                { "symbolName", new Dictionary<string, string> { { "type", "string" }, { "description", "Name of the method, property, or type to analyze" } } },
+                                { "symbolKind", new Dictionary<string, string> { { "type", "string" }, { "description", "Optional: method, property, type to narrow search" } } },
+                                { "depth", new Dictionary<string, object> { { "type", "integer" }, { "description", "Max transitive depth (default: 3). Higher = more thorough but slower." }, { "default", 3 } } },
+                                { "includeTests", new Dictionary<string, object> { { "type", "boolean" }, { "description", "Include affected test files (default: true)" }, { "default", true } } },
+                                { "includeXaml", new Dictionary<string, object> { { "type", "boolean" }, { "description", "Check XAML bindings (default: true)" }, { "default", true } } }
+                            }
+                        },
+                        { "required", new[] { "symbolName" } }
+                    }
                 }
             };
         }
@@ -339,6 +360,8 @@ namespace CodeMerger.Services.Mcp
                         "PREFER specialized tools: rename_symbol for renaming, move_file for moving, add_parameter for params, extract_method for extraction.\n" +
                         "On failure: use get_lines to see exact whitespace, then retry. One edit at a time; verify with build between edits.\n" +
                         "For .csproj: grep existing PackageReferences before adding new ones.\n" +
+                        "BEFORE editing methods with multiple callers: run blast_radius to check impact.\n" +
+                        "AFTER build failure: try build with healPreview or autoHeal before fixing manually.\n" +
                         "WORKFLOW: Present roadmap first, pause between steps for user OK (unless told otherwise), end with Review & Cleanup step.",
                     inputSchema = new Dictionary<string, object>
                     {
@@ -511,7 +534,8 @@ namespace CodeMerger.Services.Mcp
                 new
                 {
                     name = "codemerger_generate_interface",
-                    description = "Generate an interface from a class's public members. Returns code — write to file, then use implement_interface.",
+                    description = "Generate an interface from a class's public members. Returns code — write to file, then use implement_interface.\n" +
+                        "For bulk interface extraction across all service classes, use apply_pattern intent='extract_interfaces' instead.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -594,6 +618,28 @@ namespace CodeMerger.Services.Mcp
                         },
                         { "required", new[] { "className" } }
                     }
+                },
+                new
+                {
+                    name = "codemerger_apply_pattern",
+                    description = "Apply a refactoring intent across the entire codebase in one operation. Scans all files, finds targets, generates diffs.\n" +
+                        "Use intent='list' to see all available intents.\n" +
+                        "Built-in intents: add_xml_doc, add_null_checks, extract_interfaces, enforce_async_naming, add_sealed.\n" +
+                        "Natural language also works: 'add null checks', 'document public methods', 'seal classes', 'async naming'.\n" +
+                        "Default is preview mode (shows changes without applying). Set preview=false to apply.",
+                    inputSchema = new Dictionary<string, object>
+                    {
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>
+                            {
+                                { "intent", new Dictionary<string, string> { { "type", "string" }, { "description", "Intent name or natural language description. Use 'list' to see all available intents." } } },
+                                { "scope", new Dictionary<string, string> { { "type", "string" }, { "description", "Optional: namespace or path filter to limit scope (e.g., 'CodeMerger.Services', 'Mcp/'). Default: all files." } } },
+                                { "preview", new Dictionary<string, object> { { "type", "boolean" }, { "description", "Show changes without applying (default: true). Set false to apply." }, { "default", true } } },
+                                { "maxTargets", new Dictionary<string, object> { { "type", "integer" }, { "description", "Maximum targets to process (default: 50)" }, { "default", 50 } } }
+                            }
+                        },
+                        { "required", new[] { "intent" } }
+                    }
                 }
             };
         }
@@ -607,7 +653,11 @@ namespace CodeMerger.Services.Mcp
                     name = "codemerger_build",
                     description = "Validate the project compiles correctly.\n\n" +
                         "Default: full `dotnet build` with NuGet/XAML (10-30s).\n" +
-                        "quickCheck: true for fast Roslyn syntax-only check (~1s). Use after quick edits.",
+                        "quickCheck: true for fast Roslyn syntax-only check (~1s). Use after quick edits.\n" +
+                        "autoHeal: true to auto-fix common errors (missing usings, ambiguous refs, semicolons) and rebuild.\n" +
+                        "healPreview: true to see what auto-heal would fix without applying.\n" +
+                        "WHEN TO USE AUTO-HEAL: If build fails with CS0246/CS0103 (missing using) or CS0104 (ambiguous reference), " +
+                        "use healPreview first, then autoHeal — faster than fixing manually.",
                     inputSchema = new Dictionary<string, object>
                     {
                         { "type", "object" },
@@ -616,7 +666,10 @@ namespace CodeMerger.Services.Mcp
                                 { "configuration", new Dictionary<string, object> { { "type", "string" }, { "description", "Build configuration: Debug or Release (default: Debug)" }, { "default", "Debug" } } },
                                 { "verbose", new Dictionary<string, object> { { "type", "boolean" }, { "description", "Include full build output (default: false)" }, { "default", false } } },
                                 { "quickCheck", new Dictionary<string, object> { { "type", "boolean" }, { "description", "Fast Roslyn syntax-only check instead of full build (default: false)" }, { "default", false } } },
-                                { "path", new Dictionary<string, string> { { "type", "string" }, { "description", "Specific .csproj or .sln to build (filename or path). For quickCheck: specific .cs file. Default: auto-detect (prefers .sln)" } } }
+                                { "path", new Dictionary<string, string> { { "type", "string" }, { "description", "Specific .csproj or .sln to build (filename or path). For quickCheck: specific .cs file. Default: auto-detect (prefers .sln)" } } },
+                                { "autoHeal", new Dictionary<string, object> { { "type", "boolean" }, { "description", "Auto-fix common build errors (missing usings, ambiguous refs) and rebuild (default: false)" }, { "default", false } } },
+                                { "maxHealAttempts", new Dictionary<string, object> { { "type", "integer" }, { "description", "Max heal-rebuild cycles (default: 3)" }, { "default", 3 } } },
+                                { "healPreview", new Dictionary<string, object> { { "type", "boolean" }, { "description", "Show what auto-heal would fix without applying (default: false)" }, { "default", false } } }
                             }
                         },
                         { "required", Array.Empty<string>() }
@@ -696,6 +749,18 @@ namespace CodeMerger.Services.Mcp
         {
             return new object[]
             {
+                new
+                {
+                    name = "codemerger_compilation_status",
+                    description = "Get the status of the Roslyn compilation engine. Shows: availability, file count, references loaded, " +
+                        "diagnostic errors/warnings, build time. Use to verify semantic resolution is active.",
+                    inputSchema = new Dictionary<string, object>
+                    {
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>() },
+                        { "required", Array.Empty<string>() }
+                    }
+                },
                 new
                 {
                     name = "codemerger_clean_backups",

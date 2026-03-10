@@ -140,11 +140,9 @@ namespace CodeMerger.Services.Mcp
             sb.AppendLine("## Mandatory Session Workflow");
             sb.AppendLine("1. `get_project_overview` → orientation");
             sb.AppendLine("2. `notes get` → read architecture context (skip rediscovery)");
-            sb.AppendLine("3. `compilation_status` → check if semantic resolution is active (optional but recommended)");
-            sb.AppendLine("4. `get_context` → task-specific file discovery");
-            sb.AppendLine("5. `get_type` / `get_method_body` → drill into specifics");
-            sb.AppendLine("6. `blast_radius` → check impact BEFORE editing methods with multiple callers");
-            sb.AppendLine("7. Make changes with `str_replace` → `build` (use `autoHeal: true` if build fails with missing usings) → verify");
+            sb.AppendLine("3. `get_context` → task-specific file discovery");
+            sb.AppendLine("4. `get_type` / `get_method_body` → drill into specifics");
+            sb.AppendLine("5. Make changes with `str_replace` → `build` → verify");
             sb.AppendLine();
 
             // Buildable Projects section — show .sln and .csproj files available for `build`

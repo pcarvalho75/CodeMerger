@@ -34,6 +34,7 @@ namespace CodeMerger.Services
         // Workspace state
         private WorkspaceAnalysis? _workspaceAnalysis;
         private RefactoringService? _refactoringService;
+        private CompilationService? _compilationService;
         private List<CallSite> _callSites = new();
         private List<string> _inputDirectories = new();
         private string _workspaceName = string.Empty;
@@ -419,6 +420,15 @@ namespace CodeMerger.Services
 
                 // Initialize services and handlers
                 _refactoringService = new RefactoringService(_workspaceAnalysis, _inputDirectories, _callSites, _workspaceSettings);
+
+                // Build full Roslyn compilation for semantic analysis (BEFORE handlers so they receive it)
+                var csFiles = files.Where(f => f.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)).ToList();
+                if (csFiles.Count > 0)
+                {
+                    _compilationService = new CompilationService(Log);
+                    _compilationService.BuildCompilation(_inputDirectories, csFiles, _workspaceName);
+                }
+
                 InitializeHandlers();
 
                 LogWithMemory($"Indexed {fileAnalyses.Count} files, {_workspaceAnalysis.TypeHierarchy.Count} types, {_callSites.Count} call sites");
@@ -507,6 +517,13 @@ namespace CodeMerger.Services
                 lock (_stateLock)
                 {
                     ReindexFile(filePath);
+
+                    // Update compilation incrementally for .cs files
+                    if (filePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+                    {
+                        _compilationService?.UpdateFile(filePath);
+                    }
+
                     _lastEditTimestamp = DateTime.UtcNow;
                 }
             }
@@ -522,9 +539,9 @@ namespace CodeMerger.Services
 
             _readHandler = new McpReadToolHandler(_workspaceAnalysis, _callSites, _inputDirectories, SendActivity);
             _writeHandler = new McpWriteToolHandler(_workspaceAnalysis, _refactoringService, _inputDirectories, _workspaceSettings, UpdateSingleFileSync, SendActivity, Log);
-            _semanticHandler = new McpSemanticToolHandler(_workspaceAnalysis, _callSites, SendActivity, () => _lastEditTimestamp);
-            _refactoringHandler = new McpRefactoringToolHandler(_workspaceAnalysis, _refactoringService, _callSites, _workspaceSettings, SendActivity, Log);
-            _maintenanceHandler = new McpMaintenanceToolHandler(_workspaceAnalysis, _inputDirectories, SendActivity);
+            _semanticHandler = new McpSemanticToolHandler(_workspaceAnalysis, _callSites, SendActivity, () => _lastEditTimestamp, _compilationService);
+            _refactoringHandler = new McpRefactoringToolHandler(_workspaceAnalysis, _refactoringService, _callSites, _workspaceSettings, SendActivity, Log, _compilationService, _inputDirectories);
+            _maintenanceHandler = new McpMaintenanceToolHandler(_workspaceAnalysis, _inputDirectories, SendActivity, _compilationService);
             _workspaceHandler = new McpWorkspaceToolHandler(
                 _workspaceService,
                 _workspaceName,
@@ -533,7 +550,8 @@ namespace CodeMerger.Services
                 () => RequestShutdown(), // Shutdown callback
                 (name) => SwitchToWorkspace(name), // Switch workspace callback
                 SendActivity,
-                Log);
+                Log,
+                _compilationService);
             _lessonHandler = new McpLessonToolHandler(_lessonService, _communitySyncService, SendActivity);
             
             if (_inputDirectories.Count > 0)
@@ -1000,10 +1018,13 @@ namespace CodeMerger.Services
                     "codemerger_add_parameter" => _refactoringHandler.AddParameter(arguments),
                     "codemerger_implement_interface" => _refactoringHandler.ImplementInterface(arguments),
                     "codemerger_generate_constructor" => _refactoringHandler.GenerateConstructor(arguments),
+                    "codemerger_apply_pattern" => _refactoringHandler.ApplyPattern(arguments),
 
                     // Maintenance tools
                     "codemerger_clean_backups" => _maintenanceHandler.CleanBackups(arguments),
                     "codemerger_find_duplicates" => _maintenanceHandler.FindDuplicates(arguments),
+                    "codemerger_compilation_status" => _maintenanceHandler.CompilationStatus(arguments),
+                    "codemerger_blast_radius" => _semanticHandler.BlastRadius(arguments),
 
                     _ => $"Unknown tool: {toolName}"
                 };

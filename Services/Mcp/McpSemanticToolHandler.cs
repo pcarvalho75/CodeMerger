@@ -19,13 +19,15 @@ namespace CodeMerger.Services.Mcp
         private readonly SemanticAnalyzer _semanticAnalyzer;
         private readonly Action<string> _sendActivity;
         private readonly Func<DateTime> _getLastEditTimestamp;
+        private readonly List<CallSite> _callSites;
 
-        public McpSemanticToolHandler(WorkspaceAnalysis workspaceAnalysis, List<CallSite> callSites, Action<string> sendActivity, Func<DateTime> getLastEditTimestamp)
+        public McpSemanticToolHandler(WorkspaceAnalysis workspaceAnalysis, List<CallSite> callSites, Action<string> sendActivity, Func<DateTime> getLastEditTimestamp, CompilationService? compilationService = null)
         {
             _workspaceAnalysis = workspaceAnalysis;
-            _semanticAnalyzer = new SemanticAnalyzer(workspaceAnalysis, callSites);
+            _semanticAnalyzer = new SemanticAnalyzer(workspaceAnalysis, callSites, compilationService);
             _sendActivity = sendActivity;
             _getLastEditTimestamp = getLastEditTimestamp;
+            _callSites = callSites;
         }
 
         public string FindReferences(JsonElement arguments)
@@ -156,6 +158,44 @@ namespace CodeMerger.Services.Mcp
             }
 
             return AppendStalenessWarning(sb.ToString());
+        }
+
+        public string BlastRadius(JsonElement arguments)
+        {
+            if (!arguments.TryGetProperty("symbolName", out var symbolEl))
+            {
+                return "Error: 'symbolName' parameter is required.";
+            }
+
+            var symbolName = symbolEl.GetString() ?? "";
+            if (string.IsNullOrWhiteSpace(symbolName))
+                return "Error: 'symbolName' cannot be empty.";
+
+            _sendActivity($"Analyzing blast radius: {symbolName}");
+
+            string? symbolKind = null;
+            if (arguments.TryGetProperty("symbolKind", out var kindEl))
+                symbolKind = kindEl.GetString();
+
+            int maxDepth = 3;
+            if (arguments.TryGetProperty("depth", out var depthEl))
+                maxDepth = Math.Clamp(depthEl.GetInt32(), 1, 10);
+
+            bool includeTests = true;
+            if (arguments.TryGetProperty("includeTests", out var testsEl))
+                includeTests = testsEl.GetBoolean();
+
+            bool includeXaml = true;
+            if (arguments.TryGetProperty("includeXaml", out var xamlEl))
+                includeXaml = xamlEl.GetBoolean();
+
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var analyzer = new BlastRadiusAnalyzer(_workspaceAnalysis, _callSites);
+            var result = analyzer.Analyze(symbolName, symbolKind, maxDepth, includeTests, includeXaml);
+            sw.Stop();
+
+            var markdown = analyzer.ToMarkdown(result);
+            return markdown + $"\n*Analysis completed in {sw.ElapsedMilliseconds}ms.*";
         }
 
         public string FindImplementations(JsonElement arguments)

@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using CodeMerger.Models;
+using Microsoft.CodeAnalysis;
 
 namespace CodeMerger.Services
 {
@@ -15,17 +16,160 @@ namespace CodeMerger.Services
     {
         private readonly WorkspaceAnalysis _workspaceAnalysis;
         private readonly List<CallSite> _callSites;
+        private readonly CompilationService? _compilationService;
 
-        public SemanticAnalyzer(WorkspaceAnalysis workspaceAnalysis, List<CallSite> callSites)
+        public SemanticAnalyzer(WorkspaceAnalysis workspaceAnalysis, List<CallSite> callSites, CompilationService? compilationService = null)
         {
             _workspaceAnalysis = workspaceAnalysis;
             _callSites = callSites;
+            _compilationService = compilationService;
         }
 
         /// <summary>
         /// Find all usages of a symbol (type, method, property, field) across the codebase.
+        /// Uses full Roslyn compilation for precise resolution when available, falling back
+        /// to syntax-tree heuristics otherwise.
         /// </summary>
         public SymbolUsageResult FindUsages(string symbolName, string? symbolKind = null)
+        {
+            // Guard: empty symbol name
+            if (string.IsNullOrWhiteSpace(symbolName))
+            {
+                return new SymbolUsageResult
+                {
+                    SymbolName = symbolName ?? "",
+                    RequestedKind = symbolKind,
+                    ResolutionMode = "error"
+                };
+            }
+
+            // Try semantic resolution first (compiler-grade, handles overloads/generics/var)
+            if (_compilationService?.IsAvailable == true)
+            {
+                try
+                {
+                    var semanticResult = FindUsagesSemantic(symbolName, symbolKind);
+                    if (semanticResult != null)
+                        return semanticResult;
+                }
+                catch
+                {
+                    // Compilation-based resolution failed — fall through to heuristic
+                }
+            }
+
+            // Fall back to heuristic analysis (syntax-tree string matching)
+            return FindUsagesHeuristic(symbolName, symbolKind);
+        }
+
+        /// <summary>
+        /// Semantic path: uses full CSharpCompilation + SemanticModel for exact symbol resolution.
+        /// Returns null if the symbol can't be found in the compilation (triggers heuristic fallback).
+        /// </summary>
+        private SymbolUsageResult? FindUsagesSemantic(string symbolName, string? symbolKind)
+        {
+            var symbol = _compilationService!.FindSymbolByName(symbolName, symbolKind);
+            if (symbol == null) return null;
+
+            var refs = _compilationService.FindAllReferences(symbol);
+            if (refs.Count == 0) return null;
+
+            var result = new SymbolUsageResult
+            {
+                SymbolName = symbolName,
+                RequestedKind = symbolKind,
+                ResolutionMode = "semantic"
+            };
+
+            foreach (var r in refs)
+            {
+                // Convert full path to relative path
+                var relativePath = r.FilePath;
+                var file = _workspaceAnalysis.AllFiles.FirstOrDefault(f =>
+                    f.FilePath.Equals(r.FilePath, StringComparison.OrdinalIgnoreCase));
+                if (file != null)
+                    relativePath = file.RelativePath;
+
+                var usageKind = r.IsDefinition ? UsageKind.Definition : UsageKind.Reference;
+
+                // Refine usage kind based on symbol type
+                if (!r.IsDefinition)
+                {
+                    usageKind = symbol switch
+                    {
+                        IMethodSymbol => UsageKind.Invocation,
+                        IPropertySymbol => UsageKind.Reference,
+                        IFieldSymbol => UsageKind.Reference,
+                        INamedTypeSymbol => UsageKind.Reference,
+                        _ => UsageKind.Reference
+                    };
+                }
+
+                // Build context string
+                var context = r.ContainingMember;
+                if (!string.IsNullOrEmpty(r.Context) && r.Context.Length < 100)
+                    context = r.Context;
+
+                result.Usages.Add(new SymbolUsage
+                {
+                    SymbolName = symbolName,
+                    SymbolKind = symbol.Kind.ToString(),
+                    FilePath = relativePath,
+                    Line = r.Line,
+                    Column = r.Column,
+                    UsageKind = usageKind,
+                    Context = context
+                });
+            }
+
+            // Also add inheritance/implementation info from the indexed data
+            foreach (var file in _workspaceAnalysis.AllFiles)
+            {
+                foreach (var type in file.Types)
+                {
+                    if (type.BaseType?.Equals(symbolName, StringComparison.OrdinalIgnoreCase) == true)
+                    {
+                        if (!result.Usages.Any(u => u.FilePath == file.RelativePath && u.Line == type.StartLine))
+                        {
+                            result.Usages.Add(new SymbolUsage
+                            {
+                                SymbolName = symbolName,
+                                SymbolKind = "Type",
+                                FilePath = file.RelativePath,
+                                Line = type.StartLine,
+                                UsageKind = UsageKind.Reference,
+                                Context = $"{type.Name} : {type.BaseType}"
+                            });
+                        }
+                    }
+
+                    if (type.Interfaces.Any(i => i.Equals(symbolName, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        if (!result.Usages.Any(u => u.FilePath == file.RelativePath && u.Line == type.StartLine && u.UsageKind == UsageKind.Implementation))
+                        {
+                            result.Usages.Add(new SymbolUsage
+                            {
+                                SymbolName = symbolName,
+                                SymbolKind = "Interface",
+                                FilePath = file.RelativePath,
+                                Line = type.StartLine,
+                                UsageKind = UsageKind.Implementation,
+                                Context = $"{type.Name} : {symbolName}"
+                            });
+                        }
+                    }
+                }
+            }
+
+            result.TotalUsages = result.Usages.Count;
+            return result;
+        }
+
+        /// <summary>
+        /// Heuristic path: uses syntax-tree string matching for symbol resolution.
+        /// Works without compilation but can't resolve overloads, generics, or var types.
+        /// </summary>
+        private SymbolUsageResult FindUsagesHeuristic(string symbolName, string? symbolKind = null)
         {
             var result = new SymbolUsageResult
             {
@@ -527,12 +671,18 @@ namespace CodeMerger.Services
         public List<SymbolUsage> Usages { get; set; } = new();
         public int TotalUsages { get; set; }
 
+        /// <summary>
+        /// Indicates how references were resolved: "semantic" (full Roslyn compilation),
+        /// "heuristic" (syntax-tree string matching), or "mixed".
+        /// </summary>
+        public string ResolutionMode { get; set; } = "heuristic";
+
         public string ToMarkdown()
         {
             var sb = new StringBuilder();
             sb.AppendLine($"# Usages of `{SymbolName}`");
             sb.AppendLine();
-            sb.AppendLine($"**Total:** {TotalUsages} usages");
+            sb.AppendLine($"**Total:** {TotalUsages} usages — **Resolution:** {ResolutionMode}");
             sb.AppendLine();
 
             var grouped = Usages.GroupBy(u => u.UsageKind).OrderBy(g => g.Key);

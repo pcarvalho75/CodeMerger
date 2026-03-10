@@ -25,6 +25,7 @@ namespace CodeMerger.Services.Mcp
         private readonly Func<string, bool> _requestSwitchWorkspace;
         private readonly Action<string> _sendActivity;
         private readonly Action<string> _log;
+        private readonly CompilationService? _compilationService;
 
         public McpWorkspaceToolHandler(
             WorkspaceService workspaceService,
@@ -34,7 +35,8 @@ namespace CodeMerger.Services.Mcp
             Action requestShutdown,
             Func<string, bool> requestSwitchWorkspace,
             Action<string> sendActivity,
-            Action<string> log)
+            Action<string> log,
+            CompilationService? compilationService = null)
         {
             _workspaceService = workspaceService;
             _workspaceName = workspaceName;
@@ -44,6 +46,7 @@ namespace CodeMerger.Services.Mcp
             _requestSwitchWorkspace = requestSwitchWorkspace;
             _sendActivity = sendActivity;
             _log = log;
+            _compilationService = compilationService;
         }
 
         public string Refresh()
@@ -253,6 +256,18 @@ namespace CodeMerger.Services.Mcp
             if (arguments.TryGetProperty("verbose", out var verboseEl))
                 verboseOutput = verboseEl.GetBoolean();
 
+            bool autoHeal = false;
+            if (arguments.TryGetProperty("autoHeal", out var healEl))
+                autoHeal = healEl.GetBoolean();
+
+            int maxHealAttempts = 3;
+            if (arguments.TryGetProperty("maxHealAttempts", out var attemptsEl))
+                maxHealAttempts = attemptsEl.GetInt32();
+
+            bool healPreview = false;
+            if (arguments.TryGetProperty("healPreview", out var previewEl))
+                healPreview = previewEl.GetBoolean();
+
             _sendActivity($"Building ({configuration})...");
 
             var sb = new StringBuilder();
@@ -384,6 +399,146 @@ namespace CodeMerger.Services.Mcp
                     sb.AppendLine("```");
                     sb.AppendLine(fullOutput.Length > 10000 ? fullOutput.Substring(0, 10000) + "\n... (truncated)" : fullOutput);
                     sb.AppendLine("```");
+                }
+
+                // ── Auto-Heal Logic ──────────────────────────────────────
+                if ((autoHeal || healPreview) && process.ExitCode != 0 && errors.Count > 0)
+                {
+                    var healer = new BuildHealer(_compilationService, _log);
+
+                    // Convert parsed errors to BuildError objects
+                    var buildErrors = ConvertToBuildErrors(fullOutput);
+
+                    if (healPreview)
+                    {
+                        // Preview mode: show what would be fixed without applying
+                        var iteration = healer.HealIteration(buildErrors);
+                        sb.AppendLine("---");
+                        sb.AppendLine("## Auto-Heal Preview");
+                        sb.AppendLine();
+
+                        if (iteration.Fixes.Count > 0)
+                        {
+                            sb.AppendLine($"**{iteration.Fixes.Count} fixable error(s) detected:**");
+                            sb.AppendLine();
+                            foreach (var fix in iteration.Fixes)
+                            {
+                                sb.AppendLine($"- {fix.Description} (confidence: {fix.Confidence:P0})");
+                                sb.AppendLine($"  File: `{Path.GetFileName(fix.FilePath)}`");
+                            }
+                        }
+                        else
+                        {
+                            sb.AppendLine("No auto-fixable errors detected.");
+                        }
+
+                        if (iteration.Unfixable.Count > 0)
+                        {
+                            sb.AppendLine();
+                            sb.AppendLine($"**{iteration.Unfixable.Count} error(s) require manual attention:**");
+                            foreach (var u in iteration.Unfixable.Take(10))
+                            {
+                                sb.AppendLine($"- [{u.Error.ErrorCode}] {u.Category}: {u.Error.Message}");
+                            }
+                        }
+
+                        sb.AppendLine();
+                        sb.AppendLine("*Run with `autoHeal: true` to apply these fixes and rebuild.*");
+                    }
+                    else if (autoHeal)
+                    {
+                        sb.AppendLine("---");
+                        sb.AppendLine("## Auto-Heal");
+                        sb.AppendLine();
+
+                        var healSw = Stopwatch.StartNew();
+                        int totalFixed = 0;
+                        var currentErrors = buildErrors;
+                        var allAppliedFixes = new List<HealSuggestion>();
+
+                        for (int attempt = 1; attempt <= maxHealAttempts; attempt++)
+                        {
+                            sb.AppendLine($"### Attempt {attempt}");
+
+                            var iteration = healer.HealIteration(currentErrors);
+
+                            if (iteration.Fixes.Count == 0)
+                            {
+                                sb.AppendLine("No more auto-fixable errors. Stopping.");
+                                sb.AppendLine();
+                                break;
+                            }
+
+                            // Apply fixes (backups are created automatically by ApplyFix)
+                            int applied = 0;
+                            foreach (var fix in iteration.Fixes)
+                            {
+                                if (healer.ApplyFix(fix))
+                                {
+                                    sb.AppendLine($"- Fixed: {fix.Description}");
+                                    allAppliedFixes.Add(fix);
+                                    applied++;
+                                }
+                                else
+                                {
+                                    sb.AppendLine($"- Failed: {fix.Description}");
+                                }
+                            }
+                            totalFixed += applied;
+                            sb.AppendLine();
+
+                            if (applied == 0)
+                            {
+                                sb.AppendLine("No fixes could be applied. Stopping.");
+                                break;
+                            }
+
+                            // Rebuild
+                            sb.AppendLine("Rebuilding...");
+                            var rebuildResult = RunBuildProcess(projectFile!, configuration);
+
+                            if (rebuildResult.exitCode == 0)
+                            {
+                                // Success — clean up heal backups
+                                healer.CleanupHealBackups(allAppliedFixes);
+                                healSw.Stop();
+                                sb.AppendLine();
+                                sb.AppendLine($"## Build Succeeded after {attempt} heal cycle(s)");
+                                sb.AppendLine($"**Total fixes applied:** {totalFixed}");
+                                sb.AppendLine($"\n*Auto-heal completed in {healSw.ElapsedMilliseconds}ms.*");
+                                sb.AppendLine();
+                                return sb.ToString();
+                            }
+
+                            // Parse new errors for next cycle
+                            var (newErrors, newWarnings) = ParseBuildOutput(rebuildResult.output);
+                            currentErrors = ConvertToBuildErrors(rebuildResult.output);
+                            sb.AppendLine($"Rebuild: {newErrors.Count} errors remaining");
+                            sb.AppendLine();
+
+                            // Safety: if error count increased, rollback ALL changes and stop
+                            if (newErrors.Count > errors.Count)
+                            {
+                                sb.AppendLine("Error count increased — rolling back all heal changes.");
+                                int rolledBack = healer.RollbackFixes(allAppliedFixes);
+                                healer.CleanupHealBackups(allAppliedFixes);
+                                sb.AppendLine($"Rolled back {rolledBack} file(s) to pre-heal state.");
+                                sb.AppendLine();
+                                break;
+                            }
+                        }
+
+                        // Clean up any remaining heal backups
+                        healer.CleanupHealBackups(allAppliedFixes);
+
+                        healSw.Stop();
+
+                        if (currentErrors.Count > 0)
+                        {
+                            sb.AppendLine($"**{currentErrors.Count} error(s) remain after auto-heal.** Manual fixes needed.");
+                        }
+                        sb.AppendLine($"\n*Auto-heal completed in {healSw.ElapsedMilliseconds}ms.*");
+                    }
                 }
 
                 return sb.ToString();
@@ -560,6 +715,82 @@ namespace CodeMerger.Services.Mcp
             }
 
             return (errors, warnings);
+        }
+
+        /// <summary>
+        /// Convert raw build output into structured BuildError objects for the healer.
+        /// </summary>
+        private List<BuildError> ConvertToBuildErrors(string buildOutput)
+        {
+            var errors = new List<BuildError>();
+            var errorPattern = new Regex(@"^(.+?)\((\d+),(\d+)\):\s*error\s+(\w+):\s*(.+)$", RegexOptions.Multiline);
+
+            foreach (Match match in errorPattern.Matches(buildOutput))
+            {
+                var fullPath = match.Groups[1].Value.Trim();
+                var line = int.TryParse(match.Groups[2].Value, out var l) ? l : 0;
+                var col = int.TryParse(match.Groups[3].Value, out var c) ? c : 0;
+                var code = match.Groups[4].Value;
+                var message = match.Groups[5].Value;
+
+                errors.Add(new BuildError
+                {
+                    FilePath = Path.GetFileName(fullPath),
+                    FullPath = File.Exists(fullPath) ? fullPath : null,
+                    Line = line,
+                    Column = col,
+                    ErrorCode = code,
+                    Message = message,
+                    Display = $"`{Path.GetFileName(fullPath)}:{line}` [{code}] {message}"
+                });
+            }
+
+            return errors;
+        }
+
+        /// <summary>
+        /// Run a dotnet build and return the exit code + combined output.
+        /// Used by the auto-heal loop for rebuild cycles.
+        /// </summary>
+        private (int exitCode, string output) RunBuildProcess(string projectFile, string configuration)
+        {
+            try
+            {
+                var startInfo = new ProcessStartInfo
+                {
+                    FileName = "dotnet",
+                    Arguments = $"build \"{projectFile}\" --configuration {configuration} --no-incremental",
+                    WorkingDirectory = Path.GetDirectoryName(projectFile),
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+
+                using var process = new Process { StartInfo = startInfo };
+                var output = new StringBuilder();
+                var errorOutput = new StringBuilder();
+
+                process.OutputDataReceived += (s, e) => { if (e.Data != null) output.AppendLine(e.Data); };
+                process.ErrorDataReceived += (s, e) => { if (e.Data != null) errorOutput.AppendLine(e.Data); };
+
+                process.Start();
+                process.BeginOutputReadLine();
+                process.BeginErrorReadLine();
+
+                bool completed = process.WaitForExit(120000);
+                if (!completed)
+                {
+                    process.Kill();
+                    return (-1, "Build timed out");
+                }
+
+                return (process.ExitCode, output.ToString() + errorOutput.ToString());
+            }
+            catch (Exception ex)
+            {
+                return (-1, $"Build error: {ex.Message}");
+            }
         }
     }
 }

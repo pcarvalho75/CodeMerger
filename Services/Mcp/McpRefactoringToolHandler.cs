@@ -22,6 +22,8 @@ namespace CodeMerger.Services.Mcp
         private readonly WorkspaceSettings _settings;
         private readonly Action<string> _sendActivity;
         private readonly Action<string> _log;
+        private readonly CompilationService? _compilationService;
+        private readonly List<string> _inputDirectories;
 
         public McpRefactoringToolHandler(
             WorkspaceAnalysis workspaceAnalysis,
@@ -29,7 +31,9 @@ namespace CodeMerger.Services.Mcp
             List<CallSite> callSites,
             WorkspaceSettings settings,
             Action<string> sendActivity,
-            Action<string> log)
+            Action<string> log,
+            CompilationService? compilationService = null,
+            List<string>? inputDirectories = null)
         {
             _workspaceAnalysis = workspaceAnalysis;
             _refactoringService = refactoringService;
@@ -37,6 +41,45 @@ namespace CodeMerger.Services.Mcp
             _settings = settings;
             _sendActivity = sendActivity;
             _log = log;
+            _compilationService = compilationService;
+            _inputDirectories = inputDirectories ?? new List<string>();
+        }
+
+        public string ApplyPattern(JsonElement arguments)
+        {
+            if (!arguments.TryGetProperty("intent", out var intentEl))
+                return "Error: 'intent' parameter is required. Use intent='list' to see available intents.";
+
+            var intent = intentEl.GetString() ?? "";
+            if (string.IsNullOrWhiteSpace(intent))
+                return "Error: 'intent' cannot be empty. Use intent='list' to see available intents.";
+
+            _sendActivity($"Applying pattern: {intent}");
+
+            string? scope = null;
+            if (arguments.TryGetProperty("scope", out var scopeEl))
+                scope = scopeEl.GetString();
+
+            bool preview = true;
+            if (arguments.TryGetProperty("preview", out var previewEl))
+                preview = previewEl.GetBoolean();
+
+            int maxTargets = 50;
+            if (arguments.TryGetProperty("maxTargets", out var maxEl))
+                maxTargets = Math.Clamp(maxEl.GetInt32(), 1, 200);
+
+            var engine = new IntentRefactoringEngine(_workspaceAnalysis, _compilationService, _inputDirectories);
+
+            // Special case: list all intents
+            if (intent.Equals("list", StringComparison.OrdinalIgnoreCase))
+                return engine.ListIntents();
+
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var result = engine.ApplyPattern(intent, scope, preview, maxTargets);
+            sw.Stop();
+
+            var markdown = IntentRefactoringEngine.ToMarkdown(result);
+            return markdown + $"\n*Completed in {sw.ElapsedMilliseconds}ms.*";
         }
 
         public string RenameSymbol(JsonElement arguments)

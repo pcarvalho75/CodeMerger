@@ -49,3 +49,68 @@ Key changes:
 - `write_file` warns when new .cs files are created outside any .csproj directory (CheckCsprojProximity in RefactoringService)
 - `find_references` shows staleness warning when files indexed before last edit (LastIndexedUtc on FileAnalysis, _lastEditTimestamp on McpServer)
 - McpSemanticToolHandler constructor now takes Func&lt;DateTime&gt; getLastEditTimestamp parameter
+
+- [2026-03-09 22:56] ## CompilationService (added Mar 2026)
+
+Phase 1A+1B of Evolution Roadmap. Full CSharpCompilation with SemanticModel for compiler-grade symbol resolution.
+
+- CompilationService.cs: builds manual CSharpCompilation from workspace .cs files + bin/Debug/{tfm}/ DLLs + runtime refs
+- Incremental: UpdateFile() replaces single syntax tree without full rebuild
+- SemanticAnalyzer enhanced: FindUsages tries semantic path first (exact ISymbol resolution), falls back to heuristic string matching
+- Results tagged with ResolutionMode: "semantic" or "heuristic" in SymbolUsageResult
+- Wired: McpServer.PerformIndexing → builds compilation after indexing; UpdateSingleFileSync → incremental update; InitializeHandlers → passes to McpSemanticToolHandler → SemanticAnalyzer
+- No new NuGet packages needed (uses existing Microsoft.CodeAnalysis.CSharp 5.0.0)
+
+Next: Phase 1D (compilation_status tool), Phase 2 (BlastRadiusAnalyzer), Phase 4 (BuildHealer)
+
+## CompilationService (added Mar 2026)
+
+## CompilationService + Blast Radius (added Mar 2026)
+
+## Evolution Roadmap (Mar 2026)
+
+## Evolution Roadmap — COMPLETE (Mar 2026)
+
+## Evolution Roadmap — COMPLETE (Mar 2026)
+
+All 4 features + safety + custom rules implemented. Tool count: 41 (up from 37).
+
+### New Files (4)
+
+**CompilationService.cs** — Full CSharpCompilation with SemanticModel
+- Manual CSharpCompilation from .cs files + bin/Debug/{tfm}/ DLLs + runtime refs
+- Incremental UpdateFile() via ReplaceSyntaxTree, RemoveFile()
+- APIs: GetSemanticModel, ResolveSymbol, GetExpressionType, FindSymbolByName, FindAllReferences, FindNamespaceForType
+
+**BlastRadiusAnalyzer.cs** — Impact analysis before edits
+- BFS call graph traversal at configurable depth, override tracking
+- Risk scoring (0-10): fan-out, test gaps, XAML bindings, external deps, critical path keywords
+
+**BuildHealer.cs** — Auto-fix common build errors
+- Classifies: CS0246→missing_using, CS0104→ambiguous_ref, CS1002→missing_semicolon
+- Fix generators: add using (via CompilationService or 50+ well-known types), fully qualify, add semicolons
+- .heal.bak backups before each fix, RollbackFixes restores all on regression, CleanupHealBackups on success/finish
+
+**IntentRefactoringEngine.cs** — Codebase-wide refactoring in one call
+- 5 built-in intents: add_xml_doc, add_null_checks, extract_interfaces, enforce_async_naming, add_sealed
+- Custom rules from CODEMERGER_RULES.json: report-only (findPattern) or transform (findPattern + replacePattern)
+- CustomRuleIntentHandler: regex-based, exclude patterns, file filters, auto-loaded at startup
+
+### Enhanced Files
+- SemanticAnalyzer: semantic-first FindUsages with heuristic fallback
+- McpServer: CompilationService lifecycle, incremental update, all dispatches
+- McpWorkspaceToolHandler: auto-heal loop with .heal.bak backup, rollback on regression, cleanup on success
+- McpRefactoringToolHandler: ApplyPattern handler, passes inputDirectories for custom rule loading
+- McpSemanticToolHandler: BlastRadius handler
+- McpMaintenanceToolHandler: CompilationStatus handler
+- McpToolRegistry: all new tools registered
+
+### CODEMERGER_RULES.json format
+```json
+{ "customIntents": [
+  { "name": "rule_name", "description": "...", "keywords": ["..."],
+    "findPattern": "regex", "replacePattern": "replacement (optional)",
+    "excludePattern": "skip if matches (optional)", "fileFilter": ".cs",
+    "message": "violation message" }
+] }
+```
