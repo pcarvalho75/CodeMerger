@@ -177,7 +177,11 @@ namespace CodeMerger
             headerBar.WorkspaceSelectionChanged += (s, workspace) =>
             {
                 if (!_isSwitchingFromMcp)
+                {
+                    if (_hasLoadedWorkspace)
+                        SaveCurrentWorkspace();
                     _workspaceManager.SelectWorkspace(workspace);
+                }
             };
             headerBar.NewWorkspaceClicked += (s, e) => NewWorkspace_Click();
             headerBar.RenameWorkspaceClicked += (s, e) => RenameWorkspace_Click();
@@ -338,9 +342,13 @@ namespace CodeMerger
                             _isSwitchingFromMcp = false;
                         }
 
-                        // Refresh file list and workspace data to match the new workspace
+                        // Save outgoing workspace BEFORE switching (CurrentWorkspace still points to old)
                         if (matchingWorkspace != null)
+                        {
+                            if (_hasLoadedWorkspace)
+                                SaveCurrentWorkspace();
                             _workspaceManager.SelectWorkspace(matchingWorkspace);
+                        }
                         
                         // Update connection status text
                         _appState.SetClaudeConnected(switchedName);
@@ -489,10 +497,9 @@ namespace CodeMerger
         {
             if (workspace == null) return;
 
-            // Save outgoing workspace data before loading the new one
-            // Skip on first load - UI has no data yet, would overwrite with empty values
-            if (_hasLoadedWorkspace)
-                SaveCurrentWorkspace();
+            // NOTE: Do NOT save here - CurrentWorkspace already points to the NEW workspace,
+            // so SaveCurrentWorkspace() would overwrite the new workspace's config with the old data.
+            // Saving is done BEFORE SelectWorkspace() is called (at the call site).
 
             string workspaceFolder = _workspaceManager.GetWorkspaceFolder(workspace.Name);
             _gitRepositoryManager.SetWorkspaceFolder(workspaceFolder);

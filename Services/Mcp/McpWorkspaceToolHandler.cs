@@ -291,10 +291,17 @@ namespace CodeMerger.Services.Mcp
                         var listing = string.Join("\n", available.Select(p => $"  - `{Path.GetFileName(p)}` ({p})"));
                         return $"Error: Could not resolve '{explicitPath}'. Available build targets:\n{listing}";
                     }
-                    return "Error: No .csproj or .sln file found in the workspace directories.";
+                    return "Error: No build target found (.csproj, .sln, DESCRIPTION, .Rproj, or .R files) in the workspace directories.";
                 }
 
                 sb.AppendLine($"**Project:** `{Path.GetFileName(projectFile)}`");
+
+                // Route R projects to dedicated handler
+                if (projectType.StartsWith("r-", StringComparison.OrdinalIgnoreCase))
+                {
+                    return BuildR(sb, projectFile, projectType);
+                }
+
                 sb.AppendLine($"**Configuration:** {configuration}");
                 sb.AppendLine();
 
@@ -549,24 +556,388 @@ namespace CodeMerger.Services.Mcp
             }
         }
 
+        /// <summary>
+        /// Runs R CMD check (packages), lintr (projects/scripts), or both depending on project type.
+        /// Returns formatted markdown results matching the C# build output style.
+        /// </summary>
+        private string BuildR(StringBuilder sb, string projectFile, string projectType)
+        {
+            var workingDir = projectType == "r-package"
+                ? Path.GetDirectoryName(projectFile)!
+                : Path.GetDirectoryName(projectFile) ?? _inputDirectories.FirstOrDefault() ?? ".";
+
+            // For r-script type, projectFile is the directory itself
+            if (projectType == "r-script")
+                workingDir = projectFile;
+
+            sb.AppendLine($"**Type:** {projectType}");
+            sb.AppendLine();
+
+            bool hasErrors = false;
+            var allErrors = new List<(string display, string? fullPath, int line)>();
+            var allWarnings = new List<string>();
+            var allNotes = new List<string>();
+
+            // R CMD check for packages
+            if (projectType == "r-package")
+            {
+                sb.AppendLine("## R CMD check");
+                sb.AppendLine();
+
+                var packageDir = workingDir;
+                // R CMD check expects to run from the parent of the package dir
+                var parentDir = Directory.GetParent(packageDir)?.FullName ?? packageDir;
+
+                var (exitCode, output) = RunProcess("Rscript", "--vanilla -e \"devtools::check(error_on = 'never')\"", packageDir);
+
+                if (exitCode == -99)
+                {
+                    sb.AppendLine("**Rscript not found.** Make sure R is installed and `Rscript` is in PATH.");
+                    return sb.ToString();
+                }
+
+                var (checkErrors, checkWarnings, checkNotes) = ParseRCheckOutput(output);
+                allErrors.AddRange(checkErrors);
+                allWarnings.AddRange(checkWarnings);
+                allNotes.AddRange(checkNotes);
+
+                if (exitCode != 0 && checkErrors.Count == 0)
+                    allErrors.Add(($"R CMD check exited with code {exitCode}", null, 0));
+            }
+
+            // lintr for all R project types
+            bool hasLintr = CheckRPackageInstalled("lintr");
+
+            if (hasLintr)
+            {
+                sb.AppendLine("## lintr Analysis");
+                sb.AppendLine();
+
+                // Build the lint command based on project type
+                string lintCommand;
+                if (projectType == "r-package")
+                {
+                    lintCommand = $"--vanilla -e \"results <- lintr::lint_package('{EscapeRString(workingDir)}'); for(r in results) cat(sprintf('%s:%d:%d: %s: %s\\n', r$filename, r$line_number, r$column_number, r$type, r$message))\"";
+                }
+                else
+                {
+                    // For r-project and r-script, lint the directory
+                    lintCommand = $"--vanilla -e \"results <- lintr::lint_dir('{EscapeRString(workingDir)}'); for(r in results) cat(sprintf('%s:%d:%d: %s: %s\\n', r$filename, r$line_number, r$column_number, r$type, r$message))\"";
+                }
+
+                var (lintExit, lintOutput) = RunProcess("Rscript", lintCommand, workingDir);
+
+                if (lintExit == -99)
+                {
+                    sb.AppendLine("**Rscript not found.** Make sure R is installed and `Rscript` is in PATH.");
+                }
+                else
+                {
+                    var (lintErrors, lintWarnings, lintStyle) = ParseLintrOutput(lintOutput, workingDir);
+                    allErrors.AddRange(lintErrors);
+                    allWarnings.AddRange(lintWarnings);
+                    allNotes.AddRange(lintStyle);
+                }
+            }
+            else
+            {
+                sb.AppendLine("*lintr package not installed. Install with: `install.packages(\"lintr\")`*");
+                sb.AppendLine();
+
+                // Fallback: at minimum do a syntax check on all .R files
+                sb.AppendLine("## Syntax Check");
+                sb.AppendLine();
+
+                var rFiles = Directory.EnumerateFiles(workingDir, "*.R", SearchOption.AllDirectories)
+                    .Where(f => !f.Contains(Path.DirectorySeparatorChar + "renv" + Path.DirectorySeparatorChar))
+                    .ToList();
+
+                foreach (var rFile in rFiles)
+                {
+                    var escaped = EscapeRString(rFile);
+                    var (synExit, synOutput) = RunProcess("Rscript", $"--vanilla -e \"tryCatch(parse('{escaped}'), error=function(e) cat('ERROR:', conditionMessage(e), '\\n'))\"", workingDir);
+
+                    if (synOutput.Contains("ERROR:"))
+                    {
+                        var msg = synOutput.Replace("ERROR:", "").Trim();
+                        allErrors.Add(($"`{Path.GetFileName(rFile)}` {msg}", rFile, 0));
+                    }
+                }
+            }
+
+            // Format results
+            hasErrors = allErrors.Count > 0;
+
+            if (!hasErrors && allWarnings.Count == 0 && allNotes.Count == 0)
+            {
+                sb.AppendLine("## ✅ All Checks Passed");
+            }
+            else if (hasErrors)
+            {
+                sb.AppendLine("## ❌ Issues Found");
+            }
+            else
+            {
+                sb.AppendLine("## ✅ No Errors (warnings/notes below)");
+            }
+            sb.AppendLine();
+
+            sb.AppendLine($"**Errors:** {allErrors.Count}");
+            sb.AppendLine($"**Warnings:** {allWarnings.Count}");
+            sb.AppendLine($"**Notes/Style:** {allNotes.Count}");
+            sb.AppendLine();
+
+            if (allErrors.Count > 0)
+            {
+                sb.AppendLine("## Errors");
+                foreach (var error in allErrors.Take(50))
+                {
+                    sb.AppendLine($"- ❌ {error.display}");
+                    if (error.fullPath != null && error.line > 0)
+                    {
+                        try
+                        {
+                            var sourceLines = File.ReadAllLines(error.fullPath);
+                            int startLine = Math.Max(0, error.line - 2);
+                            int endLine = Math.Min(sourceLines.Length - 1, error.line + 1);
+                            sb.AppendLine("  ```");
+                            for (int i = startLine; i <= endLine; i++)
+                            {
+                                var marker = (i == error.line - 1) ? ">>>" : "   ";
+                                sb.AppendLine($"  {marker} {i + 1}: {sourceLines[i]}");
+                            }
+                            sb.AppendLine("  ```");
+                        }
+                        catch { }
+                    }
+                }
+                sb.AppendLine();
+            }
+
+            if (allWarnings.Count > 0)
+            {
+                sb.AppendLine("## Warnings");
+                foreach (var warning in allWarnings.Take(30))
+                    sb.AppendLine($"- ⚠️ {warning}");
+                if (allWarnings.Count > 30)
+                    sb.AppendLine($"- ... and {allWarnings.Count - 30} more warnings");
+                sb.AppendLine();
+            }
+
+            if (allNotes.Count > 0)
+            {
+                sb.AppendLine("## Notes/Style");
+                foreach (var note in allNotes.Take(30))
+                    sb.AppendLine($"- 💡 {note}");
+                if (allNotes.Count > 30)
+                    sb.AppendLine($"- ... and {allNotes.Count - 30} more notes");
+                sb.AppendLine();
+            }
+
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// Parses lintr output format: file.R:line:col: type: message
+        /// Splits into errors, warnings, and style notes.
+        /// </summary>
+        private (List<(string display, string? fullPath, int line)> errors, List<string> warnings, List<string> style)
+            ParseLintrOutput(string output, string workingDir)
+        {
+            var errors = new List<(string display, string? fullPath, int line)>();
+            var warnings = new List<string>();
+            var style = new List<string>();
+
+            // lintr format: filename:line:col: type: message
+            var pattern = new Regex(@"^(.+?):(\d+):(\d+):\s*(error|warning|style):\s*(.+)$", RegexOptions.Multiline | RegexOptions.IgnoreCase);
+
+            foreach (Match match in pattern.Matches(output))
+            {
+                var file = match.Groups[1].Value.Trim();
+                var line = int.TryParse(match.Groups[2].Value, out var l) ? l : 0;
+                var type = match.Groups[4].Value.ToLowerInvariant();
+                var message = match.Groups[5].Value.Trim();
+                var fileName = Path.GetFileName(file);
+
+                // Resolve full path
+                string? fullPath = null;
+                if (File.Exists(file))
+                    fullPath = file;
+                else
+                {
+                    var resolved = Path.Combine(workingDir, file);
+                    if (File.Exists(resolved))
+                        fullPath = resolved;
+                }
+
+                var display = $"`{fileName}:{line}` {message}";
+
+                switch (type)
+                {
+                    case "error":
+                        errors.Add((display, fullPath, line));
+                        break;
+                    case "warning":
+                        warnings.Add(display);
+                        break;
+                    default:
+                        style.Add(display);
+                        break;
+                }
+            }
+
+            return (errors, warnings, style);
+        }
+
+        /// <summary>
+        /// Parses R CMD check / devtools::check output for ERRORs, WARNINGs, and NOTEs.
+        /// </summary>
+        private (List<(string display, string? fullPath, int line)> errors, List<string> warnings, List<string> notes)
+            ParseRCheckOutput(string output)
+        {
+            var errors = new List<(string display, string? fullPath, int line)>();
+            var warnings = new List<string>();
+            var notes = new List<string>();
+
+            // R CMD check uses sections like:
+            // * checking ...
+            // ...checking ... ERROR
+            // ...checking ... WARNING
+            // ...checking ... NOTE
+            var lines = output.Split('\n');
+            string currentSection = "";
+
+            foreach (var rawLine in lines)
+            {
+                var line = rawLine.Trim();
+
+                if (line.StartsWith("*") || line.StartsWith(">"))
+                    currentSection = line;
+
+                if (line.EndsWith("ERROR") || line.Contains("Error in") || line.Contains("Error:"))
+                {
+                    errors.Add((line, null, 0));
+                }
+                else if (line.EndsWith("WARNING"))
+                {
+                    warnings.Add(line);
+                }
+                else if (line.EndsWith("NOTE"))
+                {
+                    notes.Add(line);
+                }
+
+                // Also catch inline errors like: file.R:10:5: error message
+                if (Regex.IsMatch(line, @"^\s*.+\.R:\d+:\d+:"))
+                {
+                    var match = Regex.Match(line, @"^(.+\.R):(\d+):(\d+):\s*(.+)$");
+                    if (match.Success)
+                    {
+                        var file = match.Groups[1].Value.Trim();
+                        var lineNum = int.TryParse(match.Groups[2].Value, out var ln) ? ln : 0;
+                        var msg = match.Groups[4].Value.Trim();
+                        var fullPath = File.Exists(file) ? file : null;
+                        errors.Add(($"`{Path.GetFileName(file)}:{lineNum}` {msg}", fullPath, lineNum));
+                    }
+                }
+            }
+
+            return (errors, warnings, notes);
+        }
+
+        /// <summary>
+        /// Checks if an R package is installed.
+        /// </summary>
+        private bool CheckRPackageInstalled(string packageName)
+        {
+            var (exitCode, output) = RunProcess("Rscript", $"--vanilla -e \"cat(requireNamespace('{packageName}', quietly=TRUE))\"", ".");
+            return exitCode == 0 && output.Trim().Equals("TRUE", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// Runs an external process and returns exit code + combined output.
+        /// Returns exitCode -99 if the executable is not found.
+        /// </summary>
+        private (int exitCode, string output) RunProcess(string fileName, string arguments, string workingDirectory)
+        {
+            try
+            {
+                var startInfo = new ProcessStartInfo
+                {
+                    FileName = fileName,
+                    Arguments = arguments,
+                    WorkingDirectory = workingDirectory,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+
+                using var process = new Process { StartInfo = startInfo };
+                var output = new StringBuilder();
+                var errorOutput = new StringBuilder();
+
+                process.OutputDataReceived += (s, e) => { if (e.Data != null) output.AppendLine(e.Data); };
+                process.ErrorDataReceived += (s, e) => { if (e.Data != null) errorOutput.AppendLine(e.Data); };
+
+                process.Start();
+                process.BeginOutputReadLine();
+                process.BeginErrorReadLine();
+
+                bool completed = process.WaitForExit(120000);
+                if (!completed)
+                {
+                    process.Kill();
+                    return (-1, "Process timed out after 2 minutes");
+                }
+
+                return (process.ExitCode, output.ToString() + errorOutput.ToString());
+            }
+            catch (System.ComponentModel.Win32Exception)
+            {
+                return (-99, $"{fileName} not found");
+            }
+            catch (Exception ex)
+            {
+                return (-1, $"Process error: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Escapes backslashes in file paths for use inside R strings.
+        /// </summary>
+        private static string EscapeRString(string path)
+        {
+            return path.Replace("\\", "/");
+        }
+
         private (string? path, string type) FindProjectFile(string? explicitPath = null)
         {
             // If caller specified an explicit path, resolve and use it directly
             if (!string.IsNullOrEmpty(explicitPath))
             {
-                bool IsSolution(string p) => p.EndsWith(".sln", StringComparison.OrdinalIgnoreCase)
-                    || p.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase);
+                string ClassifyFile(string p)
+                {
+                    if (p.EndsWith(".sln", StringComparison.OrdinalIgnoreCase) ||
+                        p.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase))
+                        return "solution";
+                    if (Path.GetFileName(p).Equals("DESCRIPTION", StringComparison.OrdinalIgnoreCase))
+                        return "r-package";
+                    if (p.EndsWith(".Rproj", StringComparison.OrdinalIgnoreCase))
+                        return "r-project";
+                    return "project";
+                }
 
                 // Try as-is first (absolute path)
                 if (File.Exists(explicitPath))
-                    return (explicitPath, IsSolution(explicitPath) ? "solution" : "project");
+                    return (explicitPath, ClassifyFile(explicitPath));
 
                 // Try resolving relative to each input directory
                 foreach (var dir in _inputDirectories)
                 {
                     var resolved = Path.GetFullPath(Path.Combine(dir, explicitPath));
                     if (File.Exists(resolved))
-                        return (resolved, IsSolution(resolved) ? "solution" : "project");
+                        return (resolved, ClassifyFile(resolved));
                 }
 
                 // Try matching by filename across all known project files
@@ -574,7 +945,7 @@ namespace CodeMerger.Services.Mcp
                 var match = allProjects.FirstOrDefault(p =>
                     Path.GetFileName(p).Equals(explicitPath, StringComparison.OrdinalIgnoreCase));
                 if (match != null)
-                    return (match, IsSolution(match) ? "solution" : "project");
+                    return (match, ClassifyFile(match));
 
                 return (null, "none");
             }
@@ -627,6 +998,41 @@ namespace CodeMerger.Services.Mcp
                 catch { }
             }
 
+            // R package: look for DESCRIPTION file (indicates an R package)
+            foreach (var dir in _inputDirectories)
+            {
+                if (!Directory.Exists(dir)) continue;
+                var descFile = Path.Combine(dir, "DESCRIPTION");
+                if (File.Exists(descFile))
+                    return (descFile, "r-package");
+                // Also check parent (common layout: package root is one level up)
+                var parentDir = Directory.GetParent(dir)?.FullName;
+                if (parentDir != null)
+                {
+                    descFile = Path.Combine(parentDir, "DESCRIPTION");
+                    if (File.Exists(descFile))
+                        return (descFile, "r-package");
+                }
+            }
+
+            // R project: look for .Rproj files
+            foreach (var dir in _inputDirectories)
+            {
+                if (!Directory.Exists(dir)) continue;
+                var rprojFiles = Directory.GetFiles(dir, "*.Rproj", SearchOption.TopDirectoryOnly);
+                if (rprojFiles.Length > 0)
+                    return (rprojFiles[0], "r-project");
+            }
+
+            // R scripts: look for any .R files as last resort
+            foreach (var dir in _inputDirectories)
+            {
+                if (!Directory.Exists(dir)) continue;
+                var rFiles = Directory.GetFiles(dir, "*.R", SearchOption.TopDirectoryOnly);
+                if (rFiles.Length > 0)
+                    return (dir, "r-script");
+            }
+
             return (null, "none");
         }
 
@@ -651,10 +1057,16 @@ namespace CodeMerger.Services.Mcp
                         results.Add(f);
                     foreach (var f in Directory.GetFiles(dir, "*.csproj", SearchOption.AllDirectories))
                         results.Add(f);
+                    // R project files
+                    foreach (var f in Directory.GetFiles(dir, "*.Rproj", SearchOption.TopDirectoryOnly))
+                        results.Add(f);
+                    var descFile = Path.Combine(dir, "DESCRIPTION");
+                    if (File.Exists(descFile))
+                        results.Add(descFile);
                 }
                 catch { }
 
-                // Search parent directory for .sln/.slnx
+                // Search parent directory for .sln/.slnx and R package DESCRIPTION
                 var parent = Directory.GetParent(dir)?.FullName;
                 if (parent != null && checkedParents.Add(parent) && Directory.Exists(parent))
                 {
@@ -664,6 +1076,9 @@ namespace CodeMerger.Services.Mcp
                             results.Add(f);
                         foreach (var f in Directory.GetFiles(parent, "*.slnx", SearchOption.TopDirectoryOnly))
                             results.Add(f);
+                        var parentDesc = Path.Combine(parent, "DESCRIPTION");
+                        if (File.Exists(parentDesc))
+                            results.Add(parentDesc);
                     }
                     catch { }
                 }
