@@ -49,6 +49,7 @@ namespace CodeMerger
         public MainWindow()
         {
             InitializeComponent();
+            SetWindowTitle();
             FoundFiles = new ObservableCollection<string>();
 
             // Initialize settings service
@@ -690,6 +691,20 @@ namespace CodeMerger
             {
                 SetUIState(true);
                 _isScanning = false;
+            }
+        }
+
+        private void SetWindowTitle()
+        {
+            var clickOnceVersion = Environment.GetEnvironmentVariable("ClickOnce_CurrentVersion");
+            if (!string.IsNullOrEmpty(clickOnceVersion))
+            {
+                Title = $"CodeMerger v{clickOnceVersion}";
+            }
+            else
+            {
+                var asm = System.Reflection.Assembly.GetEntryAssembly()?.GetName().Version;
+                Title = asm != null ? $"CodeMerger v{asm.Major}.{asm.Minor}.{asm.Build}" : "CodeMerger";
             }
         }
 
