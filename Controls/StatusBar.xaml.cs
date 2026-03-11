@@ -32,9 +32,6 @@ namespace CodeMerger.Controls
                 case ClaudeState.Error:
                     workspaceInfoLabel.Text = $"⚠ {_appState.ErrorMessage}";
                     break;
-                case ClaudeState.Connecting:
-                    workspaceInfoLabel.Text = "Connecting...";
-                    break;
                 case ClaudeState.Disconnected:
                 case ClaudeState.Restarting:
                 default:

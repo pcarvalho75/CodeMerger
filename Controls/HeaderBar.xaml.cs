@@ -96,14 +96,6 @@ namespace CodeMerger.Controls
                     SetProjectControlsEnabled(false);
                     break;
 
-                case ClaudeState.Connecting:
-                    connectionIndicator.Fill = YellowBrush;
-                    connectionStatusText.Text = "Connecting...";
-                    connectionStatusText.Foreground = YellowBrush;
-                    stopServerButton.Visibility = Visibility.Collapsed;
-                    SetProjectControlsEnabled(false);
-                    break;
-
                 case ClaudeState.Error:
                     connectionIndicator.Fill = RedBrush;
                     connectionStatusText.Text = $"Error: {_appState.ErrorMessage}";

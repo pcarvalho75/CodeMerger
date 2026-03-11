@@ -157,10 +157,6 @@ namespace CodeMerger.Services
                         ApplyIcon(_greenIcon);
                         _trayIcon.ToolTipText = $"CodeMerger — Connected: {_appState.ClaudeWorkspace}";
                         break;
-                    case ClaudeState.Connecting:
-                        ApplyIcon(_grayIcon);
-                        _trayIcon.ToolTipText = "CodeMerger — Connecting...";
-                        break;
                     case ClaudeState.Restarting:
                         ApplyIcon(_grayIcon);
                         _trayIcon.ToolTipText = "CodeMerger — Restarting...";
