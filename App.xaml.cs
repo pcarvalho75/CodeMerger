@@ -21,6 +21,12 @@ namespace CodeMerger
         /// </summary>
         public static readonly int WM_SHOWME = RegisterWindowMessage("CodeMerger_ShowMe");
 
+        /// <summary>
+        /// Windows broadcasts this message when explorer.exe restarts.
+        /// Tray icons are destroyed on restart, so we must re-apply ours.
+        /// </summary>
+        public static readonly int WM_TASKBARCREATED = RegisterWindowMessage("TaskbarCreated");
+
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
         private static extern int RegisterWindowMessage(string message);
 

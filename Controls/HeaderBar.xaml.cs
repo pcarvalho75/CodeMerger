@@ -56,9 +56,6 @@ namespace CodeMerger.Controls
 
         // --- Public API for MainWindow ---
 
-        /// <summary>Current connection status text (for tray tooltip).</summary>
-        public string ConnectionStatusText => connectionStatusText.Text;
-
         /// <summary>Bind workspace list to the ComboBox.</summary>
         public void SetWorkspaceSource(IEnumerable source)
         {
@@ -97,6 +94,22 @@ namespace CodeMerger.Controls
                     connectionStatusText.Foreground = GreenBrush;
                     stopServerButton.Visibility = Visibility.Visible;
                     SetProjectControlsEnabled(false);
+                    break;
+
+                case ClaudeState.Connecting:
+                    connectionIndicator.Fill = YellowBrush;
+                    connectionStatusText.Text = "Connecting...";
+                    connectionStatusText.Foreground = YellowBrush;
+                    stopServerButton.Visibility = Visibility.Collapsed;
+                    SetProjectControlsEnabled(false);
+                    break;
+
+                case ClaudeState.Error:
+                    connectionIndicator.Fill = RedBrush;
+                    connectionStatusText.Text = $"Error: {_appState.ErrorMessage}";
+                    connectionStatusText.Foreground = RedBrush;
+                    stopServerButton.Visibility = Visibility.Collapsed;
+                    SetProjectControlsEnabled(true);
                     break;
 
                 case ClaudeState.Restarting:

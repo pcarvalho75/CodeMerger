@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
-    <ApplicationIcon></ApplicationIcon>
+    <ApplicationIcon>images\cm.ico</ApplicationIcon>
     <AssemblyName>CodeMerger</AssemblyName>
     <RootNamespace>CodeMerger</RootNamespace>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
@@ -14,6 +14,10 @@
     <UpdateRequired>true</UpdateRequired>
     <MinimumRequiredVersion>$(ApplicationVersion)</MinimumRequiredVersion>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="images\cm.ico" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="DiffPlex" Version="1.7.2" />

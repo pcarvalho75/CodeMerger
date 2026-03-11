@@ -47,8 +47,8 @@ namespace CodeMerger.Services
         /// </summary>
         public event Action<string>? OnError;
 
-        public bool IsConnected { get; private set; }
-        public string? ConnectedWorkspace { get; private set; }
+        private bool IsConnected { get; set; }
+        private string? ConnectedWorkspace { get; set; }
 
         public McpConnectionService(string handshakePipeName, string activityPipeName)
         {

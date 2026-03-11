@@ -17,7 +17,7 @@ namespace CodeMerger.Services
     /// </summary>
     public class McpHttpTransport : IDisposable
     {
-        private readonly int _port;
+        private int _port;
         private readonly bool _useHttps;
         private HttpListener? _listener;
         private CancellationTokenSource? _cts;
@@ -25,6 +25,7 @@ namespace CodeMerger.Services
         private bool _disposed;
 
         private readonly Func<string, string?> _messageHandler;
+        private const int MaxPortRetries = 3;
 
         public bool IsRunning => _listener?.IsListening ?? false;
         public int Port => _port;
@@ -47,53 +48,56 @@ namespace CodeMerger.Services
             if (IsRunning) return;
 
             _cts = new CancellationTokenSource();
-            _listener = new HttpListener();
 
+            var scheme = "http";
             if (_useHttps)
             {
                 CertificateManager.OnLog += msg => Log(msg);
                 bool httpsReady = CertificateManager.EnsureHttpsConfigured(_port);
                 if (!httpsReady)
                     Log("Warning: HTTPS certificate setup failed, falling back to HTTP");
+                else
+                    scheme = "https";
+            }
 
-                var scheme = httpsReady ? "https" : "http";
-                _listener.Prefixes.Add($"{scheme}://+:{_port}/");
-                try
+            // Try configured port, then increment up to MaxPortRetries times
+            for (int attempt = 0; attempt <= MaxPortRetries; attempt++)
+            {
+                int port = _port + attempt;
+
+                if (TryStartOnPort(scheme, port, bindAll: true) || TryStartOnPort(scheme, port, bindAll: false))
                 {
-                    _listener.Start();
-                    Log($"MCP HTTPS transport started on {scheme}://localhost:{_port}/mcp");
-                    _listenerTask = Task.Run(() => ListenLoop(_cts.Token), _cts.Token);
-                    return;
-                }
-                catch (HttpListenerException ex) when (ex.ErrorCode == 5)
-                {
-                    _listener = new HttpListener();
-                    _listener.Prefixes.Add($"{scheme}://localhost:{_port}/");
-                    _listener.Start();
-                    Log($"MCP HTTPS transport started on {scheme}://localhost:{_port}/mcp (localhost only)");
+                    _port = port;
                     _listenerTask = Task.Run(() => ListenLoop(_cts.Token), _cts.Token);
                     return;
                 }
             }
 
-            // HTTP path
-            _listener.Prefixes.Add($"http://+:{_port}/");
+            Log($"Failed to start HTTP transport: ports {_port}-{_port + MaxPortRetries} all unavailable");
+        }
 
+        private bool TryStartOnPort(string scheme, int port, bool bindAll)
+        {
             try
             {
-                _listener.Start();
-                Log($"MCP HTTP transport started on http://localhost:{_port}/mcp");
-                _listenerTask = Task.Run(() => ListenLoop(_cts.Token), _cts.Token);
-            }
-            catch (HttpListenerException ex) when (ex.ErrorCode == 5) // Access denied
-            {
-                // Try localhost only (doesn't require admin)
                 _listener = new HttpListener();
-                _listener.Prefixes.Add($"http://localhost:{_port}/");
-
+                var host = bindAll ? "+" : "localhost";
+                _listener.Prefixes.Add($"{scheme}://{host}:{port}/");
                 _listener.Start();
-                Log($"MCP HTTP transport started on http://localhost:{_port}/mcp (localhost only)");
-                _listenerTask = Task.Run(() => ListenLoop(_cts.Token), _cts.Token);
+
+                var suffix = bindAll ? "" : " (localhost only)";
+                Log($"MCP {scheme.ToUpper()} transport started on {scheme}://localhost:{port}/mcp{suffix}");
+                return true;
+            }
+            catch (HttpListenerException ex) when (ex.ErrorCode == 5 && bindAll)
+            {
+                // Access denied on wildcard bind - caller will retry with localhost
+                return false;
+            }
+            catch (HttpListenerException ex)
+            {
+                Log($"Port {port} unavailable (error {ex.ErrorCode}): {ex.Message}");
+                return false;
             }
         }
 

@@ -6,9 +6,41 @@ namespace CodeMerger.Controls
 {
     public partial class StatusBar : UserControl
     {
+        private AppState? _appState;
+
         public StatusBar()
         {
             InitializeComponent();
+        }
+
+        /// <summary>Subscribe to AppState for automatic workspace info updates.</summary>
+        public void Initialize(AppState appState)
+        {
+            _appState = appState;
+            _appState.ConnectionStateChanged += OnConnectionStateChanged;
+        }
+
+        private void OnConnectionStateChanged()
+        {
+            if (_appState == null) return;
+
+            switch (_appState.ClaudeState)
+            {
+                case ClaudeState.Connected:
+                    workspaceInfoLabel.Text = $"📂 {_appState.ClaudeWorkspace}";
+                    break;
+                case ClaudeState.Error:
+                    workspaceInfoLabel.Text = $"⚠ {_appState.ErrorMessage}";
+                    break;
+                case ClaudeState.Connecting:
+                    workspaceInfoLabel.Text = "Connecting...";
+                    break;
+                case ClaudeState.Disconnected:
+                case ClaudeState.Restarting:
+                default:
+                    workspaceInfoLabel.Text = "";
+                    break;
+            }
         }
 
         /// <summary>Update the status bar message and color.</summary>
@@ -17,9 +49,6 @@ namespace CodeMerger.Controls
             statusText.Text = message;
             statusText.Foreground = color;
         }
-
-        /// <summary>Get the current status text (for tray tooltip etc.).</summary>
-        public string StatusMessage => statusText.Text;
 
         /// <summary>Set progress bar visibility and value.</summary>
         public void SetProgress(double value, bool visible)
@@ -45,16 +74,10 @@ namespace CodeMerger.Controls
             }
         }
 
-        /// <summary>Set workspace health info (name, file count, etc.).</summary>
+        /// <summary>Set workspace health info (name, file count, etc.). Called by INDEXED activity to enrich display.</summary>
         public void SetWorkspaceInfo(string info)
         {
             workspaceInfoLabel.Text = info;
-        }
-
-        /// <summary>Clear workspace info when disconnected.</summary>
-        public void ClearWorkspaceInfo()
-        {
-            workspaceInfoLabel.Text = "";
         }
     }
 }

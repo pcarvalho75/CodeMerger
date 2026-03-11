@@ -44,7 +44,8 @@ namespace CodeMerger.Controls
 
         private void OnConnectionStateChanged()
         {
-            if (_appState?.ClaudeState == ClaudeState.Disconnected)
+            var state = _appState?.ClaudeState;
+            if (state == ClaudeState.Disconnected || state == ClaudeState.Error)
             {
                 StopTimer();
                 SetIdle();

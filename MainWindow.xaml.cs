@@ -29,6 +29,7 @@ namespace CodeMerger
         private readonly WorkspaceSettingsService _settingsService = null!;
         private readonly BackupCleanupService _backupCleanupService = new BackupCleanupService();
         private readonly AppState _appState = new();
+        private TrayIconService? _trayIconService;
         
         // MCP Session statistics
         private readonly McpSessionStats _sessionStats = new();
@@ -55,6 +56,7 @@ namespace CodeMerger
             foundFilesTab.SetSource(FoundFiles);
             headerBar.SetWorkspaceSource(_workspaceManager.Workspaces);
             headerBar.Initialize(_appState);
+            statusBar.Initialize(_appState);
 
             // Wire up SourceDirectoriesTab
             sourceDirectoriesTab.Initialize(_directoryManager, _gitRepositoryManager);
@@ -62,8 +64,8 @@ namespace CodeMerger
             {
                 SaveCurrentWorkspace();
                 await ScanFilesAsync();
-                if (_mcpConnectionService?.IsConnected == true)
-                    _mcpConnectionService.SendCommand("RESYNC");
+                if (_appState.ClaudeState == ClaudeState.Connected)
+                    _mcpConnectionService?.SendCommand("RESYNC");
             };
             sourceDirectoriesTab.UIStateRequested += (s, enabled) => SetUIState(enabled);
 
@@ -121,8 +123,7 @@ namespace CodeMerger
             };
 
             // Wire up ParametersTab
-            parametersTab.Initialize(_settingsService!, _backupCleanupService, () => _currentWorkspace);
-            parametersTab.SetConnectionCheck(() => _mcpConnectionService.IsConnected);
+            parametersTab.Initialize(_settingsService!, _backupCleanupService, () => _currentWorkspace, _appState);
             parametersTab.TimeoutThresholdChanged += (s, seconds) =>
             {
                 activityStrip.TimeoutThresholdSeconds = seconds;
@@ -181,16 +182,11 @@ namespace CodeMerger
             headerBar.DeleteWorkspaceClicked += (s, e) => DeleteWorkspace_Click();
             headerBar.StopServerClicked += (s, e) => StopServer_Click();
 
-            // Set tray icon from the running executable
-            try
-            {
-                var icon = System.Drawing.Icon.ExtractAssociatedIcon(Environment.ProcessPath!);
-                if (icon != null) trayIcon.Icon = icon;
-            }
-            catch
-            {
-                // Fall back to no icon — tray still works
-            }
+            // Initialize tray icon service (manages icon color + tooltip per connection state)
+            _trayIconService = new TrayIconService(trayIcon, _appState, Dispatcher);
+            _trayIconService.WireContextMenu();
+            _trayIconService.ShowRequested += ShowAndActivate;
+            _trayIconService.ExitRequested += ExitApplication;
 
             LoadWorkspaceList();
 
@@ -251,8 +247,6 @@ namespace CodeMerger
 
                 activityLogTab.AddEntry(ActivityLogType.Connection, "", 0, $"Claude connected — workspace: {workspaceName}");
                 UpdateStatus($"✓ Claude connected via MCP (workspace: {workspaceName})", Brushes.LightGreen);
-                statusBar.SetWorkspaceInfo($"📂 {workspaceName}");
-                UpdateTrayTooltip();
             });
         }
 
@@ -264,8 +258,6 @@ namespace CodeMerger
 
                 activityLogTab.AddEntry(ActivityLogType.Disconnection, "", 0, $"Claude disconnected — workspace: {workspaceName}");
                 UpdateStatus($"MCP server disconnected (workspace: {workspaceName})", Brushes.Gray);
-                statusBar.ClearWorkspaceInfo();
-                UpdateTrayTooltip();
             });
         }
 
@@ -284,6 +276,7 @@ namespace CodeMerger
                 }
 
                 UpdateStatus($"🔄 [{workspaceName}] {activity}", new SolidColorBrush(Color.FromRgb(100, 200, 255)));
+                _trayIconService?.PulseActivity();
             });
         }
 
@@ -363,6 +356,7 @@ namespace CodeMerger
         {
             Dispatcher.Invoke(() =>
             {
+                _appState.SetClaudeError(errorMessage);
                 UpdateStatus(errorMessage, new SolidColorBrush(Color.FromRgb(255, 193, 7)));
             });
         }
@@ -407,25 +401,16 @@ namespace CodeMerger
                 ShowAndActivate();
                 handled = true;
             }
+            else if (msg == App.WM_TASKBARCREATED)
+            {
+                // Explorer restarted - tray icon was destroyed, re-apply it
+                _trayIconService?.RefreshIcon();
+                handled = true;
+            }
             return IntPtr.Zero;
         }
 
         #region System Tray
-
-        private void TrayIcon_DoubleClick(object sender, RoutedEventArgs e)
-        {
-            ShowAndActivate();
-        }
-
-        private void TrayOpen_Click(object sender, RoutedEventArgs e)
-        {
-            ShowAndActivate();
-        }
-
-        private void TrayExit_Click(object sender, RoutedEventArgs e)
-        {
-            ExitApplication();
-        }
 
         private void ShowAndActivate()
         {
@@ -436,17 +421,30 @@ namespace CodeMerger
 
         private void ExitApplication()
         {
+            if (_isExiting) return;
             _isExiting = true;
-            trayIcon.Dispose();
-            Close();
-        }
 
-        private void UpdateTrayTooltip()
-        {
-            var text = headerBar.ConnectionStatusText;
-            trayIcon.ToolTipText = text.StartsWith("Connected")
-                ? $"CodeMerger — {text}"
-                : "CodeMerger — Idle";
+            // 1. Save any pending workspace data
+            try { SaveCurrentWorkspace(); } catch { }
+
+            // 2. Notify all controls of disconnection
+            _appState.SetClaudeDisconnected();
+
+            // 3. Stop timers
+            activityStrip.StopTimer();
+            _statsUpdateTimer?.Stop();
+
+            // 4. Shutdown LLM servers (SSE, tunnels, Cowork)
+            llmsTab.Cleanup();
+
+            // 5. Dispose connection service (named pipes)
+            _mcpConnectionService.Dispose();
+
+            // 6. Dispose tray icon
+            _trayIconService?.Dispose();
+
+            // 7. Close window (MainWindow_Closing will see _isExiting and allow it)
+            Close();
         }
 
         #endregion
@@ -458,14 +456,7 @@ namespace CodeMerger
                 // Hide to tray instead of closing
                 e.Cancel = true;
                 Hide();
-                return;
             }
-
-            // Real exit — clean up resources
-            activityStrip.StopTimer();
-            _statsUpdateTimer?.Stop();
-            _mcpConnectionService.Dispose();
-            llmsTab.Cleanup();
         }
 
         private void LoadWorkspaceList()
@@ -496,6 +487,9 @@ namespace CodeMerger
         private async void OnWorkspaceChanged(Workspace? workspace)
         {
             if (workspace == null) return;
+
+            // Save outgoing workspace data before loading the new one
+            SaveCurrentWorkspace();
 
             string workspaceFolder = _workspaceManager.GetWorkspaceFolder(workspace.Name);
             _gitRepositoryManager.SetWorkspaceFolder(workspaceFolder);

@@ -13,6 +13,7 @@ namespace CodeMerger.Controls
         private WorkspaceSettingsService? _settingsService;
         private BackupCleanupService? _backupCleanupService;
         private Func<Workspace?>? _getCurrentWorkspace;
+        private AppState? _appState;
 
         // Events for MainWindow orchestration
         public event EventHandler? RestartRequested;
@@ -30,11 +31,13 @@ namespace CodeMerger.Controls
         public void Initialize(
             WorkspaceSettingsService settingsService,
             BackupCleanupService backupCleanupService,
-            Func<Workspace?> getCurrentWorkspace)
+            Func<Workspace?> getCurrentWorkspace,
+            AppState appState)
         {
             _settingsService = settingsService;
             _backupCleanupService = backupCleanupService;
             _getCurrentWorkspace = getCurrentWorkspace;
+            _appState = appState;
         }
 
         /// <summary>
@@ -221,20 +224,9 @@ namespace CodeMerger.Controls
             RestartRequested?.Invoke(this, EventArgs.Empty);
         }
 
-        /// <summary>
-        /// The actual restart banner visibility check needs to know if MCP is connected.
-        /// We use a Func to avoid coupling to McpConnectionService directly.
-        /// </summary>
-        private Func<bool>? _isMcpConnected;
-
-        public void SetConnectionCheck(Func<bool> isMcpConnected)
-        {
-            _isMcpConnected = isMcpConnected;
-        }
-
         private void ShowRestartBannerIfConnected()
         {
-            if (_isMcpConnected?.Invoke() == true)
+            if (_appState?.ClaudeState == ClaudeState.Connected)
             {
                 settingsRestartBanner.Visibility = Visibility.Visible;
             }

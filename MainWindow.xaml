@@ -23,13 +23,12 @@
 
         <!-- System Tray Icon -->
         <tb:TaskbarIcon x:Name="trayIcon"
-                        ToolTipText="CodeMerger — Idle"
-                        TrayMouseDoubleClick="TrayIcon_DoubleClick">
+                        ToolTipText="CodeMerger — Idle">
             <tb:TaskbarIcon.ContextMenu>
                 <ContextMenu>
-                    <MenuItem Header="Open CodeMerger" Click="TrayOpen_Click" FontWeight="Bold"/>
+                    <MenuItem Header="Open CodeMerger" FontWeight="Bold"/>
                     <Separator/>
-                    <MenuItem Header="Exit" Click="TrayExit_Click"/>
+                    <MenuItem Header="Exit"/>
                 </ContextMenu>
             </tb:TaskbarIcon.ContextMenu>
         </tb:TaskbarIcon>
