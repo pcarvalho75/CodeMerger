@@ -203,12 +203,12 @@ namespace CodeMerger.Services
             var files = new List<string>();
             if (!Directory.Exists(repo.LocalPath)) return files;
 
-            var extList = extensions.Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries)
-                .Select(e => e.Trim().ToLowerInvariant())
+            var extList = Workspace.ParseList(extensions)
+                .Select(e => e.ToLowerInvariant())
                 .ToList();
 
-            var ignoredDirList = ignoredDirs.Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries)
-                .Select(d => d.Trim().ToLowerInvariant())
+            var ignoredDirList = Workspace.ParseList(ignoredDirs)
+                .Select(d => d.ToLowerInvariant())
                 .ToHashSet();
 
             // Always ignore these

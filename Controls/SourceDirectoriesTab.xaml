@@ -76,11 +76,59 @@
 
             <StackPanel>
                 <TextBlock Text="Extensions" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource TextSecondary}"/>
-                <TextBox x:Name="extensionsTextBox" Text=".cs, .xaml, .py, .csproj, .sln, .slnx, .json, .md, .props, .targets" Margin="0,6,0,12" 
-                         TextChanged="Filters_Changed" Style="{StaticResource ModernTextBox}"/>
+                <Border Background="{StaticResource BackgroundCard}" CornerRadius="6" 
+                        BorderBrush="{StaticResource BorderColor}" BorderThickness="1" 
+                        Padding="6" Margin="0,6,0,4" MinHeight="36">
+                    <ItemsControl x:Name="extensionChips">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <WrapPanel/>
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                    </ItemsControl>
+                </Border>
+                <Grid Margin="0,0,0,4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBox x:Name="newExtensionTextBox" Style="{StaticResource ModernTextBox}" 
+                             FontSize="11" KeyDown="NewExtension_KeyDown"/>
+                    <Button Grid.Column="1" Content="+ Add" Click="AddExtension_Click" 
+                            Style="{StaticResource ModernButton}" Padding="10,4" Margin="4,0,0,0" FontSize="11"/>
+                </Grid>
+                <WrapPanel Margin="0,0,0,12">
+                    <TextBlock Text="Presets:" FontSize="10" Foreground="{StaticResource TextSecondary}" 
+                               VerticalAlignment="Center" Margin="0,0,6,0"/>
+                    <Button Content="C#" Click="PresetCSharp_Click" Style="{StaticResource SmallLinkButton}" Margin="0,0,4,0" FontSize="10"/>
+                    <Button Content="Python" Click="PresetPython_Click" Style="{StaticResource SmallLinkButton}" Margin="0,0,4,0" FontSize="10"/>
+                    <Button Content="Web" Click="PresetWeb_Click" Style="{StaticResource SmallLinkButton}" Margin="0,0,4,0" FontSize="10"/>
+                    <Button Content="Data" Click="PresetData_Click" Style="{StaticResource SmallLinkButton}" Margin="0,0,4,0" FontSize="10"/>
+                    <Button Content="Docs" Click="PresetDocs_Click" Style="{StaticResource SmallLinkButton}" FontSize="10"/>
+                </WrapPanel>
+                
                 <TextBlock Text="Ignored Directories" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource TextSecondary}"/>
-                <TextBox x:Name="ignoredDirsTextBox" Text="bin, obj, .vs, Properties" Margin="0,6,0,0" 
-                         TextChanged="Filters_Changed" Style="{StaticResource ModernTextBox}"/>
+                <Border Background="{StaticResource BackgroundCard}" CornerRadius="6"
+                        BorderBrush="{StaticResource BorderColor}" BorderThickness="1"
+                        Padding="6" Margin="0,6,0,4" MinHeight="36">
+                    <ItemsControl x:Name="ignoredDirChips">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <WrapPanel/>
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                    </ItemsControl>
+                </Border>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBox x:Name="newIgnoredDirTextBox" Style="{StaticResource ModernTextBox}" 
+                             FontSize="11" KeyDown="NewIgnoredDir_KeyDown"/>
+                    <Button Grid.Column="1" Content="+ Add" Click="AddIgnoredDir_Click"
+                            Style="{StaticResource ModernButton}" Padding="10,4" Margin="4,0,0,0" FontSize="11"/>
+                </Grid>
             </StackPanel>
 
             <Expander Grid.Row="1" IsExpanded="False" Foreground="{StaticResource TextPrimary}" Margin="0,20,0,0">

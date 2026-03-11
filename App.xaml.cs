@@ -105,15 +105,8 @@ namespace CodeMerger
                     return;
                 }
 
-                var extensions = workspace.Extensions.Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries)
-                    .Select(ext => ext.Trim())
-                    .Where(ext => !string.IsNullOrEmpty(ext))
-                    .ToList();
-
-                var ignoredDirsInput = workspace.IgnoredDirectories + ",.git";
-                var ignoredDirNames = ignoredDirsInput.Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries)
-                    .Select(dir => dir.Trim().ToLowerInvariant())
-                    .ToHashSet();
+                var extensions = workspace.ParseExtensions();
+                var ignoredDirNames = workspace.ParseIgnoredDirs();
 
                 // Filter out disabled directories
                 var activeDirectories = workspace.InputDirectories

@@ -253,14 +253,11 @@ namespace CodeMerger.Services
         /// </summary>
         private static bool MergeDefaultExtensions(Workspace workspace)
         {
-            var defaults = new Workspace();
             var defaultExts = new HashSet<string>(
-                defaults.Extensions.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
-                StringComparer.OrdinalIgnoreCase);
+                Workspace.ParseList(new Workspace().Extensions), StringComparer.OrdinalIgnoreCase);
 
             var currentExts = new HashSet<string>(
-                workspace.Extensions.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
-                StringComparer.OrdinalIgnoreCase);
+                Workspace.ParseList(workspace.Extensions), StringComparer.OrdinalIgnoreCase);
 
             var missing = defaultExts.Where(e => !currentExts.Contains(e)).ToList();
             if (missing.Count == 0) return false;

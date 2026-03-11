@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace CodeMerger.Models
 {
@@ -15,5 +16,25 @@ namespace CodeMerger.Models
 
         // External git repositories
         public List<ExternalRepository> ExternalRepositories { get; set; } = new List<ExternalRepository>();
+
+        /// <summary>Parse a comma/semicolon/space-separated string into a trimmed, non-empty list.</summary>
+        public static List<string> ParseList(string value)
+        {
+            return value.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(s => s.Trim())
+                .Where(s => s.Length > 0)
+                .ToList();
+        }
+
+        /// <summary>Parse Extensions into a list (e.g., [".cs", ".xaml"]).</summary>
+        public List<string> ParseExtensions() => ParseList(Extensions);
+
+        /// <summary>Parse IgnoredDirectories into a lowercase HashSet.</summary>
+        public HashSet<string> ParseIgnoredDirs()
+        {
+            return ParseList(IgnoredDirectories + ",.git")
+                .Select(d => d.ToLowerInvariant())
+                .ToHashSet();
+        }
     }
 }

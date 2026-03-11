@@ -33,11 +33,7 @@ namespace CodeMerger.Services
         /// </summary>
         public static List<string> ParseExtensions(string extensionsText)
         {
-            return extensionsText
-                .Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries)
-                .Select(ext => ext.Trim())
-                .Where(ext => !string.IsNullOrEmpty(ext))
-                .ToList();
+            return Workspace.ParseList(extensionsText);
         }
 
         /// <summary>
@@ -45,10 +41,8 @@ namespace CodeMerger.Services
         /// </summary>
         public static HashSet<string> ParseIgnoredDirs(string ignoredDirsText)
         {
-            var input = ignoredDirsText + ",.git";
-            return input
-                .Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries)
-                .Select(dir => dir.Trim().ToLowerInvariant())
+            return Workspace.ParseList(ignoredDirsText + ",.git")
+                .Select(dir => dir.ToLowerInvariant())
                 .ToHashSet();
         }
 

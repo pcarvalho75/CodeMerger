@@ -169,16 +169,8 @@ namespace CodeMerger.Controls
                 _mcpServerForSse = new McpServer();
                 _mcpServerForSse.OnLog += msg => Dispatcher.Invoke(() => RaiseStatus(msg, Brushes.Gray));
 
-                var extensions = workspace.Extensions
-                    .Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries)
-                    .Select(ext => ext.Trim())
-                    .Where(ext => !string.IsNullOrEmpty(ext))
-                    .ToList();
-
-                var ignoredDirs = (workspace.IgnoredDirectories + ",.git")
-                    .Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries)
-                    .Select(dir => dir.Trim().ToLowerInvariant())
-                    .ToHashSet();
+                var extensions = workspace.ParseExtensions();
+                var ignoredDirs = workspace.ParseIgnoredDirs();
 
                 var activeDirectories = workspace.InputDirectories
                     .Where(dir => !workspace.DisabledDirectories.Contains(dir))
@@ -340,16 +332,8 @@ namespace CodeMerger.Controls
                 _mcpServerForCowork = new McpServer();
                 _mcpServerForCowork.OnLog += msg => Dispatcher.Invoke(() => RaiseStatus(msg, Brushes.Gray));
 
-                var extensions = workspace.Extensions
-                    .Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries)
-                    .Select(ext => ext.Trim())
-                    .Where(ext => !string.IsNullOrEmpty(ext))
-                    .ToList();
-
-                var ignoredDirs = (workspace.IgnoredDirectories + ",.git")
-                    .Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries)
-                    .Select(dir => dir.Trim().ToLowerInvariant())
-                    .ToHashSet();
+                var extensions = workspace.ParseExtensions();
+                var ignoredDirs = workspace.ParseIgnoredDirs();
 
                 var activeDirectories = workspace.InputDirectories
                     .Where(dir => !workspace.DisabledDirectories.Contains(dir))

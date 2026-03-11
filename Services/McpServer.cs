@@ -177,19 +177,8 @@ namespace CodeMerger.Services
             _workspaceSettings = WorkspaceSettings.LoadFromWorkspace(workspaceFolder, Log);
             Log($"Settings loaded: CreateBackupFiles={_workspaceSettings.CreateBackupFiles}");
 
-            // Parse extensions
-            var extensions = workspace.Extensions
-                .Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries)
-                .Select(ext => ext.Trim())
-                .Where(ext => !string.IsNullOrEmpty(ext))
-                .ToList();
-
-            // Parse ignored directories
-            var ignoredDirsInput = workspace.IgnoredDirectories + ",.git";
-            var ignoredDirNames = ignoredDirsInput
-                .Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries)
-                .Select(dir => dir.Trim().ToLowerInvariant())
-                .ToHashSet();
+            var extensions = workspace.ParseExtensions();
+            var ignoredDirNames = workspace.ParseIgnoredDirs();
 
             // Update instance state - filter out disabled directories
             _workspaceName = workspaceName;
