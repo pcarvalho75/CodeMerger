@@ -2,21 +2,22 @@
 
 ## Roadmap
 
-## Connection State + Tray + Polish Roadmap (Mar 2026)
+## Connection State + Tray + Polish - COMPLETE (Mar 2026)
 
-### Phase A: Connection State Overhaul - COMPLETE
-### Phase B: Live Pulse Tray Icon - COMPLETE
+All phases A-C complete. Committed: 02d1c25. 430 insertions, 30 files changed.
 
-### Phase C: Polish & Resilience
-- Step 9 (Done): Port conflict handling - TryStartOnPort helper, retry up to 3 incremented ports, unified HTTPS/HTTP path
-- Step 10 (Done): Graceful shutdown - single ordered ExitApplication path, re-entry guard, save workspace on exit
-- Step 11 (Done): Explorer restart survival - App.WM_TASKBARCREATED registered via RegisterWindowMessage("TaskbarCreated"). WndProc handles it by calling TrayIconService.RefreshIcon() which re-applies icon + tooltip for current state.
-- Step 12: Settings persistence audit - save on switch, exit, parameter changes
+### Summary
+- **AppState** is single source of truth for connection state (5 states: Disconnected, Connecting, Connected, Restarting, Error)
+- **All controls** (HeaderBar, StatusBar, ActivityStrip, tray icon) subscribe to AppState events
+- **McpConnectionService** only fires events, IsConnected/ConnectedWorkspace are private
+- **TrayIconService** (new): manages icon color (gray/green/amber dot overlay), tooltip, pulse animation, context menu wiring, explorer restart survival
+- **McpHttpTransport**: port retry with increment, unified HTTPS/HTTP path
+- **Shutdown**: single ordered path with re-entry guard, saves workspace on exit
+- **Settings**: workspace saved before switch and on exit
+- Dead code removed: ClearWorkspaceInfo, ConnectionStatusText, StatusMessage, SetConnectionCheck, old tray handlers
 
-### Phase D: Extensions & Filters UI Overhaul
-- Step 14: Replace Extensions TextBox with tag-based UI
-
-Step 13: Review & Cleanup (all phases)
+### Pending: Phase D - Extensions & Filters UI Overhaul
+Replace Extensions TextBox with tag-based UI (WrapPanel of tag chips, Add button, common presets, deduplicate parsing). Same for Ignored Directories.
 
 ## Tool Overhaul Summary
 

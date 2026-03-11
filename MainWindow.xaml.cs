@@ -284,8 +284,7 @@ namespace CodeMerger
         {
             Dispatcher.Invoke(() =>
             {
-                // Update connection status
-                _appState.SetClaudeConnected(workspaceName);
+                // Connection status already updated by OnMcpActivity (fires first for same message)
 
                 // Update MCP Activity UI based on state
                 switch (activityMsg.Type)

@@ -1,7 +1,7 @@
 using System;
 using System.Drawing;
 using System.Drawing.Drawing2D;
-using System.Windows;
+using System.Runtime.InteropServices;
 using System.Windows.Threading;
 using CodeMerger.Controls;
 using Hardcodet.Wpf.TaskbarNotification;
@@ -33,6 +33,9 @@ namespace CodeMerger.Services
         private const int PulseTimeoutMs = 2000;
 
         private bool _disposed;
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool DestroyIcon(IntPtr hIcon);
 
         public event Action? ShowRequested;
         public event Action? ExitRequested;
@@ -127,7 +130,18 @@ namespace CodeMerger.Services
                     g.FillEllipse(dotBrush, x, y, dotSize, dotSize);
             }
 
-            return Icon.FromHandle(bitmap.GetHicon());
+            // GetHicon creates an unmanaged GDI handle that Icon.FromHandle does NOT own.
+            // We must clone the icon (which copies the handle) then destroy the original.
+            IntPtr hIcon = bitmap.GetHicon();
+            try
+            {
+                using var temp = Icon.FromHandle(hIcon);
+                return (Icon)temp.Clone();
+            }
+            finally
+            {
+                DestroyIcon(hIcon);
+            }
         }
 
         private void OnTrayStateChanged()
