@@ -61,8 +61,8 @@ namespace CodeMerger.Services
                         var workspace = JsonSerializer.Deserialize<Workspace>(json);
                         if (workspace != null)
                         {
-                            if (MergeDefaultExtensions(workspace))
-                                SaveWorkspace(workspace);
+                        if (MergeDefaultExtensions(workspace) | MergeDefaultIgnoredDirs(workspace))
+                            SaveWorkspace(workspace);
                             workspaces.Add(workspace);
                         }
                     }
@@ -124,7 +124,7 @@ namespace CodeMerger.Services
             {
                 var json = File.ReadAllText(configPath);
                 var workspace = JsonSerializer.Deserialize<Workspace>(json);
-                if (workspace != null && MergeDefaultExtensions(workspace))
+                if (workspace != null && (MergeDefaultExtensions(workspace) | MergeDefaultIgnoredDirs(workspace)))
                     SaveWorkspace(workspace);
                 return workspace;
             }
@@ -264,6 +264,18 @@ namespace CodeMerger.Services
 
             workspace.Extensions = workspace.Extensions.TrimEnd().TrimEnd(',')
                 + ", " + string.Join(", ", missing);
+            return true;
+        }
+
+        /// <summary>
+        /// Restores default ignored directories if the workspace has none.
+        /// Returns true if the workspace was modified (needs saving).
+        /// </summary>
+        private static bool MergeDefaultIgnoredDirs(Workspace workspace)
+        {
+            if (!string.IsNullOrWhiteSpace(workspace.IgnoredDirectories)) return false;
+
+            workspace.IgnoredDirectories = new Workspace().IgnoredDirectories;
             return true;
         }
 

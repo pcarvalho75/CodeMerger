@@ -43,6 +43,7 @@ namespace CodeMerger
 
         private bool _isScanning = false;
         private bool _isLoadingWorkspace = false;
+        private bool _hasLoadedWorkspace = false;
         private int _estimatedTokens = 0;
 
         public MainWindow()
@@ -488,7 +489,9 @@ namespace CodeMerger
             if (workspace == null) return;
 
             // Save outgoing workspace data before loading the new one
-            SaveCurrentWorkspace();
+            // Skip on first load - UI has no data yet, would overwrite with empty values
+            if (_hasLoadedWorkspace)
+                SaveCurrentWorkspace();
 
             string workspaceFolder = _workspaceManager.GetWorkspaceFolder(workspace.Name);
             _gitRepositoryManager.SetWorkspaceFolder(workspaceFolder);
@@ -498,6 +501,8 @@ namespace CodeMerger
             activityStrip.TimeoutThresholdSeconds = settings.TimeoutThresholdSeconds;
 
             await LoadWorkspaceDataAsync(workspace);
+
+            _hasLoadedWorkspace = true;
 
             EnsureClaudeConfig();
             llmsTab.RefreshClaudeDesktopStatus();

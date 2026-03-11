@@ -2,22 +2,24 @@
 
 ## Roadmap
 
-## Connection State + Tray + Polish - COMPLETE (Mar 2026)
+## Connection State + Tray + Polish + Extensions - ALL COMPLETE (Mar 2026)
 
-All phases A-C complete. Committed: 02d1c25. 430 insertions, 30 files changed.
+All phases A-D done. 4 commits: 02d1c25, fe32269, c06fed1, c44951d.
 
-### Summary
-- **AppState** is single source of truth for connection state (5 states: Disconnected, Connecting, Connected, Restarting, Error)
-- **All controls** (HeaderBar, StatusBar, ActivityStrip, tray icon) subscribe to AppState events
-- **McpConnectionService** only fires events, IsConnected/ConnectedWorkspace are private
-- **TrayIconService** (new): manages icon color (gray/green/amber dot overlay), tooltip, pulse animation, context menu wiring, explorer restart survival
-- **McpHttpTransport**: port retry with increment, unified HTTPS/HTTP path
-- **Shutdown**: single ordered path with re-entry guard, saves workspace on exit
-- **Settings**: workspace saved before switch and on exit
-- Dead code removed: ClearWorkspaceInfo, ConnectionStatusText, StatusMessage, SetConnectionCheck, old tray handlers
+### Phase A: Connection State Overhaul - COMPLETE
+AppState single source of truth (4 states: Disconnected, Connected, Restarting, Error). All controls subscribe. McpConnectionService internals private.
 
-### Pending: Phase D - Extensions & Filters UI Overhaul
-Replace Extensions TextBox with tag-based UI (WrapPanel of tag chips, Add button, common presets, deduplicate parsing). Same for Ignored Directories.
+### Phase B: Live Pulse Tray Icon - COMPLETE
+TrayIconService: colored dot overlay icons, pulse animation (400ms toggle, 2s timeout), context menu wiring, Explorer restart survival.
+
+### Phase C: Polish & Resilience - COMPLETE
+Port retry (3 attempts), graceful shutdown (single ordered exit path), TaskbarCreated handling, settings saved on switch+exit.
+
+### Phase D: Extensions & Filters UI - COMPLETE
+Tag chip UI replaces TextBox for Extensions and Ignored Directories. WrapPanel of removable pills, Add via TextBox/Enter, 5 presets (C#, Python, Web, Data, Docs), duplicate detection. Workspace.ParseList() deduplicates 6 parsing sites across App, LLMsTab, McpServer, GitService, WorkspaceService, FileScannerService.
+
+### Review findings fixed
+GDI handle leak (DestroyIcon P/Invoke), dead code removed (ClaudeActivityFlash, StatusUpdated, CurrentWorkspace, Connecting state), redundant SetClaudeConnected call, Debug.Assert thread guards on setters.
 
 ## Tool Overhaul Summary
 

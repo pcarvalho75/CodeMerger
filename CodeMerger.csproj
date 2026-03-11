@@ -16,7 +16,19 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Content Include="images\cm.ico" />
+    <None Remove="images\cm.jpg" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="images\cm.jpg">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="images\cm.ico">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Resource>
   </ItemGroup>
 
   <ItemGroup>
